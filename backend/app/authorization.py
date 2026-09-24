@@ -1,8 +1,23 @@
 from __future__ import annotations
 
-import hashlib
 import json
 from typing import Any
+
+
+def _clean_group(value: str) -> str:
+    group = value.strip()
+    if len(group) >= 2 and group[0] == group[-1] and group[0] in {'"', "'"}:
+        group = group[1:-1].strip()
+    return group
+
+
+def _groups_from_string(value: str) -> set[str]:
+    raw = value.strip()
+    if raw.startswith("[") and raw.endswith("]"):
+        raw = raw[1:-1].strip()
+    if not raw:
+        return set()
+    return {group for group in (_clean_group(item) for item in raw.split(",")) if group}
 
 
 def normalized_groups(value: Any) -> set[str]:
@@ -24,40 +39,6 @@ def normalized_groups(value: Any) -> set[str]:
     if isinstance(parsed, list):
         return {item.strip() for item in parsed if isinstance(item, str) and item.strip()}
     if isinstance(parsed, str) and parsed.strip():
-        return {parsed.strip()}
+        return _groups_from_string(parsed)
 
-    return {item.strip() for item in raw.split(",") if item.strip()}
-
-
-def group_claim_shape(value: Any) -> str:
-    """Describe a group claim without exposing its contents."""
-
-    if value is None:
-        return "missing"
-    if isinstance(value, list):
-        return "list"
-    if not isinstance(value, str):
-        return type(value).__name__
-    raw = value.strip()
-    if not raw:
-        return "empty_string"
-    try:
-        parsed = json.loads(raw)
-    except json.JSONDecodeError:
-        parsed = None
-    if isinstance(parsed, list):
-        return "json_array_string"
-    if isinstance(parsed, str):
-        return "json_string"
-    if "," in raw:
-        return "comma_separated_string"
-    return "string"
-
-
-def group_claim_fingerprints(value: Any) -> list[str]:
-    """Return non-reversible diagnostics for normalized group values."""
-
-    return [
-        f"{len(group)}:{hashlib.sha256(group.encode('utf-8')).hexdigest()[:12]}"
-        for group in sorted(normalized_groups(value))
-    ]
+    return _groups_from_string(raw)

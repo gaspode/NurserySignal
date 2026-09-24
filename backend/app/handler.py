@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 import base64
-import hashlib
 import json
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
-from app.authorization import group_claim_fingerprints, group_claim_shape, normalized_groups
+from app.authorization import normalized_groups
 from app.config import Settings
 from app.db import check_connection
 from app.ingestion import NormalizedSignal
@@ -58,24 +57,7 @@ def _require_claims(event: dict[str, Any]) -> tuple[dict[str, Any] | None, dict[
 def _require_admin(
     claims: dict[str, Any], settings: Settings
 ) -> dict[str, Any] | None:
-    group_claim = claims.get("cognito:groups")
-    groups = normalized_groups(group_claim)
-    if settings.admin_group not in groups:
-        logger.warning(
-            "admin_authorization_denied group_claim_present=%s group_claim_type=%s "
-            "group_claim_shape=%s normalized_group_count=%d admin_group_match=%s",
-            group_claim is not None,
-            type(group_claim).__name__,
-            group_claim_shape(group_claim),
-            len(groups),
-            settings.admin_group in groups,
-        )
-        logger.warning(
-            "admin_authorization_group_fingerprints values=%s expected_length=%d expected_hash=%s",
-            group_claim_fingerprints(group_claim),
-            len(settings.admin_group),
-            hashlib.sha256(settings.admin_group.encode("utf-8")).hexdigest()[:12],
-        )
+    if settings.admin_group not in normalized_groups(claims.get("cognito:groups")):
         return _response(403, {"error": "administrator_role_required"})
     return None
 

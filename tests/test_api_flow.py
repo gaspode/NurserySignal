@@ -196,6 +196,10 @@ def test_normalized_groups_accepts_json_array_string() -> None:
     }
 
 
+def test_normalized_groups_accepts_api_gateway_bracketed_string() -> None:
+    assert normalized_groups("[NurserySignalAdmins]") == {"NurserySignalAdmins"}
+
+
 def test_normalized_groups_rejects_missing_and_malformed_claims() -> None:
     assert normalized_groups(None) == set()
     assert normalized_groups({"group": "NurserySignalAdmins"}) == set()
