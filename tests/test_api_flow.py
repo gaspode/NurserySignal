@@ -4,6 +4,7 @@ import json
 from decimal import Decimal
 from uuid import UUID, uuid4
 
+from app.authorization import normalized_groups
 from app.handler import handler
 from app.repository import ReprocessResult
 from app.service import IngestionResult
@@ -168,6 +169,69 @@ def test_planning_reprocess_requires_administrator_group() -> None:
     )
     assert response["statusCode"] == 403
     assert json.loads(response["body"]) == {"error": "administrator_role_required"}
+
+
+def test_normalized_groups_accepts_list() -> None:
+    assert normalized_groups(["NurserySignalAdmins", "OtherGroup"]) == {
+        "NurserySignalAdmins",
+        "OtherGroup",
+    }
+
+
+def test_normalized_groups_accepts_exact_single_string() -> None:
+    assert normalized_groups("NurserySignalAdmins") == {"NurserySignalAdmins"}
+
+
+def test_normalized_groups_accepts_comma_separated_string() -> None:
+    assert normalized_groups("OtherGroup, NurserySignalAdmins") == {
+        "OtherGroup",
+        "NurserySignalAdmins",
+    }
+
+
+def test_normalized_groups_accepts_json_array_string() -> None:
+    assert normalized_groups('["OtherGroup", "NurserySignalAdmins"]') == {
+        "OtherGroup",
+        "NurserySignalAdmins",
+    }
+
+
+def test_normalized_groups_rejects_missing_and_malformed_claims() -> None:
+    assert normalized_groups(None) == set()
+    assert normalized_groups({"group": "NurserySignalAdmins"}) == set()
+    assert normalized_groups(42) == set()
+
+
+def test_normalized_groups_requires_exact_group_name() -> None:
+    assert "NurserySignalAdmins" not in normalized_groups("NurserySignalAdministrators")
+
+
+def test_reprocess_accepts_json_serialized_admin_groups(monkeypatch) -> None:
+    expected = ReprocessResult("operation-1", 0, 0, 0, 0, 0, 0)
+    monkeypatch.setattr("app.handler.reprocess_planning_signals", lambda *args, **kwargs: expected)
+    response = handler(
+        event(
+            "/admin/planning/reprocess",
+            "POST",
+            body=json.dumps({"limit": 1}),
+            claims={**CLAIMS, "cognito:groups": '["NurserySignalAdmins"]'},
+        ),
+        None,
+    )
+    assert response["statusCode"] == 200
+
+
+def test_reprocess_rejects_similar_group_name() -> None:
+    response = handler(
+        event(
+            "/admin/planning/reprocess",
+            "POST",
+            body=json.dumps({"limit": 1}),
+            claims={**CLAIMS, "cognito:groups": "NurserySignalAdministrators"},
+        ),
+        None,
+    )
+    assert response["statusCode"] == 403
 
 
 def test_planning_reprocess_passes_bounded_filters_and_returns_audit_summary(monkeypatch) -> None:

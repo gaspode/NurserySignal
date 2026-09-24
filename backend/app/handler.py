@@ -7,6 +7,7 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
+from app.authorization import normalized_groups
 from app.config import Settings
 from app.db import check_connection
 from app.ingestion import NormalizedSignal
@@ -56,10 +57,7 @@ def _require_claims(event: dict[str, Any]) -> tuple[dict[str, Any] | None, dict[
 def _require_admin(
     claims: dict[str, Any], settings: Settings
 ) -> dict[str, Any] | None:
-    groups = claims.get("cognito:groups", [])
-    if isinstance(groups, str):
-        groups = [item.strip() for item in groups.split(",") if item.strip()]
-    if not isinstance(groups, list) or settings.admin_group not in groups:
+    if settings.admin_group not in normalized_groups(claims.get("cognito:groups")):
         return _response(403, {"error": "administrator_role_required"})
     return None
 
