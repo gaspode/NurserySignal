@@ -97,6 +97,16 @@ resource "aws_iam_policy" "github_actions" {
           "s3:*", "sqs:*", "sts:GetCallerIdentity"
         ]
         Resource = "*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "secretsmanager:DeleteSecret", "secretsmanager:DeleteSecretVersion", "secretsmanager:DescribeSecret",
+          "secretsmanager:GetSecretValue", "secretsmanager:ListSecretVersionIds", "secretsmanager:PutSecretValue",
+          "secretsmanager:RestoreSecret", "secretsmanager:TagResource", "secretsmanager:UntagResource",
+          "secretsmanager:UpdateSecret"
+        ]
+        Resource = aws_secretsmanager_secret.database.arn
       }
     ]
   })
