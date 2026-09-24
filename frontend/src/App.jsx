@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useApi } from "./api.js";
-import { useAuth } from "./auth.js";
+import { displayAttributeName, useAuth } from "./auth.js";
 
 const PAGE_SIZE = 10;
 
@@ -60,11 +60,26 @@ function reviewTone(status) {
   return { PENDING: "pending", APPROVED: "approved", REJECTED: "rejected" }[status] || "neutral";
 }
 
-export function LoginPage({ onLogin, authError = "", configured = true }) {
+export function LoginPage({ onLogin, authError = "", configured = true, passwordChallenge, onCompleteNewPassword, onCancelPasswordChallenge }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [attributeValues, setAttributeValues] = useState({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (!passwordChallenge) return;
+    const initialValues = {};
+    for (const attribute of passwordChallenge.requiredAttributes || []) {
+      initialValues[attribute] = passwordChallenge.userAttributes?.[attribute] || "";
+    }
+    setAttributeValues(initialValues);
+    setNewPassword("");
+    setConfirmPassword("");
+    setError("");
+  }, [passwordChallenge]);
 
   async function submit(event) {
     event.preventDefault();
@@ -79,6 +94,32 @@ export function LoginPage({ onLogin, authError = "", configured = true }) {
     }
   }
 
+  async function submitNewPassword(event) {
+    event.preventDefault();
+    setError("");
+    if (newPassword.length < 12 || !/[a-z]/.test(newPassword) || !/[A-Z]/.test(newPassword) || !/[0-9]/.test(newPassword) || !/[^A-Za-z0-9]/.test(newPassword)) {
+      setError("Use at least 12 characters including uppercase, lowercase, a number and a symbol.");
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setError("The passwords do not match.");
+      return;
+    }
+    const missingAttribute = (passwordChallenge.requiredAttributes || []).find((attribute) => !attributeValues[attribute]?.trim());
+    if (missingAttribute) {
+      setError(`${displayAttributeName(missingAttribute)} is required.`);
+      return;
+    }
+    setBusy(true);
+    try {
+      await onCompleteNewPassword(newPassword, attributeValues);
+    } catch (challengeError) {
+      setError(challengeError.message || "Unable to set the new password.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <main className="login-page">
       <section className="login-card">
@@ -88,6 +129,20 @@ export function LoginPage({ onLogin, authError = "", configured = true }) {
         <p className="muted">Review nursery signals before they become customer opportunities.</p>
         {!configured ? (
           <ErrorState message="This deployment has no Cognito configuration." />
+        ) : passwordChallenge ? (
+          <form onSubmit={submitNewPassword} className="login-form">
+            <h2>Set a new password</h2>
+            <p className="muted">Your temporary password must be replaced before you can continue.</p>
+            {(passwordChallenge.requiredAttributes || []).map((attribute) => (
+              <label key={attribute}>{displayAttributeName(attribute)}<input autoComplete="off" type={attribute === "email" ? "email" : "text"} value={attributeValues[attribute] || ""} onChange={(event) => setAttributeValues((current) => ({ ...current, [attribute]: event.target.value }))} required /></label>
+            ))}
+            <label>New password<input autoComplete="new-password" type="password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} required aria-describedby="password-requirements" /></label>
+            <p id="password-requirements" className="muted small-text">At least 12 characters, with uppercase, lowercase, a number and a symbol.</p>
+            <label>Confirm new password<input autoComplete="new-password" type="password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} required /></label>
+            {(error || authError) && <p className="form-error" role="alert">{error || authError}</p>}
+            <button className="button primary full-width" disabled={busy}>{busy ? "Setting password…" : "Set password"}</button>
+            <button type="button" className="button ghost full-width" onClick={onCancelPasswordChallenge} disabled={busy}>Use a different account</button>
+          </form>
         ) : (
           <form onSubmit={submit} className="login-form">
             <label>Email<input autoComplete="username" type="email" value={email} onChange={(event) => setEmail(event.target.value)} required /></label>
@@ -274,7 +329,7 @@ export default function App() {
   const path = useHashLocation();
   const apiClient = useMemo(() => useApi(auth.getToken, auth.logout), [auth.getToken, auth.logout]);
   if (auth.loading) return <div className="app-loading"><span className="spinner" /> Checking session…</div>;
-  if (!auth.user) return <LoginPage onLogin={auth.login} authError={auth.authError} configured={auth.configured} />;
+  if (!auth.user) return <LoginPage onLogin={auth.login} authError={auth.authError} configured={auth.configured} passwordChallenge={auth.passwordChallenge} onCompleteNewPassword={auth.completeNewPassword} onCancelPasswordChallenge={auth.cancelPasswordChallenge} />;
   const detailMatch = path.match(/^\/signals\/([^/?#]+)/);
   const listQuery = path.includes("?") ? path.split("?")[1] : "";
   return <Shell user={auth.user} onLogout={auth.logout} onNavigate={navigate} currentPath={path}>

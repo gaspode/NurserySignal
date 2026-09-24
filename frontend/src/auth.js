@@ -21,6 +21,13 @@ export function sessionIsValid(session) {
   return Boolean(session && typeof session.isValid === "function" && session.isValid());
 }
 
+export function displayAttributeName(attribute) {
+  return String(attribute || "")
+    .replace(/^custom:/, "")
+    .replace(/^./, (letter) => letter.toUpperCase())
+    .replaceAll("_", " ");
+}
+
 function sessionFor(user) {
   return new Promise((resolve, reject) => {
     user.getSession((error, session) => {
@@ -38,6 +45,7 @@ export function AuthProvider({ children, config = appConfig }) {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [authError, setAuthError] = useState("");
+  const [passwordChallenge, setPasswordChallenge] = useState(null);
 
   useEffect(() => {
     let active = true;
@@ -69,10 +77,15 @@ export function AuthProvider({ children, config = appConfig }) {
         const cognitoUser = new CognitoUser({ Username: email, Pool: pool });
         const details = new AuthenticationDetails({ Username: email, Password: password });
         setAuthError("");
+        setPasswordChallenge(null);
         cognitoUser.authenticateUser(details, {
           onSuccess: (session) => {
             setUser(cognitoUser);
             resolve(session);
+          },
+          newPasswordRequired: (userAttributes = {}, requiredAttributes = []) => {
+            setPasswordChallenge({ cognitoUser, userAttributes, requiredAttributes });
+            resolve({ requiresNewPassword: true });
           },
           onFailure: (error) => {
             const message = error?.message || "Sign in failed.";
@@ -84,9 +97,40 @@ export function AuthProvider({ children, config = appConfig }) {
     [pool],
   );
 
+  const completeNewPassword = useCallback(
+    (newPassword, requiredAttributeData = {}) =>
+      new Promise((resolve, reject) => {
+        if (!passwordChallenge) {
+          reject(new Error("No password challenge is active."));
+          return;
+        }
+        setAuthError("");
+        passwordChallenge.cognitoUser.completeNewPasswordChallenge(newPassword, requiredAttributeData, {
+          onSuccess: (session) => {
+            setUser(passwordChallenge.cognitoUser);
+            setPasswordChallenge(null);
+            resolve(session);
+          },
+          onFailure: (error) => {
+            const message = error?.message || "Unable to set the new password.";
+            setAuthError(message);
+            reject(new Error(message));
+          },
+        });
+      }),
+    [passwordChallenge],
+  );
+
+  const cancelPasswordChallenge = useCallback(() => {
+    passwordChallenge?.cognitoUser.signOut();
+    setPasswordChallenge(null);
+    setAuthError("");
+  }, [passwordChallenge]);
+
   const logout = useCallback(() => {
     pool?.getCurrentUser()?.signOut();
     setUser(null);
+    setPasswordChallenge(null);
     setAuthError("");
   }, [pool]);
 
@@ -100,7 +144,10 @@ export function AuthProvider({ children, config = appConfig }) {
     user,
     loading,
     authError,
+    passwordChallenge,
     login,
+    completeNewPassword,
+    cancelPasswordChallenge,
     logout,
     getToken,
     configured: Boolean(pool),
