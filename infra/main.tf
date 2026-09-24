@@ -78,6 +78,37 @@ resource "aws_security_group" "db" {
   }
 }
 
+resource "aws_security_group" "secrets_endpoint" {
+  name        = "${local.name_prefix}-secrets-endpoint"
+  description = "Allow NurserySignal Lambdas to reach Secrets Manager"
+  vpc_id      = data.aws_vpc.default.id
+  tags        = local.common_tags
+
+  ingress {
+    protocol        = "tcp"
+    from_port       = 443
+    to_port         = 443
+    security_groups = [aws_security_group.lambda.id]
+  }
+
+  egress {
+    protocol    = "-1"
+    from_port   = 0
+    to_port     = 0
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+resource "aws_vpc_endpoint" "secretsmanager" {
+  vpc_id              = data.aws_vpc.default.id
+  service_name        = "com.amazonaws.${var.aws_region}.secretsmanager"
+  vpc_endpoint_type   = "Interface"
+  private_dns_enabled = true
+  subnet_ids          = [local.lambda_subnet_ids[0]]
+  security_group_ids  = [aws_security_group.secrets_endpoint.id]
+  tags                = local.common_tags
+}
+
 resource "aws_db_instance" "main" {
   identifier                      = local.name_prefix
   engine                          = "postgres"
@@ -103,6 +134,24 @@ resource "aws_db_instance" "main" {
   copy_tags_to_snapshot           = true
   enabled_cloudwatch_logs_exports = ["postgresql"]
   tags                            = local.common_tags
+}
+
+resource "aws_secretsmanager_secret" "database" {
+  name                    = "${local.name_prefix}/database"
+  description             = "Runtime PostgreSQL connection details for NurserySignal"
+  recovery_window_in_days = 7
+  tags                    = local.common_tags
+}
+
+resource "aws_secretsmanager_secret_version" "database" {
+  secret_id = aws_secretsmanager_secret.database.id
+  secret_string = jsonencode({
+    username = var.db_username
+    password = random_password.db.result
+    host     = aws_db_instance.main.address
+    port     = aws_db_instance.main.port
+    dbname   = var.db_name
+  })
 }
 
 resource "aws_s3_bucket" "raw_evidence" {

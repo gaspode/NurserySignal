@@ -33,6 +33,11 @@ resource "aws_iam_role_policy" "lambda_application" {
       },
       {
         Effect   = "Allow"
+        Action   = ["secretsmanager:GetSecretValue"]
+        Resource = aws_secretsmanager_secret.database.arn
+      },
+      {
+        Effect   = "Allow"
         Action   = ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes", "sqs:SendMessage"]
         Resource = [aws_sqs_queue.ingestion.arn, aws_sqs_queue.enrichment.arn]
       }
@@ -62,7 +67,7 @@ data "aws_iam_policy_document" "github_assume_role" {
       values   = ["sts.amazonaws.com"]
     }
     condition {
-      test     = "StringLike"
+      test     = "StringEquals"
       variable = "token.actions.githubusercontent.com:sub"
       values   = ["repo:${var.github_repository}:ref:refs/heads/main"]
     }

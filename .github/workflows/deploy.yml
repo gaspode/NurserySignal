@@ -32,7 +32,11 @@ jobs:
           role-to-assume: ${{ vars.NURSERYSIGNAL_AWS_ROLE_ARN }}
 
       - name: Verify AWS identity
-        run: aws sts get-caller-identity --region eu-west-1
+        run: |
+          test "$AWS_REGION" = "eu-west-1"
+          account="$(aws sts get-caller-identity --region eu-west-1 --query Account --output text)"
+          test "$account" = "185489190783"
+          echo "Deploying to AWS account $account in $AWS_REGION"
 
       - name: Plan
         run: |

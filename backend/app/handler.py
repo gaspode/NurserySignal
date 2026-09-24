@@ -25,7 +25,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     logger.info("request path=%s method=%s environment=%s", path, method, settings.environment)
 
     if path == "/health" and method == "GET":
-        db_configured = settings.database_url is not None
+        db_configured = settings.database_url is not None or settings.db_secret_arn is not None
         db_ok = check_connection(settings) if db_configured else False
         status = "ok" if db_ok else "degraded"
         return _response(200 if db_ok else 503, {
@@ -38,4 +38,3 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         return _response(200, {"service": settings.service_name, "status": "ready"})
 
     return _response(404, {"error": "not_found"})
-

@@ -34,12 +34,9 @@ use a deliberately added endpoint strategy or be kept outside the database VPC.
 
 ## Repository setup
 
-The working directory was initially empty and has no GitHub remote. After a
-remote repository is created, set `github_repository` (for example,
-`my-org/nurserysignal`) when applying Terraform to enable the restricted
-GitHub Actions OIDC deployment role. The OIDC provider itself is created in the
-initial stack; the role is intentionally not created with a wildcard GitHub
-trust policy.
+The GitHub Actions OIDC deployment role is restricted to
+`gaspode/NurserySignal` on the `main` branch. The workflow expects its ARN in
+the `NURSERYSIGNAL_AWS_ROLE_ARN` repository variable.
 
 ## Local checks
 

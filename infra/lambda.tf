@@ -16,10 +16,6 @@ resource "aws_cloudwatch_log_group" "migration" {
   tags              = local.common_tags
 }
 
-locals {
-  database_url = "postgresql://${var.db_username}:${random_password.db.result}@${aws_db_instance.main.address}:${aws_db_instance.main.port}/${var.db_name}?sslmode=require"
-}
-
 resource "aws_lambda_function" "backend" {
   function_name    = "${local.name_prefix}-backend"
   role             = aws_iam_role.lambda.arn
@@ -37,9 +33,9 @@ resource "aws_lambda_function" "backend" {
 
   environment {
     variables = {
-      APP_ENV      = var.environment
-      SERVICE_NAME = "${local.name_prefix}-api"
-      DATABASE_URL = local.database_url
+      APP_ENV       = var.environment
+      SERVICE_NAME  = "${local.name_prefix}-api"
+      DB_SECRET_ARN = aws_secretsmanager_secret.database.arn
     }
   }
 
@@ -64,9 +60,9 @@ resource "aws_lambda_function" "migration" {
 
   environment {
     variables = {
-      APP_ENV      = var.environment
-      SERVICE_NAME = "${local.name_prefix}-migration"
-      DATABASE_URL = local.database_url
+      APP_ENV       = var.environment
+      SERVICE_NAME  = "${local.name_prefix}-migration"
+      DB_SECRET_ARN = aws_secretsmanager_secret.database.arn
     }
   }
 
@@ -79,6 +75,5 @@ resource "aws_lambda_invocation" "migration" {
   input = jsonencode({
     migration_bundle = data.archive_file.lambda.output_base64sha256
   })
-  depends_on = [aws_db_instance.main]
+  depends_on = [aws_db_instance.main, aws_vpc_endpoint.secretsmanager]
 }
-

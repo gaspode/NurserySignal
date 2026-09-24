@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import Any
 
 import psycopg
 
 from app.config import Settings
+from app.db import resolve_database_url
 
 
 def migration_files() -> list[Path]:
@@ -38,14 +38,13 @@ def apply_migrations(database_url: str) -> list[str]:
 
 def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     settings = Settings.from_env()
-    if not settings.database_url:
-        raise RuntimeError("DATABASE_URL is not configured")
-    return {"applied": apply_migrations(settings.database_url)}
+    return {"applied": apply_migrations(resolve_database_url(settings))}
 
 
 if __name__ == "__main__":
-    database_url = os.environ.get("DATABASE_URL")
-    if not database_url:
-        raise SystemExit("DATABASE_URL is required")
+    settings = Settings.from_env()
+    try:
+        database_url = resolve_database_url(settings)
+    except RuntimeError as exc:
+        raise SystemExit(str(exc)) from exc
     print({"applied": apply_migrations(database_url)})
-

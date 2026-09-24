@@ -6,13 +6,20 @@ from contextlib import contextmanager
 import psycopg
 
 from app.config import Settings
+from app.secrets import database_url_from_secret
+
+
+def resolve_database_url(settings: Settings) -> str:
+    if settings.database_url:
+        return settings.database_url
+    if settings.db_secret_arn:
+        return database_url_from_secret(settings.db_secret_arn)
+    raise RuntimeError("DATABASE_URL or DB_SECRET_ARN is not configured")
 
 
 @contextmanager
 def connection(settings: Settings) -> Iterator[psycopg.Connection]:
-    if not settings.database_url:
-        raise RuntimeError("DATABASE_URL is not configured")
-    with psycopg.connect(settings.database_url, connect_timeout=5) as conn:
+    with psycopg.connect(resolve_database_url(settings), connect_timeout=5) as conn:
         yield conn
 
 
@@ -23,4 +30,3 @@ def check_connection(settings: Settings) -> bool:
         return True
     except Exception:
         return False
-

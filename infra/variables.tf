@@ -20,8 +20,8 @@ variable "environment" {
 
 variable "github_repository" {
   type        = string
-  default     = ""
-  description = "GitHub owner/repository used by Actions, for example my-org/nurserysignal. Empty disables the deploy role until a repo exists."
+  default     = "gaspode/NurserySignal"
+  description = "GitHub owner/repository used by Actions."
 }
 
 variable "db_name" {
@@ -33,4 +33,3 @@ variable "db_username" {
   type    = string
   default = "nurserysignal"
 }
-
