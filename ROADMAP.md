@@ -35,13 +35,14 @@ Completed:
 - School-context exclusions refined without suppressing explicit early-years proposals.
 - Persistence-level idempotency verified on repeated live collection.
 - Bounded administrator reprocessing of stored planning evidence implemented with audit records, review-state preservation and no new ingestion artefacts.
+- Cognito admin-group claim normalization hardened for API Gateway string, comma-separated and JSON-array representations while retaining exact-group authorization.
 - Fresh bounded Plota validation completed: 14 records returned, 11 excluded, and 3 explicit childcare candidates matched; follow-up/context exclusions were added and deployed.
 - Existing invited operator added to `NurserySignalAdmins` and membership verified server-side.
 - Latest bounded repeat for 2026-09-18 through 2026-09-24 returned 15 records, matched 3 explicit childcare candidates, and drained without provider errors or DLQ messages; all three remain strong genuine signals.
 - Daily EventBridge schedule remains deliberately disabled.
 
 Current gate:
-- Sign in again with the invited operator so the refreshed Cognito token carries `NurserySignalAdmins`, then run the bounded reprocess against the existing live sample.
+- Verify the deployed authorization fix with a refreshed invited-operator token carrying `NurserySignalAdmins`, then run the bounded reprocess against the existing live sample.
 - Review the reprocessed historical state and confirm reviewed decisions and audit history remain intact.
 - Keep the daily EventBridge schedule disabled until that administrator-only validation is complete.
 
