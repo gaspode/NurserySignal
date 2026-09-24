@@ -18,6 +18,10 @@ data "aws_subnets" "default" {
   }
 }
 
+data "aws_route_tables" "default" {
+  vpc_id = data.aws_vpc.default.id
+}
+
 locals {
   name_prefix       = "${var.project_name}-${var.environment}"
   lambda_subnet_ids = sort(data.aws_subnets.default.ids)
@@ -106,6 +110,54 @@ resource "aws_vpc_endpoint" "secretsmanager" {
   private_dns_enabled = true
   subnet_ids          = [local.lambda_subnet_ids[0]]
   security_group_ids  = [aws_security_group.secrets_endpoint.id]
+  tags                = local.common_tags
+}
+
+resource "aws_vpc_endpoint" "s3" {
+  vpc_id            = data.aws_vpc.default.id
+  service_name      = "com.amazonaws.${var.aws_region}.s3"
+  vpc_endpoint_type = "Gateway"
+  route_table_ids   = data.aws_route_tables.default.ids
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = "*"
+      Action    = ["s3:PutObject"]
+      Resource  = "${aws_s3_bucket.raw_evidence.arn}/*"
+    }]
+  })
+  tags = local.common_tags
+}
+
+resource "aws_security_group" "sqs_endpoint" {
+  name        = "${local.name_prefix}-sqs-endpoint"
+  description = "Allow NurserySignal Lambdas to reach SQS"
+  vpc_id      = data.aws_vpc.default.id
+  tags        = local.common_tags
+
+  ingress {
+    protocol        = "tcp"
+    from_port       = 443
+    to_port         = 443
+    security_groups = [aws_security_group.lambda.id]
+  }
+
+  egress {
+    protocol    = "-1"
+    from_port   = 0
+    to_port     = 0
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+resource "aws_vpc_endpoint" "sqs" {
+  vpc_id              = data.aws_vpc.default.id
+  service_name        = "com.amazonaws.${var.aws_region}.sqs"
+  vpc_endpoint_type   = "Interface"
+  private_dns_enabled = true
+  subnet_ids          = local.lambda_subnet_ids
+  security_group_ids  = [aws_security_group.sqs_endpoint.id]
   tags                = local.common_tags
 }
 
