@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from typing import Any
 
@@ -51,3 +52,12 @@ def group_claim_shape(value: Any) -> str:
     if "," in raw:
         return "comma_separated_string"
     return "string"
+
+
+def group_claim_fingerprints(value: Any) -> list[str]:
+    """Return non-reversible diagnostics for normalized group values."""
+
+    return [
+        f"{len(group)}:{hashlib.sha256(group.encode('utf-8')).hexdigest()[:12]}"
+        for group in sorted(normalized_groups(value))
+    ]

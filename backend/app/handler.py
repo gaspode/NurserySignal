@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
-from app.authorization import group_claim_shape, normalized_groups
+from app.authorization import group_claim_fingerprints, group_claim_shape, normalized_groups
 from app.config import Settings
 from app.db import check_connection
 from app.ingestion import NormalizedSignal
@@ -68,6 +69,12 @@ def _require_admin(
             group_claim_shape(group_claim),
             len(groups),
             settings.admin_group in groups,
+        )
+        logger.warning(
+            "admin_authorization_group_fingerprints values=%s expected_length=%d expected_hash=%s",
+            group_claim_fingerprints(group_claim),
+            len(settings.admin_group),
+            hashlib.sha256(settings.admin_group.encode("utf-8")).hexdigest()[:12],
         )
         return _response(403, {"error": "administrator_role_required"})
     return None
