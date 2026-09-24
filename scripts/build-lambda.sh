@@ -16,4 +16,4 @@ python3 -m pip install --disable-pip-version-check --no-compile \
 # Lambda imports the libraries directly; console entry points are unnecessary
 # and otherwise embed the build runner's absolute Python path in the archive.
 rm -rf "${build_dir}/bin"
-find "${build_dir}" -type f -path '*/.dist-info/RECORD' -exec sed -i '/^bin\//d' {} +
+find "${build_dir}" -type f -path '*/.dist-info/RECORD' -exec sed -i '/bin\/jp\.py,/d' {} +
