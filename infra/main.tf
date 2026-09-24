@@ -296,8 +296,8 @@ resource "aws_sqs_queue" "enrichment" {
 
 resource "aws_cloudwatch_event_rule" "collector_schedule" {
   name                = "${local.name_prefix}-collector-schedule"
-  description         = "Daily planning collector schedule; intentionally disabled until provider credentials are configured"
+  description         = "Daily bounded Plota planning collector; uses a two-day overlapping window for safe idempotent collection"
   schedule_expression = "rate(1 day)"
-  state               = "DISABLED"
+  state               = "ENABLED"
   tags                = local.common_tags
 }

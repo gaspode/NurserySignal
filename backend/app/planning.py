@@ -82,7 +82,10 @@ class PlanningQuery:
     def from_event(cls, event: dict[str, Any] | None = None) -> PlanningQuery:
         event = event or {}
         now = datetime.now(UTC).date()
-        from_date = date.fromisoformat(str(event.get("from_date", now - timedelta(days=2))))
+        lookback_days = min(max(int(event.get("lookback_days", 2)), 1), 31)
+        from_date = date.fromisoformat(
+            str(event.get("from_date", now - timedelta(days=lookback_days)))
+        )
         to_date = date.fromisoformat(str(event.get("to_date", now)))
         if to_date < from_date:
             raise ValueError("to_date must not be before from_date")

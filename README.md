@@ -64,11 +64,16 @@ exclusion heuristics, and sends versioned messages to the existing ingestion
 queue. The ingestion worker then uses the normal S3 -> database -> enrichment
 path.
 
-The Terraform stack creates an empty Secrets Manager secret for the provider;
-the daily EventBridge rule and target are deliberately disabled until a key is
-configured. Store a Plota demo or paid key as either the raw secret value or
-`{"api_key":"..."}`. The API key is never logged or committed. After the key
-is configured, invoke a bounded sample manually with the collector Lambda:
+The Terraform stack stores the provider credential in a private Secrets Manager
+secret. The existing EventBridge rule runs at `rate(1 day)` and invokes the
+collector with a two-day overlapping window, a maximum of 100 records and a
+page size of 25. EventBridge rate schedules are UTC cadence-based rather than a
+fixed wall-clock time: the first run is scheduled relative to enablement and
+subsequent runs are 24 hours apart. The two-day overlap relies on ingestion
+idempotency to avoid duplicate canonical signals. Store a Plota demo or paid
+key as either the raw secret value or `{"api_key":"..."}`. The API key is
+never logged or committed. Invoke a bounded sample manually with the collector
+Lambda when troubleshooting:
 
 ```bash
 aws lambda invoke --profile nurserysignal --region eu-west-1 \

@@ -41,6 +41,25 @@ def record(description: str, *, address: str = "12 High Street, Bristol BS1 1AA"
     )
 
 
+def test_scheduled_query_uses_a_bounded_recent_window() -> None:
+    query = PlanningQuery.from_event(
+        {"lookback_days": 2, "max_records": 100, "page_size": 25}
+    )
+
+    assert query.to_date >= query.from_date
+    assert (query.to_date - query.from_date).days == 2
+    assert query.max_records == 100
+    assert query.page_size == 25
+
+
+def test_query_lookback_is_clamped() -> None:
+    short_query = PlanningQuery.from_event({"lookback_days": 0})
+    long_query = PlanningQuery.from_event({"lookback_days": 100})
+
+    assert (short_query.to_date - short_query.from_date).days == 1
+    assert (long_query.to_date - long_query.from_date).days == 31
+
+
 def test_positive_and_exclusion_matching() -> None:
     assert candidate_decision(record("Change of use to a children's day nursery")).matched
     assert candidate_decision(record("Extension to an existing Montessori nursery")).matched

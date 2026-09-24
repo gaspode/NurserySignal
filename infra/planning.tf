@@ -73,7 +73,9 @@ resource "aws_cloudwatch_event_target" "planning_collector" {
   target_id = "planning-collector"
   arn       = aws_lambda_function.planning_collector.arn
   input = jsonencode({
-    max_records = 100
+    lookback_days = 2
+    max_records   = 100
+    page_size     = 25
   })
 }
 
