@@ -35,7 +35,8 @@ function titleCase(value) {
 }
 
 function isFalsePositive(signal) {
-  return signal?.extracted_facts?.classification === "irrelevant-or-unclear";
+  const facts = signal?.extracted_facts || {};
+  return facts.likely_false_positive === true || ["irrelevant-or-unclear", "horticultural-nursery"].includes(facts.classification);
 }
 
 function ErrorState({ message, onRetry }) {

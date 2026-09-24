@@ -1,0 +1,90 @@
+[
+  {
+    "case": "observed-community-garden-award",
+    "expected": "false_positive",
+    "source_type": "local_news",
+    "title": "Community garden nursery wins award",
+    "raw_text": "The community garden nursery won an award for its biodiversity project.",
+    "organisation_hint": "York Community Garden"
+  },
+  {
+    "case": "observed-community-garden-award-variant",
+    "expected": "false_positive",
+    "source_type": "local_news",
+    "title": "Community garden nursery wins award",
+    "raw_text": "A community garden nursery wins a horticultural award for growing plants; no childcare opening is planned.",
+    "organisation_hint": "York Community Garden"
+  },
+  {
+    "case": "plant-nursery-expansion",
+    "expected": "false_positive",
+    "source_type": "planning",
+    "title": "Plant nursery expansion",
+    "raw_text": "Extension of a plant nursery for growing plants and nursery stock.",
+    "organisation_hint": "Westfield Plants"
+  },
+  {
+    "case": "tree-nursery-planning",
+    "expected": "false_positive",
+    "source_type": "planning",
+    "title": "Tree nursery planning application",
+    "raw_text": "Planning application for a tree nursery, propagation beds and saplings.",
+    "organisation_hint": "Greenwood Trees"
+  },
+  {
+    "case": "garden-centre-stock",
+    "expected": "false_positive",
+    "source_type": "planning",
+    "title": "Garden centre nursery stock",
+    "raw_text": "A garden centre will increase its nursery stock and seedlings area.",
+    "organisation_hint": "Riverside Garden Centre"
+  },
+  {
+    "case": "horticultural-award",
+    "expected": "false_positive",
+    "source_type": "local_news",
+    "title": "Horticultural nursery receives award",
+    "raw_text": "The horticultural nursery received an RHS award for gardening and propagation.",
+    "organisation_hint": "County Horticulture Society"
+  },
+  {
+    "case": "childrens-day-nursery",
+    "expected": "childcare",
+    "source_type": "planning",
+    "title": "Children's day nursery opening",
+    "raw_text": "A children's day nursery will open with 52 nursery places.",
+    "organisation_hint": "Little Acorns"
+  },
+  {
+    "case": "nursery-manager-vacancy",
+    "expected": "childcare",
+    "source_type": "recruitment",
+    "title": "Nursery manager vacancy",
+    "raw_text": "A nursery manager is wanted for a new early years setting.",
+    "organisation_hint": "Bright Start Nurseries"
+  },
+  {
+    "case": "early-years-facility",
+    "expected": "childcare",
+    "source_type": "planning",
+    "title": "Early-years childcare facility",
+    "raw_text": "Change of use to an early years childcare facility for nursery children.",
+    "organisation_hint": "Growing Futures"
+  },
+  {
+    "case": "montessori-opening",
+    "expected": "childcare",
+    "source_type": "operator_announcement",
+    "title": "Montessori nursery opening",
+    "raw_text": "A Montessori nursery is opening in September with places for children.",
+    "organisation_hint": "Montessori House"
+  },
+  {
+    "case": "day-nursery-expansion",
+    "expected": "childcare",
+    "source_type": "planning",
+    "title": "Expansion of existing day nursery",
+    "raw_text": "Extension of an existing day nursery to create additional nursery places.",
+    "organisation_hint": "Little Oaks Day Nursery"
+  }
+]

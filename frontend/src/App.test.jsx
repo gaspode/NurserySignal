@@ -73,6 +73,25 @@ describe("admin frontend", () => {
     expect(onNavigate).toHaveBeenCalledWith("/signals/signal-1");
   });
 
+  it("renders the shared horticultural false-positive marker", async () => {
+    const falsePositive = {
+      ...item,
+      title: "Community garden nursery wins award",
+      event_type: "other",
+      lifecycle_stage: "DISCOVERED",
+      confidence: 0.2,
+      extracted_facts: {
+        classification: "horticultural-nursery",
+        likely_false_positive: true,
+      },
+    };
+    const apiClient = vi.fn().mockResolvedValue({ items: [falsePositive], total: 1, limit: 10, offset: 0 });
+    render(<SignalsPage apiClient={apiClient} onNavigate={vi.fn()} />);
+    expect(await screen.findByText("Community garden nursery wins award")).toBeInTheDocument();
+    expect(screen.getByText("Likely false positive")).toBeInTheDocument();
+    expect(screen.getByText("20%")).toBeInTheDocument();
+  });
+
   it("renders detail evidence and completes approve flow", async () => {
     const apiClient = vi.fn()
       .mockResolvedValueOnce(detail())

@@ -84,6 +84,15 @@ updating the existing canonical signal, rather than creating a duplicate.
 The current enrichment candidate is intentionally left for human review; a
 future phase can add explicit lifecycle updates for material decisions.
 
+Planning and fixture enrichment share the deterministic relevance rules in
+`backend/app/classification.py`. Strong horticultural evidence such as plant or
+tree nurseries, garden centres, nursery stock, propagation, seedlings, saplings,
+RHS or gardening is treated as a likely false positive unless meaningful
+childcare evidence is also present. Such candidates remain `OTHER` at
+`DISCOVERED` with low confidence and are never promoted by the fixture rules.
+The regression corpus is in `fixtures/classification_regressions.json` and is
+not automatically reprocessed against historical records.
+
 ## Internal admin frontend
 
 The React/Vite app lives in `frontend/`. It uses the existing Cognito user pool

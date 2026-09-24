@@ -12,6 +12,8 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
+from app.classification import classify_signal_text
+
 logger = logging.getLogger("nurserysignal.planning")
 
 POSITIVE_TERMS = (
@@ -29,8 +31,21 @@ POSITIVE_TERMS = (
     "montessori",
 )
 EXCLUSION_PATTERNS = (
+    r"\bcommunity\s+garden\s+nurser(?:y|ies)\b",
+    r"\bgarden\s+nurser(?:y|ies)\b",
     r"\bplant\s+nurser(?:y|ies)\b",
     r"\btree\s+nurser(?:y|ies)\b",
+    r"\bhorticultural\s+nurser(?:y|ies)\b",
+    r"\bnursery\s+stock\b",
+    r"\bplant(?:s|ing)?\b",
+    r"\bgardening\b",
+    r"\bhorticultur(?:e|al)\b",
+    r"\brhs\b",
+    r"\bgarden\s+centr(?:e|er)\b",
+    r"\bgrowing\s+plants?\b",
+    r"\bpropagation\b",
+    r"\bseedlings?\b",
+    r"\bsaplings?\b",
     r"\bforest\s+nurser(?:y|ies)\b",
     r"\bnursery\s+(?:bedroom|room)\b",
     r"\bbedroom\s+(?:nursery|for\s+a\s+nursery)\b",
@@ -237,33 +252,41 @@ class CandidateDecision:
     matched: bool
     positive_terms: tuple[str, ...]
     exclusions: tuple[str, ...]
+    childcare_terms: tuple[str, ...] = ()
+    horticultural_terms: tuple[str, ...] = ()
+    likely_false_positive: bool = False
 
 
 def candidate_decision(record: PlanningRecord) -> CandidateDecision:
-    text = " ".join(
-        value for value in (record.description, record.address, record.status) if value
-    ).lower()
+    classification = classify_signal_text(
+        (
+            record.description,
+            record.address,
+            record.status,
+            record.decision,
+            record.council,
+            record.applicant,
+            record.agent,
+            record.raw,
+        )
+    )
+    text = classification.text
     positive = tuple(term for term in POSITIVE_TERMS if term in text)
     exclusions = tuple(
         pattern for pattern in EXCLUSION_PATTERNS if re.search(pattern, text, re.IGNORECASE)
     )
-    strong_childcare_context = any(
-        term in text
-        for term in (
-            "childcare",
-            "child care",
-            "early years",
-            "day nursery",
-            "children's nursery",
-            "preschool",
-            "pre-school",
-            "crèche",
-            "creche",
-            "montessori",
-        )
+    strong_childcare_context = bool(classification.childcare_terms)
+    matched = bool(positive) and not classification.likely_false_positive and (
+        not exclusions or strong_childcare_context
     )
-    matched = bool(positive) and (not exclusions or strong_childcare_context)
-    return CandidateDecision(matched, positive, exclusions)
+    return CandidateDecision(
+        matched,
+        positive,
+        exclusions,
+        classification.childcare_terms,
+        classification.horticultural_terms,
+        classification.likely_false_positive,
+    )
 
 
 def planning_signal(record: PlanningRecord, decision: CandidateDecision) -> dict[str, Any]:
@@ -295,6 +318,8 @@ def planning_signal(record: PlanningRecord, decision: CandidateDecision) -> dict
         "agent": record.agent,
         "candidate_positive_terms": list(decision.positive_terms),
         "candidate_exclusions": list(decision.exclusions),
+        "candidate_childcare_terms": list(decision.childcare_terms),
+        "candidate_horticultural_terms": list(decision.horticultural_terms),
         "provider_record": record.raw,
     }
     return {

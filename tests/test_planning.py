@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import date
+from pathlib import Path
 from urllib.error import HTTPError
 
 import pytest
@@ -45,6 +47,48 @@ def test_positive_and_exclusion_matching() -> None:
     assert not candidate_decision(record("Extension to a plant nursery")).matched
     assert not candidate_decision(record("Create a nursery bedroom in the house")).matched
     assert not candidate_decision(record("Works to a nursery school classroom")).matched
+
+
+@pytest.mark.parametrize(
+    "description",
+    [
+        "Community garden nursery wins award",
+        "Plant nursery expansion",
+        "Tree nursery planning application",
+        "Garden centre nursery stock",
+        "Horticultural nursery award",
+    ],
+)
+def test_horticultural_records_are_not_planning_candidates(description: str) -> None:
+    decision = candidate_decision(record(description))
+    assert decision.matched is False
+    assert decision.likely_false_positive is True
+    assert decision.horticultural_terms
+
+
+def test_candidate_matching_inspects_provider_record_text() -> None:
+    item = record("Nursery expansion")
+    item = replace(item, raw={"description": "Tree nursery propagation"})
+    decision = candidate_decision(item)
+    assert decision.matched is False
+    assert decision.likely_false_positive is True
+
+
+def test_regression_fixture_cases_match_expected_classification() -> None:
+    fixtures = json.loads(
+        Path("fixtures/classification_regressions.json").read_text(encoding="utf-8")
+    )
+    for fixture in fixtures:
+        item = record(
+            fixture["raw_text"],
+            address=fixture.get("organisation_hint", "12 High Street") + ", Bristol BS1 1AA",
+        )
+        decision = candidate_decision(item)
+        assert decision.likely_false_positive is (fixture["expected"] == "false_positive")
+        if fixture["expected"] == "false_positive":
+            assert decision.matched is False
+        else:
+            assert decision.matched is True
 
 
 def test_normalization_preserves_structured_provider_fields() -> None:

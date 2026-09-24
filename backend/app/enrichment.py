@@ -3,22 +3,24 @@ from __future__ import annotations
 from datetime import date
 from typing import Any
 
+from app.classification import CLASSIFICATION_RULE_VERSION, classify_signal_text
+
 
 def fixture_enrichment(raw: dict[str, Any]) -> dict[str, Any]:
-    text = f"{raw['title']} {raw['raw_text']}".lower()
-    source_type = str(raw["source_type"]).lower()
-    is_explicit_false_positive = any(
-        phrase in text
-        for phrase in (
-            "no childcare opening",
-            "no nursery opening",
-            "not a childcare opening",
-            "biodiversity project",
+    classification_result = classify_signal_text(
+        (
+            raw.get("title"),
+            raw.get("raw_text"),
+            raw.get("location_hint"),
+            raw.get("organisation_hint"),
+            raw.get("metadata"),
         )
     )
-    if is_explicit_false_positive:
+    text = classification_result.text
+    source_type = str(raw["source_type"]).lower()
+    if classification_result.likely_false_positive:
         event_type, lifecycle_stage, confidence = "other", "DISCOVERED", 0.2
-        classification = "irrelevant-or-unclear"
+        classification = "horticultural-nursery"
     elif "planning" in source_type or any(
         word in text for word in ("planning", "application", "proposed")
     ):
@@ -56,6 +58,10 @@ def fixture_enrichment(raw: dict[str, Any]) -> dict[str, Any]:
         "extracted_facts": {
             "method": "fixture-v1",
             "classification": classification,
+            "classification_rule_version": CLASSIFICATION_RULE_VERSION,
+            "childcare_terms": list(classification_result.childcare_terms),
+            "horticultural_terms": list(classification_result.horticultural_terms),
+            "likely_false_positive": classification_result.likely_false_positive,
             "source_type": raw["source_type"],
         },
         "evidence": {
