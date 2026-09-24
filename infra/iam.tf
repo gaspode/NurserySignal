@@ -160,8 +160,11 @@ resource "aws_iam_policy" "github_actions" {
         }
       },
       {
-        Effect   = "Allow"
-        Action   = ["secretsmanager:TagResource", "secretsmanager:UntagResource"]
+        Effect = "Allow"
+        Action = [
+          "secretsmanager:DescribeSecret", "secretsmanager:TagResource",
+          "secretsmanager:UntagResource"
+        ]
         Resource = "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:${local.name_prefix}/planning-provider-*"
       },
       {
