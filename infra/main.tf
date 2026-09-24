@@ -296,7 +296,7 @@ resource "aws_sqs_queue" "enrichment" {
 
 resource "aws_cloudwatch_event_rule" "collector_schedule" {
   name                = "${local.name_prefix}-collector-schedule"
-  description         = "Foundation schedule for future source collectors"
+  description         = "Daily planning collector schedule; intentionally disabled until provider credentials are configured"
   schedule_expression = "rate(1 day)"
   state               = "DISABLED"
   tags                = local.common_tags

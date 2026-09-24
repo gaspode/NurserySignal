@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import asdict, dataclass
 from datetime import datetime
+from typing import Any
 
 import boto3
 
@@ -38,6 +39,36 @@ class EnrichmentMessage:
             raise ValueError("unsupported enrichment message version")
         datetime.fromisoformat(str(payload["queued_at"]).replace("Z", "+00:00"))
         return cls(**{key: str(payload[key]) for key in required})
+
+
+@dataclass(frozen=True)
+class SignalIngestionMessage:
+    """Small, versioned collector-to-ingestion contract."""
+
+    message_version: str
+    signal: dict[str, Any]
+    raw_provider_record: dict[str, Any]
+
+    @classmethod
+    def from_json(cls, body: bytes) -> SignalIngestionMessage:
+        payload = json.loads(body)
+        if not isinstance(payload, dict) or payload.get("message_version") != "1.0":
+            raise ValueError("unsupported ingestion message version")
+        signal = payload.get("signal")
+        raw = payload.get("raw_provider_record")
+        if not isinstance(signal, dict) or not isinstance(raw, dict):
+            raise ValueError("invalid ingestion message payload")
+        return cls("1.0", signal, raw)
+
+
+def send_ingestion_message(settings: Settings, message: SignalIngestionMessage) -> str:
+    if not settings.ingestion_queue_url:
+        raise RuntimeError("INGESTION_QUEUE_URL is not configured")
+    response = boto3.client("sqs").send_message(
+        QueueUrl=settings.ingestion_queue_url,
+        MessageBody=json.dumps(asdict(message), separators=(",", ":"), sort_keys=True),
+    )
+    return str(response["MessageId"])
 
 
 def send_enrichment_message(settings: Settings, message: EnrichmentMessage) -> str:

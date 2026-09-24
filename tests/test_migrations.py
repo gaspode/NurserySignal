@@ -6,6 +6,7 @@ def test_initial_migration_exists_and_contains_provenance_tables() -> None:
     assert [path.name for path in files] == [
         "0001_initial.sql",
         "0002_ingestion_vertical_slice.sql",
+        "0003_planning_revisions.sql",
     ]
     sql = "\n".join(path.read_text(encoding="utf-8") for path in files)
     tables = (
@@ -21,3 +22,4 @@ def test_initial_migration_exists_and_contains_provenance_tables() -> None:
     assert "provenance JSONB" in sql
     assert "CREATE TABLE IF NOT EXISTS signal_enrichments" in sql
     assert "review_status IN ('PENDING', 'APPROVED', 'REJECTED')" in sql
+    assert "CREATE TABLE IF NOT EXISTS raw_signal_revisions" in sql

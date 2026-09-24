@@ -38,6 +38,14 @@ output "enrichment_function_name" {
   value = aws_lambda_function.enrichment.function_name
 }
 
+output "planning_collector_function_name" {
+  value = aws_lambda_function.planning_collector.function_name
+}
+
+output "planning_provider_secret_arn" {
+  value = aws_secretsmanager_secret.planning_provider.arn
+}
+
 output "cognito_user_pool_id" {
   value = aws_cognito_user_pool.main.id
 }

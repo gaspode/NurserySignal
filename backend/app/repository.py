@@ -35,6 +35,8 @@ def find_signal(settings: Settings, source_type: str, external_id: str) -> Signa
             FROM raw_signals rs
             LEFT JOIN source_documents sd ON sd.raw_signal_id = rs.id
             WHERE rs.source_type = %s AND rs.external_id = %s
+            ORDER BY sd.captured_at DESC NULLS LAST
+            LIMIT 1
             """,
             (source_type, external_id),
         ).fetchone()
@@ -110,6 +112,73 @@ def store_signal(
         ),
         created=created,
     )
+
+
+def store_planning_revision(
+    settings: Settings,
+    signal: NormalizedSignal,
+    signal_id: str,
+    bucket: str,
+    key: str,
+    content_sha256: str,
+) -> bool:
+    """Track a changed planning record without creating another canonical signal."""
+    metadata = signal.metadata
+    with connection(settings) as conn:
+        row = conn.execute(
+            """
+            INSERT INTO raw_signal_revisions (
+                raw_signal_id, content_sha256, source_url, observed_at,
+                planning_status, decision, metadata, evidence_bucket, evidence_key
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (raw_signal_id, content_sha256) DO NOTHING
+            RETURNING id
+            """,
+            (
+                signal_id,
+                content_sha256,
+                signal.source_url,
+                signal.discovered_at,
+                metadata.get("planning_status"),
+                metadata.get("decision"),
+                Jsonb(metadata),
+                bucket,
+                key,
+            ),
+        ).fetchone()
+        if row is None:
+            conn.rollback()
+            return False
+        conn.execute(
+            """
+            UPDATE raw_signals
+            SET source_url = %s, discovered_at = %s, title = %s, raw_text = %s,
+                location_hint = %s, organisation_hint = %s, metadata = %s,
+                content_sha256 = %s
+            WHERE id = %s
+            """,
+            (
+                signal.source_url,
+                signal.discovered_at,
+                signal.title,
+                signal.raw_text,
+                signal.location_hint,
+                signal.organisation_hint,
+                Jsonb(signal.metadata),
+                content_sha256,
+                signal_id,
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO source_documents (raw_signal_id, s3_bucket, s3_key, sha256, mime_type)
+            VALUES (%s, %s, %s, %s, 'application/json')
+            ON CONFLICT (s3_bucket, s3_key) DO NOTHING
+            """,
+            (signal_id, bucket, key, content_sha256),
+        )
+        conn.commit()
+    return True
 
 
 def dispatch_enrichment(
@@ -273,9 +342,38 @@ def signal_detail(settings: Settings, signal_id: str) -> dict[str, Any] | None:
             """,
             (signal_id,),
         ).fetchone()
+        revisions = conn.execute(
+            """
+            SELECT id, content_sha256, source_url, observed_at, planning_status,
+                   decision, evidence_bucket, evidence_key, created_at
+            FROM raw_signal_revisions
+            WHERE raw_signal_id = %s
+            ORDER BY observed_at DESC
+            """,
+            (signal_id,),
+        ).fetchall()
     raw["documents"] = [
         dict(zip(("id", "s3_bucket", "s3_key", "sha256", "mime_type", "captured_at"), row))
         for row in documents
+    ]
+    raw["planning_revisions"] = [
+        dict(
+            zip(
+                (
+                    "id",
+                    "content_sha256",
+                    "source_url",
+                    "observed_at",
+                    "planning_status",
+                    "decision",
+                    "evidence_bucket",
+                    "evidence_key",
+                    "created_at",
+                ),
+                row,
+            )
+        )
+        for row in revisions
     ]
     if enrichment:
         raw["enrichment"] = dict(

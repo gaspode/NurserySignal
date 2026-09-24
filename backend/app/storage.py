@@ -27,6 +27,12 @@ def evidence_key(signal: NormalizedSignal, payload: bytes) -> str:
     return f"signals/{source}/{discovered}/{identity_hash}/raw.json"
 
 
+def evidence_revision_key(signal: NormalizedSignal, payload: bytes) -> str:
+    """Use a separate immutable object for a changed provider record."""
+    base = evidence_key(signal, payload).removesuffix("/raw.json")
+    return f"{base}/revisions/{evidence_sha256(payload)}.json"
+
+
 def put_raw_evidence(settings: Settings, bucket: str, key: str, payload: bytes) -> None:
     try:
         boto3.client("s3").put_object(

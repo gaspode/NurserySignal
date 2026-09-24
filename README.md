@@ -9,6 +9,7 @@ This repository contains the first deployable foundation:
 - A small Python 3.12 Lambda backend in `backend/`.
 - SQL migrations and the initial relational model.
 - A normalized signal ingestion contract.
+- A provider-independent planning collector with deterministic nursery candidate filtering.
 - A fixture-driven authenticated signal ingestion and enrichment flow.
 - A React/Vite internal admin frontend served through private S3 and CloudFront.
 - Local tests and GitHub Actions checks.
@@ -52,6 +53,36 @@ inspect and review candidates with:
 The admin frontend uses `GET /admin/signals/{id}/evidence` to obtain a
 five-minute presigned URL for the private raw JSON evidence object. The
 evidence bucket is never made public.
+
+## Planning collector
+
+The first live provider adapter is Plota. It is isolated behind
+`backend/app/planning.py`, so another licensed provider can implement the same
+`PlanningProvider` interface later. The collector searches a bounded date
+window, paginates with the provider cursor, applies local positive and
+exclusion heuristics, and sends versioned messages to the existing ingestion
+queue. The ingestion worker then uses the normal S3 -> database -> enrichment
+path.
+
+The Terraform stack creates an empty Secrets Manager secret for the provider;
+the daily EventBridge rule and target are deliberately disabled until a key is
+configured. Store a Plota demo or paid key as either the raw secret value or
+`{"api_key":"..."}`. The API key is never logged or committed. After the key
+is configured, invoke a bounded sample manually with the collector Lambda:
+
+```bash
+aws lambda invoke --profile nurserysignal --region eu-west-1 \
+  --function-name nurserysignal-prod-planning-collector \
+  --payload '{"from_date":"2026-09-22","to_date":"2026-09-24","max_records":25}' \
+  /tmp/nurserysignal-planning-result.json
+```
+
+Planning records use `plota:<application-id>` as their stable external ID.
+Repeated unchanged observations are idempotent. A changed planning record is
+stored as an immutable evidence object and a `raw_signal_revisions` row while
+updating the existing canonical signal, rather than creating a duplicate.
+The current enrichment candidate is intentionally left for human review; a
+future phase can add explicit lifecycle updates for material decisions.
 
 ## Internal admin frontend
 

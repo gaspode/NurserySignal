@@ -11,10 +11,10 @@ from app.service import EnrichmentQueueError, SignalConflictError, ingest_signal
 from app.storage import EvidencePersistenceError
 
 
-def signal() -> NormalizedSignal:
+def signal(source_type: str = "planning") -> NormalizedSignal:
     return NormalizedSignal.from_dict(
         {
-            "source_type": "planning",
+            "source_type": source_type,
             "source_url": "https://example.test/planning/1",
             "external_id": "planning-1",
             "discovered_at": datetime.now(UTC).isoformat(),
@@ -92,4 +92,18 @@ def test_conflicting_duplicate_is_rejected(monkeypatch) -> None:
     existing = SignalIdentity(uuid4(), "signals/planning/raw.json", None, "different")
     monkeypatch.setattr("app.service.find_signal", lambda *args: existing)
     with pytest.raises(SignalConflictError):
-        ingest_signal(settings(), signal(), b"{}")
+        ingest_signal(settings(), signal("recruitment"), b"{}")
+
+
+def test_planning_content_change_is_tracked_without_duplicate_or_requeue(monkeypatch) -> None:
+    existing = SignalIdentity(uuid4(), "signals/planning/raw.json", datetime.now(UTC), "different")
+    monkeypatch.setattr("app.service.find_signal", lambda *args: existing)
+    calls = []
+    monkeypatch.setattr("app.service.put_raw_evidence", lambda *args: calls.append("s3"))
+    monkeypatch.setattr(
+        "app.service.store_planning_revision", lambda *args: calls.append("revision") or True
+    )
+    result = ingest_signal(settings(), signal(), b'{"status":"approved"}')
+    assert result.status == "updated"
+    assert result.enrichment_queued is False
+    assert calls == ["s3", "revision"]

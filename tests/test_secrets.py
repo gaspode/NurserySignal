@@ -1,6 +1,6 @@
 import json
 
-from app.secrets import database_url_from_secret
+from app.secrets import database_url_from_secret, provider_api_key_from_secret
 
 
 class FakeSecretsManager:
@@ -29,3 +29,10 @@ def test_database_secret_is_converted_to_safe_conninfo(monkeypatch) -> None:
     assert "dbname=nurserysignal" in conninfo
     assert "password='p@ss word'" in conninfo
     assert "SecretString" not in conninfo
+
+
+def test_provider_secret_supports_json_api_key(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "app.secrets.secret_string", lambda arn: json.dumps({"api_key": "not-logged"})
+    )
+    assert provider_api_key_from_secret("provider") == "not-logged"
