@@ -17,3 +17,5 @@ python3 -m pip install --disable-pip-version-check --no-compile \
 # and otherwise embed the build runner's absolute Python path in the archive.
 rm -rf "${build_dir}/bin"
 find "${build_dir}" -type f -name RECORD -exec sed -i '/bin\/jp\.py,/d' {} +
+find "${build_dir}" -type d -exec chmod 755 {} +
+find "${build_dir}" -type f -exec chmod 644 {} +
