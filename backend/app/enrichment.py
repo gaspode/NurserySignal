@@ -7,7 +7,19 @@ from typing import Any
 def fixture_enrichment(raw: dict[str, Any]) -> dict[str, Any]:
     text = f"{raw['title']} {raw['raw_text']}".lower()
     source_type = str(raw["source_type"]).lower()
-    if "planning" in source_type or any(
+    is_explicit_false_positive = any(
+        phrase in text
+        for phrase in (
+            "no childcare opening",
+            "no nursery opening",
+            "not a childcare opening",
+            "biodiversity project",
+        )
+    )
+    if is_explicit_false_positive:
+        event_type, lifecycle_stage, confidence = "other", "DISCOVERED", 0.2
+        classification = "irrelevant-or-unclear"
+    elif "planning" in source_type or any(
         word in text for word in ("planning", "application", "proposed")
     ):
         event_type, lifecycle_stage, confidence = "opening", "PLANNING", 0.86

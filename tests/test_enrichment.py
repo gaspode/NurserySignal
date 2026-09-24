@@ -43,6 +43,19 @@ def test_fixture_enrichment_rejects_false_positive_semantically() -> None:
     assert candidate["confidence"] < 0.5
 
 
+def test_fixture_enrichment_honours_explicit_false_positive_negation() -> None:
+    candidate = fixture_enrichment(
+        raw_signal(
+            "The community garden nursery has won an award for its biodiversity project; "
+            "no childcare opening is planned.",
+            "local_news",
+            "Community garden nursery wins award",
+        )
+    )
+    assert candidate["event_type"] == "other"
+    assert candidate["lifecycle_stage"] == "DISCOVERED"
+
+
 def test_poison_message_is_reported_for_dlq(monkeypatch) -> None:
     monkeypatch.setattr("app.worker.Settings.from_env", lambda: object())
     result = handler({"Records": [{"messageId": "poison-1", "body": "not-json"}]}, None)
