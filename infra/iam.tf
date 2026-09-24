@@ -102,7 +102,8 @@ resource "aws_iam_policy" "github_actions" {
         Effect = "Allow"
         Action = [
           "secretsmanager:DeleteSecret", "secretsmanager:DeleteSecretVersion", "secretsmanager:DescribeSecret",
-          "secretsmanager:GetSecretValue", "secretsmanager:ListSecretVersionIds", "secretsmanager:PutSecretValue",
+          "secretsmanager:GetResourcePolicy", "secretsmanager:GetSecretValue", "secretsmanager:ListSecretVersionIds",
+          "secretsmanager:PutSecretValue",
           "secretsmanager:RestoreSecret", "secretsmanager:TagResource", "secretsmanager:UntagResource",
           "secretsmanager:UpdateSecret"
         ]
