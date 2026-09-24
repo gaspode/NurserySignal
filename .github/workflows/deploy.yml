@@ -23,6 +23,8 @@ jobs:
         with:
           python-version: "3.12"
 
+      - uses: hashicorp/setup-terraform@v3
+
       - name: Build Lambda package
         run: make build-lambda
 
