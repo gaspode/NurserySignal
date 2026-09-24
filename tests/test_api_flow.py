@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from decimal import Decimal
 from uuid import UUID, uuid4
 
 from app.handler import handler
@@ -122,3 +123,14 @@ def test_admin_detail_and_review_actions(monkeypatch) -> None:
     rejected = handler(event(f"/admin/signals/{signal_id}/reject", "POST"), None)
     assert approved["statusCode"] == 200
     assert rejected["statusCode"] == 404
+
+
+def test_admin_detail_serializes_database_numeric_values(monkeypatch) -> None:
+    signal_id = str(uuid4())
+    monkeypatch.setattr(
+        "app.handler.signal_detail",
+        lambda settings, value: {"id": UUID(value), "confidence": Decimal("0.86")},
+    )
+    response = handler(event(f"/admin/signals/{signal_id}"), None)
+    assert response["statusCode"] == 200
+    assert json.loads(response["body"])["confidence"] == 0.86

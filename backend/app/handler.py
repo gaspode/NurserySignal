@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 from datetime import date, datetime
+from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
@@ -20,6 +21,8 @@ logger = configure_logging()
 def _json_default(value: Any) -> str:
     if isinstance(value, (datetime, date, UUID)):
         return str(value)
+    if isinstance(value, Decimal):
+        return float(value)
     raise TypeError(f"unsupported JSON value: {type(value).__name__}")
 
 
