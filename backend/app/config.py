@@ -15,6 +15,7 @@ class Settings:
     enrichment_queue_url: str | None = None
     planning_provider_secret_arn: str | None = None
     planning_provider_base_url: str = "https://api.plota.co.uk/v1"
+    admin_group: str = "NurserySignalAdmins"
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -30,4 +31,5 @@ class Settings:
             planning_provider_base_url=os.getenv(
                 "PLANNING_PROVIDER_BASE_URL", "https://api.plota.co.uk/v1"
             ),
+            admin_group=os.getenv("ADMIN_GROUP", "NurserySignalAdmins"),
         )

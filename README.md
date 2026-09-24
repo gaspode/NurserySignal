@@ -93,6 +93,18 @@ childcare evidence is also present. Such candidates remain `OTHER` at
 The regression corpus is in `fixtures/classification_regressions.json` and is
 not automatically reprocessed against historical records.
 
+An invited user in the Cognito `NurserySignalAdmins` group can explicitly
+re-evaluate a bounded set of stored planning records with
+`POST /admin/planning/reprocess`. This is reclassification of the provider
+evidence already retained in the database and private S3; it does not call
+Plota, write new evidence, enqueue enrichment, or create a new raw signal.
+Requests are capped at 100 records and may be narrowed by date range or signal
+IDs. Pending candidates are updated in place using the shared deterministic
+rules. Approved and rejected records retain their candidate fields and review
+history, with only a compact latest derived evaluation attached for audit.
+Each operation writes one safe admin audit event containing counts and rule
+version, never raw payloads or secrets.
+
 ## Internal admin frontend
 
 The React/Vite app lives in `frontend/`. It uses the existing Cognito user pool

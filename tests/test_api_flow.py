@@ -5,13 +5,19 @@ from decimal import Decimal
 from uuid import UUID, uuid4
 
 from app.handler import handler
+from app.repository import ReprocessResult
 from app.service import IngestionResult
 
 CLAIMS = {"sub": "reviewer-123", "username": "admin@example.test"}
 
 
 def event(
-    path: str, method: str = "GET", *, body: str | None = None, query: dict[str, str] | None = None
+    path: str,
+    method: str = "GET",
+    *,
+    body: str | None = None,
+    query: dict[str, str] | None = None,
+    claims: dict | None = None,
 ) -> dict:
     return {
         "rawPath": path,
@@ -19,7 +25,7 @@ def event(
         "queryStringParameters": query or {},
         "requestContext": {
             "http": {"method": method},
-            "authorizer": {"jwt": {"claims": CLAIMS}},
+            "authorizer": {"jwt": {"claims": claims or CLAIMS}},
         },
     }
 
@@ -154,3 +160,57 @@ def test_admin_detail_serializes_database_numeric_values(monkeypatch) -> None:
     response = handler(event(f"/admin/signals/{signal_id}"), None)
     assert response["statusCode"] == 200
     assert json.loads(response["body"])["confidence"] == 0.86
+
+
+def test_planning_reprocess_requires_administrator_group() -> None:
+    response = handler(
+        event("/admin/planning/reprocess", "POST", body=json.dumps({"limit": 25})), None
+    )
+    assert response["statusCode"] == 403
+    assert json.loads(response["body"]) == {"error": "administrator_role_required"}
+
+
+def test_planning_reprocess_passes_bounded_filters_and_returns_audit_summary(monkeypatch) -> None:
+    captured = {}
+    expected = ReprocessResult("operation-1", 2, 1, 1, 0, 1, 1)
+
+    def fake_reprocess(settings, **kwargs):
+        captured.update(kwargs)
+        return expected
+
+    monkeypatch.setattr("app.handler.reprocess_planning_signals", fake_reprocess)
+    response = handler(
+        event(
+            "/admin/planning/reprocess",
+            "POST",
+            body=json.dumps(
+                {
+                    "limit": 500,
+                    "discovered_from": "2026-09-01",
+                    "discovered_to": "2026-09-24",
+                    "signal_ids": [str(uuid4())],
+                }
+            ),
+            claims={**CLAIMS, "cognito:groups": ["NurserySignalAdmins"]},
+        ),
+        None,
+    )
+    assert response["statusCode"] == 200
+    assert captured["limit"] == 100
+    assert captured["discovered_from"] == "2026-09-01"
+    assert captured["discovered_to"] == "2026-09-24"
+    assert len(captured["signal_ids"]) == 1
+    assert json.loads(response["body"])["reviewed_preserved"] == 1
+
+
+def test_planning_reprocess_rejects_unbounded_id_lists() -> None:
+    response = handler(
+        event(
+            "/admin/planning/reprocess",
+            "POST",
+            body=json.dumps({"limit": 1, "signal_ids": [str(uuid4()), str(uuid4())]}),
+            claims={**CLAIMS, "cognito:groups": ["NurserySignalAdmins"]},
+        ),
+        None,
+    )
+    assert response["statusCode"] == 400

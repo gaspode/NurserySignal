@@ -4,9 +4,12 @@ from datetime import date
 from typing import Any
 
 from app.classification import CLASSIFICATION_RULE_VERSION, classify_signal_text
+from app.planning import candidate_decision, planning_record_from_signal
 
 
-def fixture_enrichment(raw: dict[str, Any]) -> dict[str, Any]:
+def fixture_enrichment(
+    raw: dict[str, Any], *, planning_candidate: Any | None = None
+) -> dict[str, Any]:
     classification_result = classify_signal_text(
         (
             raw.get("title"),
@@ -18,9 +21,23 @@ def fixture_enrichment(raw: dict[str, Any]) -> dict[str, Any]:
     )
     text = classification_result.text
     source_type = str(raw["source_type"]).lower()
-    if classification_result.likely_false_positive:
+    if planning_candidate is None and source_type == "planning":
+        try:
+            planning_candidate = candidate_decision(planning_record_from_signal(raw))
+        except (KeyError, TypeError, ValueError):
+            # Older/manual planning fixtures may not contain provider metadata.
+            # They retain the original fixture behaviour rather than failing
+            # enrichment solely because they predate the planning adapter.
+            planning_candidate = None
+
+    planning_excluded = planning_candidate is not None and not planning_candidate.matched
+    if classification_result.likely_false_positive or planning_excluded:
         event_type, lifecycle_stage, confidence = "other", "DISCOVERED", 0.2
-        classification = "horticultural-nursery"
+        classification = (
+            "horticultural-nursery"
+            if classification_result.likely_false_positive
+            else "planning-excluded"
+        )
     elif "planning" in source_type or any(
         word in text for word in ("planning", "application", "proposed")
     ):
@@ -61,7 +78,18 @@ def fixture_enrichment(raw: dict[str, Any]) -> dict[str, Any]:
             "classification_rule_version": CLASSIFICATION_RULE_VERSION,
             "childcare_terms": list(classification_result.childcare_terms),
             "horticultural_terms": list(classification_result.horticultural_terms),
-            "likely_false_positive": classification_result.likely_false_positive,
+            "likely_false_positive": (
+                classification_result.likely_false_positive or planning_excluded
+            ),
+            "planning_candidate_matched": (
+                planning_candidate.matched if planning_candidate is not None else None
+            ),
+            "planning_positive_terms": (
+                list(planning_candidate.positive_terms) if planning_candidate is not None else []
+            ),
+            "planning_exclusions": (
+                list(planning_candidate.exclusions) if planning_candidate is not None else []
+            ),
             "source_type": raw["source_type"],
         },
         "evidence": {

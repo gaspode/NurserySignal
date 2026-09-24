@@ -246,6 +246,8 @@ export function SignalsPage({ apiClient, onNavigate, initialQuery = "" }) {
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [reprocessMessage, setReprocessMessage] = useState("");
+  const [reprocessError, setReprocessError] = useState("");
   const query = useMemo(() => {
     const params = new URLSearchParams({ limit: PAGE_SIZE, offset: page * PAGE_SIZE });
     Object.entries(filters).forEach(([key, value]) => value && params.set(key, value));
@@ -258,10 +260,27 @@ export function SignalsPage({ apiClient, onNavigate, initialQuery = "" }) {
   };
   useEffect(() => { load(); }, [query]);
   function updateFilter(name, value) { setPage(0); setFilters((current) => ({ ...current, [name]: value })); }
+  async function reprocessPlanning() {
+    if (!window.confirm("Re-evaluate up to 25 stored planning signals using the current rules? This does not call Plota or create new evidence/queue messages.")) return;
+    setReprocessMessage("");
+    setReprocessError("");
+    try {
+      const summary = await apiClient("/admin/planning/reprocess", {
+        method: "POST",
+        body: JSON.stringify({ limit: 25, source_type: "planning" }),
+      });
+      setReprocessMessage(`${summary.pending_updated} pending signal${summary.pending_updated === 1 ? "" : "s"} re-evaluated; ${summary.reviewed_preserved} reviewed record${summary.reviewed_preserved === 1 ? "" : "s"} preserved.`);
+      await load();
+    } catch (reprocessLoadError) {
+      setReprocessError(reprocessLoadError.message);
+    }
+  }
   const totalPages = result ? Math.max(1, Math.ceil(result.total / PAGE_SIZE)) : 1;
   return (
     <section>
-      <div className="page-heading"><div><p className="eyebrow">Review queue</p><h1>Signals</h1><p className="muted">Raw signals and their evidence-backed enrichment candidates.</p></div><span className="result-count">{result?.total ?? "—"} total</span></div>
+      <div className="page-heading"><div><p className="eyebrow">Review queue</p><h1>Signals</h1><p className="muted">Raw signals and their evidence-backed enrichment candidates.</p></div><div className="page-actions"><button className="button secondary" onClick={reprocessPlanning}>Re-evaluate stored planning</button><span className="result-count">{result?.total ?? "—"} total</span></div></div>
+      {reprocessMessage && <div className="notice" role="status">{reprocessMessage}</div>}
+      {reprocessError && <div className="notice error-state" role="alert">{reprocessError}</div>}
       <div className="filter-bar" aria-label="Signal filters">
         <label>Status<select aria-label="Review status" value={filters.review_status} onChange={(event) => updateFilter("review_status", event.target.value)}><option value="">All statuses</option><option value="PENDING">Pending</option><option value="APPROVED">Approved</option><option value="REJECTED">Rejected</option></select></label>
         <label>Source<select aria-label="Source type" value={filters.source_type} onChange={(event) => updateFilter("source_type", event.target.value)}><option value="">All sources</option><option value="planning">Planning</option><option value="recruitment">Recruitment</option><option value="operator_announcement">Operator announcement</option><option value="local_news">Local news</option></select></label>

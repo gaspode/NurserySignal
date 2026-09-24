@@ -118,6 +118,42 @@ class PlanningProvider(Protocol):
     def applications(self, query: PlanningQuery) -> Iterator[PlanningRecord]: ...
 
 
+def planning_record_from_signal(raw: dict[str, Any]) -> PlanningRecord:
+    """Reconstruct a stored planning record without calling the provider.
+
+    Collector records retain the complete provider response in signal metadata.
+    Reprocessing uses that durable copy and deliberately does not perform a new
+    provider request.
+    """
+    metadata = raw.get("metadata") or {}
+    provider_record = metadata.get("provider_record")
+    if isinstance(provider_record, dict):
+        return normalize_plota_record(
+            provider_record,
+            str(metadata.get("provider_base_url") or "https://api.plota.co.uk/v1"),
+        )
+    return PlanningRecord(
+        provider=str(metadata.get("provider") or "stored"),
+        application_id=str(
+            metadata.get("provider_application_id") or raw.get("external_id") or raw["id"]
+        ),
+        application_url=str(raw.get("source_url") or "https://example.invalid/stored"),
+        description=str(raw.get("raw_text") or raw.get("title") or ""),
+        address=raw.get("location_hint"),
+        postcode=metadata.get("postcode"),
+        latitude=metadata.get("latitude"),
+        longitude=metadata.get("longitude"),
+        application_date=_date(metadata.get("application_date")),
+        status=metadata.get("planning_status"),
+        decision=metadata.get("decision"),
+        decision_date=_date(metadata.get("decision_date")),
+        council=metadata.get("council"),
+        applicant=metadata.get("applicant") or raw.get("organisation_hint"),
+        agent=metadata.get("agent"),
+        raw=provider_record if isinstance(provider_record, dict) else metadata,
+    )
+
+
 def _date(value: Any) -> date | None:
     if not value:
         return None

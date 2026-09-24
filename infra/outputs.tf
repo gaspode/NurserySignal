@@ -54,6 +54,10 @@ output "cognito_app_client_id" {
   value = aws_cognito_user_pool_client.main.id
 }
 
+output "cognito_admin_group" {
+  value = aws_cognito_user_group.administrators.name
+}
+
 output "github_actions_role_arn" {
   value = var.github_repository == "" ? null : aws_iam_role.github_actions[0].arn
 }

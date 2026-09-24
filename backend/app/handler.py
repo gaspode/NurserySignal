@@ -11,7 +11,7 @@ from app.config import Settings
 from app.db import check_connection
 from app.ingestion import NormalizedSignal
 from app.logging import configure_logging
-from app.repository import list_signals, review_signal, signal_detail
+from app.repository import list_signals, reprocess_planning_signals, review_signal, signal_detail
 from app.service import EnrichmentQueueError, SignalConflictError, ingest_signal, parse_json_payload
 from app.storage import EvidencePersistenceError, presigned_evidence_url
 
@@ -53,6 +53,17 @@ def _require_claims(event: dict[str, Any]) -> tuple[dict[str, Any] | None, dict[
     return claims, None
 
 
+def _require_admin(
+    claims: dict[str, Any], settings: Settings
+) -> dict[str, Any] | None:
+    groups = claims.get("cognito:groups", [])
+    if isinstance(groups, str):
+        groups = [item.strip() for item in groups.split(",") if item.strip()]
+    if not isinstance(groups, list) or settings.admin_group not in groups:
+        return _response(403, {"error": "administrator_role_required"})
+    return None
+
+
 def _signal_payload(event: dict[str, Any]) -> dict[str, Any]:
     raw_body = _raw_body(event)
     if len(raw_body) > 256 * 1024:
@@ -72,6 +83,8 @@ def _query(event: dict[str, Any], name: str) -> str | None:
 
 
 def _admin_path(path: str) -> tuple[str, str | None]:
+    if path == "/admin/planning/reprocess":
+        return "reprocess", None
     prefix = "/admin/signals"
     if path == prefix:
         return "list", None
@@ -146,6 +159,47 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             return auth_error
         action, signal_id = _admin_path(path)
         try:
+            if action == "reprocess" and method == "POST":
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                payload = parse_json_payload(_raw_body(event))
+                limit = min(max(int(payload.get("limit", 25)), 1), 100)
+                discovered_from = payload.get("discovered_from")
+                discovered_to = payload.get("discovered_to")
+                for value in (discovered_from, discovered_to):
+                    if value is not None:
+                        date.fromisoformat(str(value))
+                signal_ids = payload.get("signal_ids")
+                if signal_ids is not None:
+                    if (
+                        not isinstance(signal_ids, list)
+                        or not signal_ids
+                        or len(signal_ids) > limit
+                    ):
+                        raise ValueError("signal_ids must be a non-empty list within the limit")
+                    signal_ids = [str(UUID(str(value))) for value in signal_ids]
+                actor = str(claims.get("sub") or claims.get("username") or "unknown")
+                result = reprocess_planning_signals(
+                    settings,
+                    actor=actor,
+                    limit=limit,
+                    discovered_from=str(discovered_from) if discovered_from else None,
+                    discovered_to=str(discovered_to) if discovered_to else None,
+                    signal_ids=signal_ids,
+                )
+                return _response(
+                    200,
+                    {
+                        "operation_id": result.operation_id,
+                        "selected": result.selected,
+                        "pending_updated": result.pending_updated,
+                        "reviewed_preserved": result.reviewed_preserved,
+                        "without_enrichment": result.without_enrichment,
+                        "matched": result.matched,
+                        "excluded": result.excluded,
+                    },
+                )
             if action == "list" and method == "GET":
                 limit = min(max(int(_query(event, "limit") or "25"), 1), 100)
                 offset = max(int(_query(event, "offset") or "0"), 0)
@@ -188,7 +242,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                     return _response(404, {"error": "enrichment_not_found"})
                 return _response(200, {"signal_id": signal_id, "review_status": status})
         except (ValueError, TypeError):
-            return _response(400, {"error": "invalid_pagination_or_filter"})
+            return _response(400, {"error": "invalid_admin_request"})
         except Exception:
             logger.exception("admin_request_failed action=%s signal_id=%s", action, signal_id)
             return _response(500, {"error": "admin_request_failed"})

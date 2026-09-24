@@ -89,6 +89,32 @@ def test_horticultural_guardrail_runs_before_planning_promotion() -> None:
     assert candidate["extracted_facts"]["likely_false_positive"] is True
 
 
+def test_stored_planning_provider_evidence_uses_current_candidate_rules() -> None:
+    raw = raw_signal(
+        "Prior notification of change of use of agricultural building to 4 dwellings.",
+        "planning",
+        "Springwell Nursery",
+    )
+    raw["metadata"] = {
+        "provider": "plota",
+        "provider_application_id": "UTT/26/2465/PAQ3",
+        "provider_record": {
+            "id": "UTT/26/2465/PAQ3",
+            "description": raw["raw_text"],
+            "address": "Barn at Springwell Nursery, Walden Road",
+            "authority": {"name": "Uttlesford"},
+            "stage": "Awaiting decision",
+            "date_received": "2026-09-23",
+            "links": {"council": "https://council.example/utt"},
+        },
+    }
+    candidate = fixture_enrichment(raw)
+    assert candidate["event_type"] == "other"
+    assert candidate["lifecycle_stage"] == "DISCOVERED"
+    assert candidate["extracted_facts"]["classification"] == "planning-excluded"
+    assert candidate["extracted_facts"]["planning_candidate_matched"] is False
+
+
 def test_explicit_childcare_evidence_overrides_horticultural_context() -> None:
     candidate = fixture_enrichment(
         raw_signal(

@@ -37,7 +37,7 @@ Completed:
 - Daily EventBridge schedule remains deliberately disabled.
 
 Current gate:
-- Add bounded administrator reprocessing of stored planning evidence using current classification rules while preserving review history.
+- Add bounded administrator reprocessing of stored planning evidence using current classification rules while preserving review history. The operation is administrator-only, capped, auditable and does not create ingestion artefacts.
 - Reprocess the existing live sample.
 - Run and manually review a fresh 25-record live Plota sample.
 - Confirm remaining false-positive rate is acceptable before considering unattended collection.

@@ -7,8 +7,10 @@ from uuid import UUID
 
 from psycopg.types.json import Jsonb
 
+from app.classification import CLASSIFICATION_RULE_VERSION
 from app.config import Settings
 from app.db import connection
+from app.enrichment import fixture_enrichment
 from app.ingestion import NormalizedSignal
 from app.queueing import EnrichmentMessage, send_enrichment_message
 
@@ -25,6 +27,17 @@ class SignalIdentity:
 class StoredSignal:
     identity: SignalIdentity
     created: bool
+
+
+@dataclass(frozen=True)
+class ReprocessResult:
+    operation_id: str
+    selected: int
+    pending_updated: int
+    reviewed_preserved: int
+    without_enrichment: int
+    matched: int
+    excluded: int
 
 
 def find_signal(settings: Settings, source_type: str, external_id: str) -> SignalIdentity | None:
@@ -403,6 +416,175 @@ def signal_detail(settings: Settings, signal_id: str) -> dict[str, Any] | None:
     else:
         raw["enrichment"] = None
     return raw
+
+
+def reprocess_planning_signals(
+    settings: Settings,
+    *,
+    actor: str,
+    limit: int,
+    discovered_from: str | None = None,
+    discovered_to: str | None = None,
+    signal_ids: list[str] | None = None,
+) -> ReprocessResult:
+    """Re-evaluate stored planning evidence without re-ingesting it.
+
+    This function never writes S3 or sends SQS messages.  A single audit row
+    records the bounded operation, while pending candidates are updated in
+    place and reviewed decisions remain unchanged.
+    """
+    clauses = ["rs.source_type = 'planning'"]
+    params: list[Any] = []
+    if discovered_from:
+        clauses.append("rs.discovered_at >= %s::timestamptz")
+        params.append(discovered_from)
+    if discovered_to:
+        clauses.append("rs.discovered_at < (%s::date + INTERVAL '1 day')")
+        params.append(discovered_to)
+    if signal_ids:
+        clauses.append("rs.id = ANY(%s::uuid[])")
+        params.append(signal_ids)
+    where = " AND ".join(clauses)
+
+    with connection(settings) as conn:
+        rows = conn.execute(
+            f"""
+            SELECT rs.id, rs.schema_version, rs.source_type, rs.source_url,
+                   rs.external_id, rs.discovered_at, rs.title, rs.raw_text,
+                   rs.location_hint, rs.organisation_hint, rs.metadata,
+                   se.review_status
+            FROM raw_signals rs
+            LEFT JOIN signal_enrichments se ON se.raw_signal_id = rs.id
+            WHERE {where}
+            ORDER BY rs.discovered_at DESC, rs.id DESC
+            LIMIT %s
+            """,
+            [*params, limit],
+        ).fetchall()
+        operation_id = conn.execute(
+            """
+            INSERT INTO admin_audit_events (action, actor, target_type, details)
+            VALUES ('planning_reprocess', %s, 'raw_signal', '{}'::jsonb)
+            RETURNING id
+            """,
+            (actor,),
+        ).fetchone()[0]
+
+        pending_updated = 0
+        reviewed_preserved = 0
+        without_enrichment = 0
+        matched = 0
+        excluded = 0
+        for row in rows:
+            raw = dict(
+                zip(
+                    (
+                        "id",
+                        "schema_version",
+                        "source_type",
+                        "source_url",
+                        "external_id",
+                        "discovered_at",
+                        "title",
+                        "raw_text",
+                        "location_hint",
+                        "organisation_hint",
+                        "metadata",
+                        "review_status",
+                    ),
+                    row,
+                )
+            )
+            if raw["review_status"] is None:
+                without_enrichment += 1
+                continue
+            candidate = fixture_enrichment(raw)
+            candidate_matched = candidate["extracted_facts"].get("planning_candidate_matched")
+            if candidate_matched:
+                matched += 1
+            else:
+                excluded += 1
+            if raw["review_status"] == "PENDING":
+                conn.execute(
+                    """
+                    UPDATE signal_enrichments
+                    SET schema_version = %s, event_type = %s, nursery_name = %s,
+                        operator_name = %s, address = %s, expected_opening_date = %s,
+                        capacity = %s, lifecycle_stage = %s, confidence = %s,
+                        extracted_facts = %s, evidence = %s, updated_at = now()
+                    WHERE raw_signal_id = %s AND review_status = 'PENDING'
+                    """,
+                    (
+                        candidate["schema_version"],
+                        candidate["event_type"],
+                        candidate["nursery_name"],
+                        candidate["operator_name"],
+                        candidate["address"],
+                        candidate["expected_opening_date"],
+                        candidate["capacity"],
+                        candidate["lifecycle_stage"],
+                        candidate["confidence"],
+                        Jsonb(candidate["extracted_facts"]),
+                        Jsonb(candidate["evidence"]),
+                        raw["id"],
+                    ),
+                )
+                pending_updated += 1
+            else:
+                # A reviewed candidate is historical.  Retain its decision and
+                # displayed fields, but retain a compact latest derived check
+                # for auditability and later operator inspection.
+                evaluation = {
+                    "classification_rule_version": CLASSIFICATION_RULE_VERSION,
+                    "planning_candidate_matched": candidate_matched,
+                    "likely_false_positive": candidate["extracted_facts"].get(
+                        "likely_false_positive", False
+                    ),
+                    "classification": candidate["extracted_facts"].get("classification"),
+                    "evaluated_at": datetime.now(UTC).isoformat(),
+                    "operation_id": str(operation_id),
+                }
+                conn.execute(
+                    """
+                    UPDATE signal_enrichments
+                    SET extracted_facts = extracted_facts || %s, updated_at = now()
+                    WHERE raw_signal_id = %s AND review_status IN ('APPROVED', 'REJECTED')
+                    """,
+                    (Jsonb({"latest_reprocess_evaluation": evaluation}), raw["id"]),
+                )
+                reviewed_preserved += 1
+
+        details = {
+            "limit": limit,
+            "discovered_from": discovered_from,
+            "discovered_to": discovered_to,
+            "explicit_id_count": len(signal_ids or []),
+            "selected": len(rows),
+            "pending_updated": pending_updated,
+            "reviewed_preserved": reviewed_preserved,
+            "without_enrichment": without_enrichment,
+            "matched": matched,
+            "excluded": excluded,
+            "classification_rule_version": CLASSIFICATION_RULE_VERSION,
+        }
+        conn.execute(
+            """
+            UPDATE admin_audit_events
+            SET target_count = %s, details = %s
+            WHERE id = %s
+            """,
+            (len(rows), Jsonb(details), operation_id),
+        )
+        conn.commit()
+    return ReprocessResult(
+        operation_id=str(operation_id),
+        selected=len(rows),
+        pending_updated=pending_updated,
+        reviewed_preserved=reviewed_preserved,
+        without_enrichment=without_enrichment,
+        matched=matched,
+        excluded=excluded,
+    )
 
 
 def review_signal(settings: Settings, signal_id: str, status: str, reviewer: str | None) -> bool:

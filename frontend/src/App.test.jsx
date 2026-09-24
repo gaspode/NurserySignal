@@ -111,4 +111,20 @@ describe("admin frontend", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("API unavailable");
     expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
   });
+
+  it("supports a bounded stored-planning reprocess action", async () => {
+    const apiClient = vi.fn()
+      .mockResolvedValueOnce({ items: [item], total: 1, limit: 10, offset: 0 })
+      .mockResolvedValueOnce({ operation_id: "op-1", pending_updated: 1, reviewed_preserved: 2 })
+      .mockResolvedValueOnce({ items: [item], total: 1, limit: 10, offset: 0 });
+    render(<SignalsPage apiClient={apiClient} onNavigate={vi.fn()} />);
+    const reprocessButtons = await screen.findAllByRole("button", { name: "Re-evaluate stored planning" });
+    await userEvent.click(reprocessButtons.at(-1));
+    await waitFor(() => expect(apiClient).toHaveBeenCalledWith(
+      "/admin/planning/reprocess",
+      expect.objectContaining({ method: "POST", body: JSON.stringify({ limit: 25, source_type: "planning" }) }),
+    ));
+    const statusMessages = await screen.findAllByRole("status");
+    expect(statusMessages.at(-1)).toHaveTextContent("1 pending signal re-evaluated");
+  });
 });

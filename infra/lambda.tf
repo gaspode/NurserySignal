@@ -38,6 +38,7 @@ resource "aws_lambda_function" "backend" {
       DB_SECRET_ARN        = aws_secretsmanager_secret.database.arn
       EVIDENCE_BUCKET      = aws_s3_bucket.raw_evidence.bucket
       ENRICHMENT_QUEUE_URL = aws_sqs_queue.enrichment.url
+      ADMIN_GROUP          = aws_cognito_user_group.administrators.name
     }
   }
 

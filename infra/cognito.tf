@@ -46,3 +46,10 @@ resource "aws_cognito_user_pool_client" "main" {
     refresh_token = "days"
   }
 }
+
+resource "aws_cognito_user_group" "administrators" {
+  name         = "NurserySignalAdmins"
+  user_pool_id = aws_cognito_user_pool.main.id
+  description  = "Staff allowed to run bounded administrative operations"
+  precedence   = 1
+}
