@@ -12,7 +12,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
-from app.classification import classify_signal_text
+from app.classification import classify_signal_text, combined_text
 
 logger = logging.getLogger("nurserysignal.planning")
 
@@ -47,6 +47,8 @@ EXCLUSION_PATTERNS = (
     r"\bseedlings?\b",
     r"\bsaplings?\b",
     r"\bforest\s+nurser(?:y|ies)\b",
+    r"\bprimary\s+and\s+nurser(?:y|ies)\b",
+    r"\b(?:primary|secondary|infant|junior)\s+school\s+nurser(?:y|ies)\b",
     r"\bnursery\s+(?:bedroom|room)\b",
     r"\bbedroom\s+(?:nursery|for\s+a\s+nursery)\b",
     r"\bschool\s+nursery\s+class(?:es)?\b",
@@ -271,7 +273,22 @@ def candidate_decision(record: PlanningRecord) -> CandidateDecision:
         )
     )
     text = classification.text
-    positive = tuple(term for term in POSITIVE_TERMS if term in text)
+    # A generic "nursery" in an address or applicant name is not enough to
+    # make a planning application a candidate.  Use the proposal/status and
+    # structured planning fields for positive matching, while retaining the
+    # complete record for exclusions and provenance analysis.
+    proposal_text = combined_text(
+        (
+            record.description,
+            record.status,
+            record.decision,
+            (record.raw or {}).get("description"),
+            (record.raw or {}).get("category"),
+            (record.raw or {}).get("categories"),
+            (record.raw or {}).get("planning_route"),
+        )
+    )
+    positive = tuple(term for term in POSITIVE_TERMS if term in proposal_text)
     exclusions = tuple(
         pattern for pattern in EXCLUSION_PATTERNS if re.search(pattern, text, re.IGNORECASE)
     )

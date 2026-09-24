@@ -44,9 +44,40 @@ def record(description: str, *, address: str = "12 High Street, Bristol BS1 1AA"
 def test_positive_and_exclusion_matching() -> None:
     assert candidate_decision(record("Change of use to a children's day nursery")).matched
     assert candidate_decision(record("Extension to an existing Montessori nursery")).matched
+    assert candidate_decision(
+        record(
+            "Change of use to an early years day nursery",
+            address="Lady Elizabeth Hastings Primary School, LS22 5BS",
+        )
+    ).matched
     assert not candidate_decision(record("Extension to a plant nursery")).matched
     assert not candidate_decision(record("Create a nursery bedroom in the house")).matched
     assert not candidate_decision(record("Works to a nursery school classroom")).matched
+
+
+@pytest.mark.parametrize(
+    "description,address",
+    [
+        (
+            "Prior notification for an agricultural farm/forestry office and security centre.",
+            "New Barn Nursery, Broadford Bridge Road, RH20 2LF",
+        ),
+        (
+            "Prior notification of change of use of agricultural building to 4 dwellings.",
+            "Barn at Springwell Nursery, Walden Road, CB10 1UE",
+        ),
+        (
+            "Outline application for 302 dwellings, a community hub and a new two-form "
+            "entry primary and nursery.",
+            "The Basildon Centre, SS14 1DL",
+        ),
+    ],
+)
+def test_live_sample_false_positive_contexts_are_excluded(
+    description: str, address: str
+) -> None:
+    decision = candidate_decision(record(description, address=address))
+    assert decision.matched is False
 
 
 @pytest.mark.parametrize(
