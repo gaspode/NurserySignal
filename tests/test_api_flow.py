@@ -116,7 +116,21 @@ def test_admin_list_filters_and_paginates(monkeypatch) -> None:
         "source_type": "planning",
         "discovered_from": None,
         "discovered_to": None,
+        "search": None,
     }
+
+
+def test_admin_list_passes_bounded_text_search(monkeypatch) -> None:
+    captured = {}
+
+    def fake_list(settings, **kwargs):
+        captured.update(kwargs)
+        return {"items": [], "total": 0, **kwargs}
+
+    monkeypatch.setattr("app.handler.list_signals", fake_list)
+    response = handler(event("/admin/signals", query={"q": "nursery planning ref"}), None)
+    assert response["statusCode"] == 200
+    assert captured["search"] == "nursery planning ref"
 
 
 def test_admin_detail_and_review_actions(monkeypatch) -> None:

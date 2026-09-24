@@ -74,6 +74,7 @@ The admin UI is an operator tool, not a demo.
 - Preserve useful planning metadata and provenance in the signal detail view.
 - Destructive or history-affecting actions require clear intent and safe backend semantics.
 - Do not add UI controls for operations that are unsafe to run unattended.
+- Operational triage workflows should behave like queues/inboxes: handled items leave the active queue, history is separate, and review confirmations use accessible in-app dialogs rather than browser-native prompts.
 
 ## Validation before completion
 

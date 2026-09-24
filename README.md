@@ -46,6 +46,7 @@ stores a `PENDING` candidate in `signal_enrichments`. Authenticated admins can
 inspect and review candidates with:
 
 - `GET /admin/signals`
+- `GET /admin/signals?review_status=REVIEWED&q=...` for bounded reviewed-history search
 - `GET /admin/signals/{id}`
 - `POST /admin/signals/{id}/approve`
 - `POST /admin/signals/{id}/reject`
@@ -134,6 +135,13 @@ entry point. Run `npm --prefix frontend test` for frontend tests.
 
 The initial invited admin account is managed with Cognito's admin API. Do not
 commit passwords or add self-registration to the frontend.
+
+The admin UI presents pending candidates as a Review Inbox. Approved and
+rejected candidates are kept in a separate, paginated Reviewed Signals history
+with source/date filters and bounded text search. Review actions use an
+accessible application modal, remove handled items from the inbox immediately,
+and can be deliberately corrected from history without changing evidence or
+creating ingestion/enrichment events.
 
 Sample signals are in `fixtures/signals.json`. With a Cognito ID token, submit
 them using `COGNITO_ID_TOKEN=... SIGNALS_API_URL=... make ingest-fixtures`.

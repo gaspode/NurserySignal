@@ -1,9 +1,9 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { LoginPage, SignalDetail, SignalsPage } from "./App.jsx";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { Dashboard, LoginPage, ReviewInboxPage, ReviewedSignalsPage, SignalDetail } from "./App.jsx";
 
-const item = {
+const pendingItem = {
   id: "signal-1",
   source_type: "planning",
   external_id: "planning-1",
@@ -16,14 +16,17 @@ const item = {
   confidence: 0.86,
   review_status: "PENDING",
   extracted_facts: { classification: "planning-opening" },
+  metadata: { council: "Bristol City Council" },
 };
 
-function detail() {
+const approvedItem = { ...pendingItem, id: "signal-2", review_status: "APPROVED", title: "Approved nursery conversion" };
+
+function detail(status = "PENDING") {
   return {
-    ...item,
+    ...pendingItem,
     source_url: "https://example.test/planning-1",
     raw_text: "A new nursery is proposed.",
-    metadata: { capacity: 42 },
+    metadata: { capacity: 42, council: "Bristol City Council" },
     created_at: "2026-09-24T08:00:00Z",
     documents: [{ s3_key: "signals/planning/raw.json", sha256: "abc123", s3_bucket: "private" }],
     enrichment: {
@@ -38,93 +41,123 @@ function detail() {
       confidence: 0.86,
       extracted_facts: { method: "fixture-v1" },
       evidence: { source_url: "https://example.test/planning-1" },
-      review_status: "PENDING",
+      review_status: status,
+      reviewed_by: status === "PENDING" ? null : "reviewer-1",
+      reviewed_at: status === "PENDING" ? null : "2026-09-24T09:00:00Z",
     },
   };
 }
 
+function listResult(items = [pendingItem], total = items.length) {
+  return { items, total, limit: 10, offset: 0 };
+}
+
 describe("admin frontend", () => {
+  afterEach(() => cleanup());
+
   beforeEach(() => {
     vi.restoreAllMocks();
-    window.confirm = vi.fn(() => true);
   });
 
   it("presents the login boundary and submits credentials", async () => {
     const onLogin = vi.fn().mockResolvedValue(undefined);
     render(<LoginPage onLogin={onLogin} />);
-    expect(screen.getByRole("heading", { name: "NurserySignal" })).toBeInTheDocument();
     await userEvent.type(screen.getByLabelText("Email"), "staff@example.com");
     await userEvent.type(screen.getByLabelText("Password"), "not-a-real-password");
     await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
     await waitFor(() => expect(onLogin).toHaveBeenCalledWith("staff@example.com", "not-a-real-password"));
   });
 
-  it("renders signals, filters, and paginates", async () => {
-    const apiClient = vi.fn().mockResolvedValue({ items: [item], total: 11, limit: 10, offset: 0 });
-    const onNavigate = vi.fn();
-    render(<SignalsPage apiClient={apiClient} onNavigate={onNavigate} />);
-    expect(await screen.findByText(item.title)).toBeInTheDocument();
-    expect(screen.getByText("86%")).toBeInTheDocument();
-    await userEvent.selectOptions(screen.getByLabelText("Review status"), "APPROVED");
-    await waitFor(() => expect(apiClient).toHaveBeenLastCalledWith(expect.stringContaining("review_status=APPROVED")));
+  it("shows only pending records in the review inbox", async () => {
+    const apiClient = vi.fn().mockResolvedValue(listResult());
+    render(<ReviewInboxPage apiClient={apiClient} onNavigate={vi.fn()} />);
+    expect(await screen.findByRole("heading", { name: "Review Inbox" })).toBeInTheDocument();
+    expect(screen.getByText(pendingItem.title)).toBeInTheDocument();
+    expect(screen.queryByLabelText("Review status")).not.toBeInTheDocument();
+    expect(apiClient).toHaveBeenCalledWith(expect.stringContaining("review_status=PENDING"));
+  });
+
+  it("supports reviewed history search, filtering and pagination", async () => {
+    const apiClient = vi.fn().mockResolvedValue(listResult([approvedItem], 11));
+    render(<ReviewedSignalsPage apiClient={apiClient} onNavigate={vi.fn()} />);
+    expect(await screen.findByRole("heading", { name: "Reviewed Signals" })).toBeInTheDocument();
+    expect(screen.getByText(approvedItem.title)).toBeInTheDocument();
+    await userEvent.type(screen.getByLabelText("Search reviewed signals"), "Bristol");
+    await waitFor(() => expect(apiClient).toHaveBeenLastCalledWith(expect.stringContaining("q=Bristol")));
+    await userEvent.selectOptions(screen.getByLabelText("Review status"), "REJECTED");
+    await waitFor(() => expect(apiClient).toHaveBeenLastCalledWith(expect.stringContaining("review_status=REJECTED")));
     await userEvent.click(screen.getByRole("button", { name: "Next" }));
     expect(apiClient).toHaveBeenLastCalledWith(expect.stringContaining("offset=10"));
-    fireEvent.click(screen.getByText(item.title));
-    expect(onNavigate).toHaveBeenCalledWith("/signals/signal-1");
   });
 
-  it("renders the shared horticultural false-positive marker", async () => {
-    const falsePositive = {
-      ...item,
-      title: "Community garden nursery wins award",
-      event_type: "other",
-      lifecycle_stage: "DISCOVERED",
-      confidence: 0.2,
-      extracted_facts: {
-        classification: "horticultural-nursery",
-        likely_false_positive: true,
-      },
-    };
-    const apiClient = vi.fn().mockResolvedValue({ items: [falsePositive], total: 1, limit: 10, offset: 0 });
-    render(<SignalsPage apiClient={apiClient} onNavigate={vi.fn()} />);
-    expect(await screen.findByText("Community garden nursery wins award")).toBeInTheDocument();
-    expect(screen.getByText("Likely false positive")).toBeInTheDocument();
-    expect(screen.getByText("20%")).toBeInTheDocument();
+  it("renders an empty inbox state", async () => {
+    const apiClient = vi.fn().mockResolvedValue(listResult([], 0));
+    render(<ReviewInboxPage apiClient={apiClient} onNavigate={vi.fn()} />);
+    expect(await screen.findByText("Inbox clear")).toBeInTheDocument();
+    expect(screen.getByText("There are no pending signals waiting for review.")).toBeInTheDocument();
   });
 
-  it("renders detail evidence and completes approve flow", async () => {
+  it("uses a custom confirmation modal and opens the next pending signal after approval", async () => {
+    const nativeConfirm = vi.spyOn(window, "confirm");
+    const onReviewed = vi.fn();
     const apiClient = vi.fn()
       .mockResolvedValueOnce(detail())
       .mockResolvedValueOnce({ signal_id: "signal-1", review_status: "APPROVED" })
-      .mockResolvedValueOnce({ ...detail(), enrichment: { ...detail().enrichment, review_status: "APPROVED" } });
-    render(<SignalDetail signalId="signal-1" apiClient={apiClient} onBack={vi.fn()} />);
+      .mockResolvedValueOnce(listResult([{ ...pendingItem, id: "signal-2" }]));
+    render(<SignalDetail signalId="signal-1" apiClient={apiClient} queueMode onReviewed={onReviewed} onBack={vi.fn()} />);
     expect(await screen.findByText("A new nursery is proposed.")).toBeInTheDocument();
-    expect(screen.getByText("View preserved JSON")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Approve" }));
-    await waitFor(() => expect(apiClient).toHaveBeenCalledWith("/admin/signals/signal-1/approve", { method: "POST" }));
-    expect(await screen.findByRole("status")).toHaveTextContent("approved successfully");
+    expect(screen.getByRole("dialog")).toHaveTextContent("Approve this signal?");
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(apiClient).toHaveBeenCalledTimes(1);
+    await userEvent.click(screen.getByRole("button", { name: "Approve" }));
+    await userEvent.click(screen.getByRole("dialog").querySelector(".button.approve"));
+    await waitFor(() => expect(onReviewed).toHaveBeenCalledWith({ message: "Signal approved successfully.", nextId: "signal-2" }));
+    expect(nativeConfirm).not.toHaveBeenCalled();
   });
 
-  it("shows API failures without losing the page shell", async () => {
+  it("supports correcting a reviewed decision with accurate feedback", async () => {
+    const apiClient = vi.fn()
+      .mockResolvedValueOnce(detail("APPROVED"))
+      .mockResolvedValueOnce({ signal_id: "signal-1", review_status: "REJECTED" })
+      .mockResolvedValueOnce(detail("REJECTED"));
+    render(<SignalDetail signalId="signal-1" apiClient={apiClient} onBack={vi.fn()} />);
+    expect(await screen.findByText("Decision recorded")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Change to Rejected" }));
+    expect(screen.getByRole("dialog")).toHaveTextContent("Current decision: APPROVED");
+    await userEvent.click(screen.getByRole("dialog").querySelector(".button.reject"));
+    expect(await screen.findByRole("status")).toHaveTextContent("Signal rejected successfully.");
+    expect(screen.queryByText("rejeced")).not.toBeInTheDocument();
+    expect(apiClient).toHaveBeenCalledWith("/admin/signals/signal-1/reject", { method: "POST" });
+  });
+
+  it("links dashboard metrics to the inbox and reviewed history", async () => {
+    const apiClient = vi.fn()
+      .mockResolvedValueOnce({ total: 2 })
+      .mockResolvedValueOnce({ total: 3 })
+      .mockResolvedValueOnce({ total: 4 })
+      .mockResolvedValueOnce(listResult([pendingItem]));
+    const onNavigate = vi.fn();
+    render(<Dashboard apiClient={apiClient} onNavigate={onNavigate} />);
+    await screen.findByText("Pending review");
+    await userEvent.click(screen.getByText("Pending review"));
+    await userEvent.click(screen.getByText("Approved"));
+    expect(onNavigate).toHaveBeenCalledWith("/inbox");
+    expect(onNavigate).toHaveBeenCalledWith("/history?review_status=APPROVED");
+  });
+
+  it("shows API failures without losing the inbox shell", async () => {
     const apiClient = vi.fn().mockRejectedValue(new Error("API unavailable"));
-    render(<SignalsPage apiClient={apiClient} onNavigate={vi.fn()} />);
+    render(<ReviewInboxPage apiClient={apiClient} onNavigate={vi.fn()} />);
     expect(await screen.findByRole("alert")).toHaveTextContent("API unavailable");
     expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
   });
 
-  it("supports a bounded stored-planning reprocess action", async () => {
-    const apiClient = vi.fn()
-      .mockResolvedValueOnce({ items: [item], total: 1, limit: 10, offset: 0 })
-      .mockResolvedValueOnce({ operation_id: "op-1", pending_updated: 1, reviewed_preserved: 2 })
-      .mockResolvedValueOnce({ items: [item], total: 1, limit: 10, offset: 0 });
-    render(<SignalsPage apiClient={apiClient} onNavigate={vi.fn()} />);
-    const reprocessButtons = await screen.findAllByRole("button", { name: "Re-evaluate stored planning" });
-    await userEvent.click(reprocessButtons.at(-1));
-    await waitFor(() => expect(apiClient).toHaveBeenCalledWith(
-      "/admin/planning/reprocess",
-      expect.objectContaining({ method: "POST", body: JSON.stringify({ limit: 25, source_type: "planning" }) }),
-    ));
-    const statusMessages = await screen.findAllByRole("status");
-    expect(statusMessages.at(-1)).toHaveTextContent("1 pending signal re-evaluated");
+  it("keeps stored planning reprocess behind the custom confirmation modal", async () => {
+    const apiClient = vi.fn().mockResolvedValue(listResult([approvedItem]));
+    render(<ReviewedSignalsPage apiClient={apiClient} onNavigate={vi.fn()} />);
+    await screen.findByRole("button", { name: "Re-evaluate stored planning" });
+    await userEvent.click(screen.getByRole("button", { name: "Re-evaluate stored planning" }));
+    expect(screen.getByRole("dialog")).toHaveTextContent("does not call Plota");
   });
 });

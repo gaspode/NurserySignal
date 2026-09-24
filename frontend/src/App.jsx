@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useApi } from "./api.js";
 import { displayAttributeName, useAuth } from "./auth.js";
 
@@ -158,8 +158,33 @@ export function LoginPage({ onLogin, authError = "", configured = true, password
   );
 }
 
+function ConfirmationModal({ title, message, confirmLabel, danger = false, busy = false, onConfirm, onCancel }) {
+  const confirmRef = useRef(null);
+  useEffect(() => {
+    confirmRef.current?.focus();
+    const handleKeyDown = (event) => {
+      if (event.key === "Escape" && !busy) onCancel();
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [busy, onCancel]);
+  return (
+    <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && !busy && onCancel()}>
+      <div className="modal" role="dialog" aria-modal="true" aria-labelledby="confirmation-title" onMouseDown={(event) => event.stopPropagation()}>
+        <h2 id="confirmation-title">{title}</h2>
+        <p className="muted">{message}</p>
+        <div className="modal-actions">
+          <button className="button secondary" onClick={onCancel} disabled={busy}>Cancel</button>
+          <button ref={confirmRef} className={`button ${danger ? "reject" : "approve"}`} onClick={onConfirm} disabled={busy}>{busy ? "Saving…" : confirmLabel}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function Shell({ user, onLogout, onNavigate, currentPath, children }) {
   const email = user?.getUsername?.() || "Signed-in staff";
+  const route = currentPath.split("?")[0];
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -167,7 +192,8 @@ function Shell({ user, onLogout, onNavigate, currentPath, children }) {
         <p className="sidebar-label">Workspace</p>
         <nav aria-label="Primary navigation">
           <button className={currentPath === "/" ? "nav-link active" : "nav-link"} onClick={() => onNavigate("/")}>Overview</button>
-          <button className={currentPath.startsWith("/signals") ? "nav-link active" : "nav-link"} onClick={() => onNavigate("/signals")}>Signals</button>
+          <button className={route.startsWith("/inbox") ? "nav-link active" : "nav-link"} onClick={() => onNavigate("/inbox")}>Review Inbox</button>
+          <button className={route.startsWith("/history") ? "nav-link active" : "nav-link"} onClick={() => onNavigate("/history")}>Reviewed Signals</button>
         </nav>
         <div className="sidebar-bottom">
           <span className="connection-dot" /> Production workspace
@@ -213,18 +239,18 @@ export function Dashboard({ apiClient, onNavigate }) {
   useEffect(() => { load(); }, []);
   return (
     <section>
-      <div className="page-heading"><div><p className="eyebrow">Operations overview</p><h1>Signal review desk</h1><p className="muted">Triage incoming nursery signals and preserve the evidence trail.</p></div><button className="button primary" onClick={() => onNavigate("/signals")}>Review signals</button></div>
+      <div className="page-heading"><div><p className="eyebrow">Operations overview</p><h1>Signal review desk</h1><p className="muted">Triage incoming nursery signals and preserve the evidence trail.</p></div><button className="button primary" onClick={() => onNavigate("/inbox")}>Review inbox</button></div>
       {loading && <LoadingState label="Loading overview" />}
       {error && <ErrorState message={error} onRetry={load} />}
       {data && <>
         <div className="metric-grid">
-          <Metric label="Pending review" value={data.pending} tone="amber" onClick={() => onNavigate("/signals?review_status=PENDING")} />
-          <Metric label="Approved" value={data.approved} tone="green" />
-          <Metric label="Rejected" value={data.rejected} tone="red" />
-          <Metric label="Likely false positives" value={data.falsePositives} tone="slate" onClick={() => onNavigate("/signals?review_status=REJECTED")} />
+          <Metric label="Pending review" value={data.pending} tone="amber" onClick={() => onNavigate("/inbox")} />
+          <Metric label="Approved" value={data.approved} tone="green" onClick={() => onNavigate("/history?review_status=APPROVED")} />
+          <Metric label="Rejected" value={data.rejected} tone="red" onClick={() => onNavigate("/history?review_status=REJECTED")} />
+          <Metric label="Likely false positives" value={data.falsePositives} tone="slate" onClick={() => onNavigate("/history?review_status=REJECTED")} />
         </div>
         <div className="dashboard-grid">
-          <section className="panel"><div className="panel-heading"><h2>Recent signals</h2><button className="text-button" onClick={() => onNavigate("/signals")}>View all</button></div><p className="large-number">{data.recent}</p><p className="muted">signals available in the latest review window</p></section>
+          <section className="panel"><div className="panel-heading"><h2>Recent signals</h2><button className="text-button" onClick={() => onNavigate("/history")}>View history</button></div><p className="large-number">{data.recent}</p><p className="muted">signals available in the latest review window</p></section>
           <section className="panel"><div className="panel-heading"><h2>By source type</h2></div>{Object.keys(data.sourceCounts).length === 0 ? <p className="muted">No signals yet.</p> : Object.entries(data.sourceCounts).map(([source, count]) => <div className="source-row" key={source}><span>{titleCase(source)}</span><strong>{count}</strong></div>)}</section>
         </div>
       </>}
@@ -237,17 +263,53 @@ function Metric({ label, value, tone, onClick }) {
   return onClick ? <button className="metric-card clickable" onClick={onClick}>{content}</button> : <div className="metric-card">{content}</div>;
 }
 
-export function SignalsPage({ apiClient, onNavigate, initialQuery = "" }) {
+function initialFilters(initialQuery, mode) {
+  const params = new URLSearchParams(initialQuery);
+  return {
+    review_status: mode === "history" ? params.get("review_status") || "REVIEWED" : "PENDING",
+    source_type: params.get("source_type") || "",
+    discovered_from: params.get("discovered_from") || "",
+    discovered_to: params.get("discovered_to") || "",
+    q: params.get("q") || "",
+  };
+}
+
+function ReprocessTool({ apiClient, onComplete }) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  async function reprocess() {
+    setBusy(true);
+    setError("");
+    try {
+      const summary = await apiClient("/admin/planning/reprocess", {
+        method: "POST",
+        body: JSON.stringify({ limit: 25, source_type: "planning" }),
+      });
+      setOpen(false);
+      onComplete(`${summary.pending_updated} pending signal${summary.pending_updated === 1 ? "" : "s"} re-evaluated; ${summary.reviewed_preserved} reviewed record${summary.reviewed_preserved === 1 ? "" : "s"} preserved.`);
+    } catch (reprocessError) {
+      setError(reprocessError.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+  return <>
+    <button className="button secondary" onClick={() => setOpen(true)}>Re-evaluate stored planning</button>
+    {error && <span className="inline-error" role="alert">{error}</span>}
+    {open && <ConfirmationModal title="Re-evaluate stored planning?" message="Up to 25 stored planning signals will be checked with the current rules. This does not call Plota or create new evidence or queue messages." confirmLabel="Re-evaluate" busy={busy} onCancel={() => setOpen(false)} onConfirm={reprocess} />}
+  </>;
+}
+
+function SignalListPage({ apiClient, onNavigate, initialQuery = "", mode }) {
   const [filters, setFilters] = useState(() => {
-    const params = new URLSearchParams(initialQuery);
-    return { review_status: params.get("review_status") || "", source_type: "", discovered_from: "", discovered_to: "" };
+    return initialFilters(initialQuery, mode);
   });
   const [page, setPage] = useState(0);
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [reprocessMessage, setReprocessMessage] = useState("");
-  const [reprocessError, setReprocessError] = useState("");
+  const [notice, setNotice] = useState(() => new URLSearchParams(initialQuery).get("notice") || "");
   const query = useMemo(() => {
     const params = new URLSearchParams({ limit: PAGE_SIZE, offset: page * PAGE_SIZE });
     Object.entries(filters).forEach(([key, value]) => value && params.set(key, value));
@@ -260,62 +322,78 @@ export function SignalsPage({ apiClient, onNavigate, initialQuery = "" }) {
   };
   useEffect(() => { load(); }, [query]);
   function updateFilter(name, value) { setPage(0); setFilters((current) => ({ ...current, [name]: value })); }
-  async function reprocessPlanning() {
-    if (!window.confirm("Re-evaluate up to 25 stored planning signals using the current rules? This does not call Plota or create new evidence/queue messages.")) return;
-    setReprocessMessage("");
-    setReprocessError("");
-    try {
-      const summary = await apiClient("/admin/planning/reprocess", {
-        method: "POST",
-        body: JSON.stringify({ limit: 25, source_type: "planning" }),
-      });
-      setReprocessMessage(`${summary.pending_updated} pending signal${summary.pending_updated === 1 ? "" : "s"} re-evaluated; ${summary.reviewed_preserved} reviewed record${summary.reviewed_preserved === 1 ? "" : "s"} preserved.`);
-      await load();
-    } catch (reprocessLoadError) {
-      setReprocessError(reprocessLoadError.message);
-    }
-  }
   const totalPages = result ? Math.max(1, Math.ceil(result.total / PAGE_SIZE)) : 1;
+  const inbox = mode === "inbox";
   return (
     <section>
-      <div className="page-heading"><div><p className="eyebrow">Review queue</p><h1>Signals</h1><p className="muted">Raw signals and their evidence-backed enrichment candidates.</p></div><div className="page-actions"><button className="button secondary" onClick={reprocessPlanning}>Re-evaluate stored planning</button><span className="result-count">{result?.total ?? "—"} total</span></div></div>
-      {reprocessMessage && <div className="notice" role="status">{reprocessMessage}</div>}
-      {reprocessError && <div className="notice error-state" role="alert">{reprocessError}</div>}
+      <div className="page-heading"><div><p className="eyebrow">{inbox ? "Active queue" : "Decision history"}</p><h1>{inbox ? "Review Inbox" : "Reviewed Signals"}</h1><p className="muted">{inbox ? "Work through pending signals one at a time." : "Search and correct previous review decisions without changing evidence."}</p></div><div className="page-actions">{inbox ? <button className="button secondary" onClick={() => onNavigate("/history")}>View reviewed signals</button> : <ReprocessTool apiClient={apiClient} onComplete={setNotice} />}<span className="result-count">{result?.total ?? "—"} total</span></div></div>
+      {notice && <div className="notice" role="status">{notice}</div>}
       <div className="filter-bar" aria-label="Signal filters">
-        <label>Status<select aria-label="Review status" value={filters.review_status} onChange={(event) => updateFilter("review_status", event.target.value)}><option value="">All statuses</option><option value="PENDING">Pending</option><option value="APPROVED">Approved</option><option value="REJECTED">Rejected</option></select></label>
+        {!inbox && <label>Status<select aria-label="Review status" value={filters.review_status} onChange={(event) => updateFilter("review_status", event.target.value)}><option value="REVIEWED">All reviewed</option><option value="APPROVED">Approved</option><option value="REJECTED">Rejected</option></select></label>}
+        {!inbox && <label>Search<input aria-label="Search reviewed signals" type="search" placeholder="Proposal, reference, council…" value={filters.q} onChange={(event) => updateFilter("q", event.target.value)} /></label>}
         <label>Source<select aria-label="Source type" value={filters.source_type} onChange={(event) => updateFilter("source_type", event.target.value)}><option value="">All sources</option><option value="planning">Planning</option><option value="recruitment">Recruitment</option><option value="operator_announcement">Operator announcement</option><option value="local_news">Local news</option></select></label>
         <label>From<input aria-label="Discovered from" type="date" value={filters.discovered_from} onChange={(event) => updateFilter("discovered_from", event.target.value)} /></label>
         <label>To<input aria-label="Discovered to" type="date" value={filters.discovered_to} onChange={(event) => updateFilter("discovered_to", event.target.value)} /></label>
-        <button className="button secondary filter-reset" onClick={() => { setPage(0); setFilters({ review_status: "", source_type: "", discovered_from: "", discovered_to: "" }); }}>Reset</button>
+        <button className="button secondary filter-reset" onClick={() => { setPage(0); setFilters(initialFilters("", mode)); }}>Reset</button>
       </div>
       {loading && <LoadingState label="Loading signals" />}
       {error && <ErrorState message={error} onRetry={load} />}
-      {!loading && !error && result?.items.length === 0 && <div className="state-card"><strong>No signals match these filters.</strong><p className="muted">Try resetting the filters or ingest a fixture signal.</p></div>}
+      {!loading && !error && result?.items.length === 0 && <div className="state-card"><strong>{inbox ? "Inbox clear" : "No reviewed signals match these filters."}</strong><p className="muted">{inbox ? "There are no pending signals waiting for review." : "Try changing the search or filters."}</p></div>}
       {!loading && !error && result?.items.length > 0 && <>
-        <div className="table-wrap"><table><thead><tr><th>Discovered</th><th>Signal</th><th>Source</th><th>Location / operator</th><th>Candidate</th><th>Confidence</th><th>Review</th></tr></thead><tbody>{result.items.map((item) => <SignalRow key={item.id} item={item} onClick={() => onNavigate(`/signals/${item.id}`)} />)}</tbody></table></div>
+        <div className="table-wrap"><table><thead><tr><th>Discovered</th><th>Signal</th><th>Source</th><th>Location / operator</th><th>Candidate</th><th>Confidence</th><th>Review</th></tr></thead><tbody>{result.items.map((item) => <SignalRow key={item.id} item={item} onClick={() => onNavigate(`/${inbox ? "inbox" : "history"}/${item.id}`)} />)}</tbody></table></div>
         <div className="pagination"><span>Page {page + 1} of {totalPages}</span><div><button className="button secondary" disabled={page === 0} onClick={() => setPage((current) => current - 1)}>Previous</button><button className="button secondary" disabled={page + 1 >= totalPages} onClick={() => setPage((current) => current + 1)}>Next</button></div></div>
       </>}
     </section>
   );
 }
 
+export function ReviewInboxPage(props) { return <SignalListPage {...props} mode="inbox" />; }
+export function ReviewedSignalsPage(props) { return <SignalListPage {...props} mode="history" />; }
+export function SignalsPage(props) { return <ReviewInboxPage {...props} />; }
+
 function SignalRow({ item, onClick }) {
+  const council = item.metadata?.council;
   return <tr className={isFalsePositive(item) ? "false-positive-row" : "clickable-row"} onClick={onClick} tabIndex="0" onKeyDown={(event) => event.key === "Enter" && onClick()}>
-    <td className="nowrap">{formatDate(item.discovered_at)}</td><td><strong>{item.title}</strong><span className="cell-subtitle">{item.external_id}</span></td><td><Badge>{titleCase(item.source_type)}</Badge></td><td>{item.organisation_hint || "—"}<span className="cell-subtitle">{item.location_hint || "—"}</span></td><td><strong>{titleCase(item.event_type)}</strong><span className="cell-subtitle">{titleCase(item.lifecycle_stage)}</span>{isFalsePositive(item) && <span className="false-label">Likely false positive</span>}</td><td>{item.confidence == null ? "—" : `${Math.round(item.confidence * 100)}%`}</td><td><Badge tone={reviewTone(item.review_status)}>{item.review_status || "PROCESSING"}</Badge></td>
+    <td className="nowrap">{formatDate(item.discovered_at)}</td><td><strong>{item.title}</strong><span className="cell-subtitle">{item.external_id}</span></td><td><Badge>{titleCase(item.source_type)}</Badge></td><td>{council || item.organisation_hint || "—"}<span className="cell-subtitle">{item.location_hint || "—"}</span></td><td><strong>{titleCase(item.event_type)}</strong><span className="cell-subtitle">{titleCase(item.lifecycle_stage)}</span>{isFalsePositive(item) && <span className="false-label">Likely false positive</span>}</td><td>{item.confidence == null ? "—" : `${Math.round(item.confidence * 100)}%`}</td><td><Badge tone={reviewTone(item.review_status)}>{item.review_status || "PROCESSING"}</Badge></td>
   </tr>;
 }
 
-export function SignalDetail({ signalId, apiClient, onBack }) {
+export function SignalDetail({ signalId, apiClient, onBack, queueMode = false, initialNotice = "", onReviewed }) {
   const [signal, setSignal] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
+  const [notice, setNotice] = useState(initialNotice);
+  const [modalAction, setModalAction] = useState(null);
+  const [busy, setBusy] = useState(false);
   const load = async () => { setLoading(true); setError(""); try { setSignal(await apiClient(`/admin/signals/${signalId}`)); } catch (loadError) { setError(loadError.message); } finally { setLoading(false); } };
   useEffect(() => { load(); }, [signalId]);
-  async function review(action) {
-    if (!window.confirm(`Are you sure you want to ${action} this signal?`)) return;
-    setNotice("");
-    try { await apiClient(`/admin/signals/${signalId}/${action}`, { method: "POST" }); setNotice(`Signal ${action}d successfully.`); await load(); } catch (reviewError) { setError(reviewError.message); }
+  async function confirmReview() {
+    const action = modalAction;
+    if (!action) return;
+    setBusy(true);
+    setError("");
+    try {
+      await apiClient(`/admin/signals/${signalId}/${action}`, { method: "POST" });
+      const message = `Signal ${action === "approve" ? "approved" : "rejected"} successfully.`;
+      setModalAction(null);
+      if (queueMode) {
+        let nextId = null;
+        try {
+          const pending = await apiClient("/admin/signals?review_status=PENDING&limit=1&offset=0");
+          nextId = pending.items?.[0]?.id || null;
+        } catch (nextError) {
+          setError("The decision was saved, but the next pending signal could not be loaded.");
+        }
+        onReviewed?.({ message, nextId });
+      } else {
+        setNotice(message);
+        await load();
+      }
+    } catch (reviewError) {
+      setError(reviewError.message);
+    } finally {
+      setBusy(false);
+    }
   }
   async function openEvidence() {
     const tab = window.open("about:blank", "_blank");
@@ -327,17 +405,28 @@ export function SignalDetail({ signalId, apiClient, onBack }) {
   const falsePositive = isFalsePositive(enrichment);
   const planning = signal.source_type === "planning" ? signal.metadata || {} : null;
   const latestDocument = signal.documents?.[signal.documents.length - 1];
+  const reviewStatus = enrichment?.review_status;
+  const correctionAction = reviewStatus === "APPROVED" ? "reject" : "approve";
+  const modalTitle = modalAction === "approve" ? "Approve this signal?" : "Reject this signal?";
+  const modalMessage = !queueMode && ["APPROVED", "REJECTED"].includes(reviewStatus)
+    ? `Current decision: ${reviewStatus}. Change it to ${correctionAction === "approve" ? "APPROVED" : "REJECTED"}? Preserved evidence remains unchanged.`
+    : modalAction === "approve"
+      ? "This will mark the candidate approved for the current review workflow."
+      : "This will mark the candidate rejected. The preserved evidence and review history remain available.";
   return <section>
-    <button className="back-link" onClick={onBack}>← Back to signals</button>
-    <div className="page-heading detail-heading"><div><p className="eyebrow">Signal detail</p><h1>{signal.title}</h1><p className="muted">{signal.source_type} · {signal.external_id}</p></div><Badge tone={reviewTone(enrichment?.review_status)}>{enrichment?.review_status || "PROCESSING"}</Badge></div>
+    <button className="back-link" onClick={onBack}>← Back to {queueMode ? "Review Inbox" : "Reviewed Signals"}</button>
+    <div className="page-heading detail-heading"><div><p className="eyebrow">{queueMode ? "Inbox review" : "Reviewed signal"}</p><h1>{signal.title}</h1><p className="muted">{signal.source_type} · {signal.external_id}</p></div><Badge tone={reviewTone(enrichment?.review_status)}>{enrichment?.review_status || "PROCESSING"}</Badge></div>
     {notice && <div className="notice" role="status">{notice}</div>}{error && <div className="notice error-state" role="alert">{error}</div>}
+    {queueMode && reviewStatus === "PENDING" && <div className="review-action-bar"><div><strong>Ready for decision</strong><span className="muted">Approve or reject this candidate.</span></div><div className="review-actions"><button className="button approve" onClick={() => setModalAction("approve")}>Approve</button><button className="button reject" onClick={() => setModalAction("reject")}>Reject</button></div></div>}
+    {!queueMode && ["APPROVED", "REJECTED"].includes(reviewStatus) && <div className="review-action-bar"><div><strong>Decision recorded</strong><span className="muted">This reviewed decision can be deliberately corrected.</span></div><button className={`button ${correctionAction === "reject" ? "reject" : "approve"}`} onClick={() => setModalAction(correctionAction)}>Change to {correctionAction === "approve" ? "Approved" : "Rejected"}</button></div>}
     <div className="detail-grid">
       <DetailPanel title="Raw signal"><Field label="Source type" value={titleCase(signal.source_type)} /><Field label="Source URL" value={<a href={signal.source_url} target="_blank" rel="noreferrer">{signal.source_url}</a>} /><Field label="External ID" value={signal.external_id} /><Field label="Discovered" value={formatDate(signal.discovered_at, true)} /><Field label="Title" value={signal.title} /><Field label="Raw text" value={<p className="raw-text">{signal.raw_text}</p>} /><Field label="Organisation hint" value={signal.organisation_hint} /><Field label="Location hint" value={signal.location_hint} /><Field label="Metadata" value={<pre>{JSON.stringify(signal.metadata || {}, null, 2)}</pre>} /></DetailPanel>
       {planning && <DetailPanel title="Planning application"><Field label="Provider reference" value={planning.provider_application_id} /><Field label="Council" value={planning.council} /><Field label="Application date" value={planning.application_date} /><Field label="Planning status" value={planning.planning_status} /><Field label="Decision" value={planning.decision} /><Field label="Postcode" value={planning.postcode} /><Field label="Coordinates" value={planning.latitude == null ? null : `${planning.latitude}, ${planning.longitude}`} /><Field label="Tracked revisions" value={signal.planning_revisions?.length || 0} /></DetailPanel>}
       <DetailPanel title="Enrichment candidate">{enrichment ? <><Field label="Event type" value={titleCase(enrichment.event_type)} /><Field label="Nursery name" value={enrichment.nursery_name} /><Field label="Operator" value={enrichment.operator_name} /><Field label="Address" value={enrichment.address} /><Field label="Expected opening" value={enrichment.expected_opening_date} /><Field label="Capacity" value={enrichment.capacity} /><Field label="Lifecycle stage" value={<Badge>{titleCase(enrichment.lifecycle_stage)}</Badge>} /><Field label="Confidence" value={enrichment.confidence == null ? "—" : `${Math.round(enrichment.confidence * 100)}%`} />{falsePositive && <div className="false-positive-callout">Likely false positive · {enrichment.extracted_facts?.classification}</div>}<Field label="Extracted facts" value={<pre>{JSON.stringify(enrichment.extracted_facts || {}, null, 2)}</pre>} /><Field label="Evidence used" value={<pre>{JSON.stringify(enrichment.evidence || {}, null, 2)}</pre>} /></> : <p className="muted">Enrichment is still processing.</p>}</DetailPanel>
       <DetailPanel title="Evidence & provenance"><Field label="First seen" value={formatDate(signal.created_at, true)} /><Field label="Latest update" value={formatDate(signal.planning_revisions?.[0]?.observed_at || enrichment?.updated_at, true)} /><Field label="Evidence key" value={<code>{latestDocument?.s3_key || "—"}</code>} /><Field label="Evidence checksum" value={<code>{latestDocument?.sha256 || "—"}</code>} /><button className="button secondary" onClick={openEvidence} disabled={!signal.documents?.length}>View preserved JSON</button><p className="muted small-text">Access uses a short-lived authenticated download URL. The evidence bucket remains private.</p></DetailPanel>
-      <DetailPanel title="Review"><Field label="Current state" value={<Badge tone={reviewTone(enrichment?.review_status)}>{enrichment?.review_status || "PROCESSING"}</Badge>} /><Field label="Reviewer" value={enrichment?.reviewed_by} /><Field label="Reviewed at" value={formatDate(enrichment?.reviewed_at, true)} />{enrichment?.review_status === "PENDING" && <div className="review-actions"><button className="button approve" onClick={() => review("approve")}>Approve</button><button className="button reject" onClick={() => review("reject")}>Reject</button></div>}</DetailPanel>
+      <DetailPanel title="Review"><Field label="Current state" value={<Badge tone={reviewTone(enrichment?.review_status)}>{enrichment?.review_status || "PROCESSING"}</Badge>} /><Field label="Reviewer" value={enrichment?.reviewed_by} /><Field label="Reviewed at" value={formatDate(enrichment?.reviewed_at, true)} /></DetailPanel>
     </div>
+    {modalAction && <ConfirmationModal title={modalTitle} message={modalMessage} confirmLabel={modalAction === "approve" ? "Approve" : "Reject"} danger={modalAction === "reject"} busy={busy} onCancel={() => setModalAction(null)} onConfirm={confirmReview} />}
   </section>;
 }
 
@@ -350,9 +439,12 @@ export default function App() {
   const apiClient = useMemo(() => useApi(auth.getToken, auth.logout), [auth.getToken, auth.logout]);
   if (auth.loading) return <div className="app-loading"><span className="spinner" /> Checking session…</div>;
   if (!auth.user) return <LoginPage onLogin={auth.login} authError={auth.authError} configured={auth.configured} passwordChallenge={auth.passwordChallenge} onCompleteNewPassword={auth.completeNewPassword} onCancelPasswordChallenge={auth.cancelPasswordChallenge} />;
-  const detailMatch = path.match(/^\/signals\/([^/?#]+)/);
+  const route = path.split("?")[0];
   const listQuery = path.includes("?") ? path.split("?")[1] : "";
+  const detailMatch = route.match(/^\/(inbox|history)\/([^/?#]+)/);
+  const detailMode = detailMatch?.[1] === "inbox" ? "inbox" : "history";
+  const detailNotice = new URLSearchParams(listQuery).get("notice") || "";
   return <Shell user={auth.user} onLogout={auth.logout} onNavigate={navigate} currentPath={path}>
-    {detailMatch ? <SignalDetail signalId={detailMatch[1]} apiClient={apiClient} onBack={() => navigate("/signals")} /> : path.startsWith("/signals") ? <SignalsPage apiClient={apiClient} onNavigate={navigate} initialQuery={listQuery} /> : <Dashboard apiClient={apiClient} onNavigate={navigate} />}
+    {detailMatch ? <SignalDetail signalId={detailMatch[2]} apiClient={apiClient} queueMode={detailMode === "inbox"} initialNotice={detailNotice} onBack={() => navigate(detailMode === "inbox" ? "/inbox" : "/history")} onReviewed={({ message, nextId }) => navigate(nextId ? `/inbox/${nextId}?notice=${encodeURIComponent(message)}` : `/inbox?notice=${encodeURIComponent(message)}`)} /> : route === "/inbox" ? <ReviewInboxPage apiClient={apiClient} onNavigate={navigate} initialQuery={listQuery} /> : route === "/history" ? <ReviewedSignalsPage apiClient={apiClient} onNavigate={navigate} initialQuery={listQuery} /> : <Dashboard apiClient={apiClient} onNavigate={navigate} />}
   </Shell>;
 }

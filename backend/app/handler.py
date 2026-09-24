@@ -211,6 +211,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                         source_type=_query(event, "source_type"),
                         discovered_from=_query(event, "discovered_from"),
                         discovered_to=_query(event, "discovered_to"),
+                        search=_query(event, "q"),
                     ),
                 )
             if action == "detail" and method == "GET" and signal_id:

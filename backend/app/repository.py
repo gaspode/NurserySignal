@@ -265,12 +265,16 @@ def list_signals(
     source_type: str | None = None,
     discovered_from: str | None = None,
     discovered_to: str | None = None,
+    search: str | None = None,
 ) -> dict[str, Any]:
     clauses = ["TRUE"]
     params: list[Any] = []
     if review_status:
-        clauses.append("se.review_status = %s")
-        params.append(review_status)
+        if review_status == "REVIEWED":
+            clauses.append("se.review_status IN ('APPROVED', 'REJECTED')")
+        else:
+            clauses.append("se.review_status = %s")
+            params.append(review_status)
     if source_type:
         clauses.append("rs.source_type = %s")
         params.append(source_type)
@@ -280,6 +284,20 @@ def list_signals(
     if discovered_to:
         clauses.append("rs.discovered_at < (%s::date + INTERVAL '1 day')")
         params.append(discovered_to)
+    if search:
+        search_pattern = f"%{search[:200]}%"
+        clauses.append(
+            "("
+            "rs.title ILIKE %s OR rs.raw_text ILIKE %s OR rs.external_id ILIKE %s "
+            "OR rs.location_hint ILIKE %s OR rs.organisation_hint ILIKE %s "
+            "OR COALESCE(rs.metadata->>'council', '') ILIKE %s "
+            "OR COALESCE(rs.metadata->>'postcode', '') ILIKE %s "
+            "OR COALESCE(se.nursery_name, '') ILIKE %s "
+            "OR COALESCE(se.operator_name, '') ILIKE %s "
+            "OR COALESCE(se.address, '') ILIKE %s"
+            ")"
+        )
+        params.extend([search_pattern] * 10)
     where = " AND ".join(clauses)
     with connection(settings) as conn:
         total = conn.execute(
@@ -294,7 +312,7 @@ def list_signals(
             f"""
             SELECT rs.id, rs.schema_version, rs.source_type, rs.source_url, rs.external_id,
                    rs.discovered_at, rs.title, rs.location_hint, rs.organisation_hint,
-                   rs.created_at, rs.enrichment_queued_at, se.review_status,
+                   rs.metadata, rs.created_at, rs.enrichment_queued_at, se.review_status,
                    se.event_type, se.nursery_name, se.operator_name, se.lifecycle_stage,
                    se.confidence, se.extracted_facts
             FROM raw_signals rs
@@ -315,6 +333,7 @@ def list_signals(
         "title",
         "location_hint",
         "organisation_hint",
+        "metadata",
         "created_at",
         "enrichment_queued_at",
         "review_status",
