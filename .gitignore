@@ -6,6 +6,9 @@
 build/
 dist/
 .venv/
+node_modules/
+frontend/node_modules/
+frontend/.vite/
 __pycache__/
 *.py[cod]
 .pytest_cache/

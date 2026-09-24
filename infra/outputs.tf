@@ -10,6 +10,10 @@ output "frontend_bucket" {
   value = aws_s3_bucket.frontend.bucket
 }
 
+output "frontend_distribution_id" {
+  value = aws_cloudfront_distribution.frontend.id
+}
+
 output "raw_evidence_bucket" {
   value = aws_s3_bucket.raw_evidence.bucket
 }

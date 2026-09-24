@@ -10,7 +10,7 @@ This repository contains the first deployable foundation:
 - SQL migrations and the initial relational model.
 - A normalized signal ingestion contract.
 - A fixture-driven authenticated signal ingestion and enrichment flow.
-- A minimal static frontend served through CloudFront.
+- A React/Vite internal admin frontend served through private S3 and CloudFront.
 - Local tests and GitHub Actions checks.
 
 The workflows in `.github/workflows/` run checks on pull requests and provide a
@@ -48,6 +48,35 @@ inspect and review candidates with:
 - `GET /admin/signals/{id}`
 - `POST /admin/signals/{id}/approve`
 - `POST /admin/signals/{id}/reject`
+
+The admin frontend uses `GET /admin/signals/{id}/evidence` to obtain a
+five-minute presigned URL for the private raw JSON evidence object. The
+evidence bucket is never made public.
+
+## Internal admin frontend
+
+The React/Vite app lives in `frontend/`. It uses the existing Cognito user pool
+with invited users only; self-registration is disabled. Tokens are kept in
+browser session storage, refreshed through the Cognito session, and attached
+only to API requests. Expired sessions return the operator to the sign-in
+screen.
+
+Frontend configuration is supplied at build time with:
+
+```bash
+VITE_API_URL=https://... \
+VITE_AWS_REGION=eu-west-1 \
+VITE_COGNITO_USER_POOL_ID=... \
+VITE_COGNITO_CLIENT_ID=... \
+npm --prefix frontend run build
+```
+
+The deployment workflow obtains these values from Terraform outputs, uploads
+hashed assets to the private frontend bucket, and invalidates the CloudFront
+entry point. Run `npm --prefix frontend test` for frontend tests.
+
+The initial invited admin account is managed with Cognito's admin API. Do not
+commit passwords or add self-registration to the frontend.
 
 Sample signals are in `fixtures/signals.json`. With a Cognito ID token, submit
 them using `COGNITO_ID_TOKEN=... SIGNALS_API_URL=... make ingest-fixtures`.

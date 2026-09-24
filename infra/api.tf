@@ -6,7 +6,10 @@ resource "aws_apigatewayv2_api" "http" {
   cors_configuration {
     allow_headers = ["content-type", "authorization"]
     allow_methods = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
-    allow_origins = ["*"]
+    allow_origins = [
+      "https://${aws_cloudfront_distribution.frontend.domain_name}",
+      "http://localhost:5173",
+    ]
   }
   tags = local.common_tags
 }

@@ -47,3 +47,15 @@ def evidence_reference(bucket: str, key: str, payload: bytes) -> dict[str, Any]:
         "key": key,
         "sha256": evidence_sha256(payload),
     }
+
+
+def presigned_evidence_url(bucket: str, key: str, expires_in: int = 300) -> str:
+    """Create a short-lived authenticated download URL for an evidence object."""
+    try:
+        return boto3.client("s3").generate_presigned_url(
+            "get_object",
+            Params={"Bucket": bucket, "Key": key},
+            ExpiresIn=expires_in,
+        )
+    except Exception as exc:
+        raise EvidencePersistenceError("evidence URL generation failed") from exc

@@ -13,7 +13,7 @@ from app.ingestion import NormalizedSignal
 from app.logging import configure_logging
 from app.repository import list_signals, review_signal, signal_detail
 from app.service import EnrichmentQueueError, SignalConflictError, ingest_signal, parse_json_payload
-from app.storage import EvidencePersistenceError
+from app.storage import EvidencePersistenceError, presigned_evidence_url
 
 logger = configure_logging()
 
@@ -80,7 +80,7 @@ def _admin_path(path: str) -> tuple[str, str | None]:
         parts = remainder.split("/")
         if len(parts) == 1:
             return "detail", parts[0]
-        if len(parts) == 2 and parts[1] in {"approve", "reject"}:
+        if len(parts) == 2 and parts[1] in {"approve", "reject", "evidence"}:
             return parts[1], parts[0]
     return "unknown", None
 
@@ -161,6 +161,23 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             if action == "detail" and method == "GET" and signal_id:
                 detail = signal_detail(settings, signal_id)
                 return _response(200, detail) if detail else _response(404, {"error": "not_found"})
+            if action == "evidence" and method == "GET" and signal_id:
+                detail = signal_detail(settings, signal_id)
+                if detail is None:
+                    return _response(404, {"error": "not_found"})
+                documents = detail.get("documents") or []
+                if not documents:
+                    return _response(404, {"error": "evidence_not_found"})
+                document = documents[0]
+                return _response(
+                    200,
+                    {
+                        "url": presigned_evidence_url(
+                            document["s3_bucket"], document["s3_key"]
+                        ),
+                        "expires_in": 300,
+                    },
+                )
             if action in {"approve", "reject"} and method == "POST" and signal_id:
                 status = "APPROVED" if action == "approve" else "REJECTED"
                 reviewer = str(claims.get("sub") or claims.get("username") or "unknown")

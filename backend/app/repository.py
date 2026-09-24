@@ -213,7 +213,8 @@ def list_signals(
             SELECT rs.id, rs.schema_version, rs.source_type, rs.source_url, rs.external_id,
                    rs.discovered_at, rs.title, rs.location_hint, rs.organisation_hint,
                    rs.created_at, rs.enrichment_queued_at, se.review_status,
-                   se.event_type, se.nursery_name, se.operator_name, se.confidence
+                   se.event_type, se.nursery_name, se.operator_name, se.lifecycle_stage,
+                   se.confidence, se.extracted_facts
             FROM raw_signals rs
             LEFT JOIN signal_enrichments se ON se.raw_signal_id = rs.id
             WHERE {where}
@@ -238,7 +239,9 @@ def list_signals(
         "event_type",
         "nursery_name",
         "operator_name",
+        "lifecycle_stage",
         "confidence",
+        "extracted_facts",
     )
     return {
         "items": [dict(zip(fields, row)) for row in rows],

@@ -1,7 +1,13 @@
-.PHONY: build-lambda test lint check fmt ingest-fixtures
+.PHONY: build-lambda frontend-test frontend-build test lint check fmt ingest-fixtures
 
 build-lambda:
 	./scripts/build-lambda.sh
+
+frontend-test:
+	npm --prefix frontend test
+
+frontend-build:
+	npm --prefix frontend run build
 
 test:
 	python3 -m pytest -q

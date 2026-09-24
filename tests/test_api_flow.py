@@ -125,6 +125,26 @@ def test_admin_detail_and_review_actions(monkeypatch) -> None:
     assert rejected["statusCode"] == 404
 
 
+def test_admin_evidence_url_is_authenticated_and_short_lived(monkeypatch) -> None:
+    signal_id = str(uuid4())
+    monkeypatch.setattr(
+        "app.handler.signal_detail",
+        lambda settings, value: {
+            "documents": [{"s3_bucket": "private", "s3_key": "signals/raw.json"}]
+        },
+    )
+    monkeypatch.setattr(
+        "app.handler.presigned_evidence_url",
+        lambda bucket, key: f"https://signed.test/{bucket}/{key}",
+    )
+    response = handler(event(f"/admin/signals/{signal_id}/evidence"), None)
+    assert response["statusCode"] == 200
+    assert json.loads(response["body"]) == {
+        "url": "https://signed.test/private/signals/raw.json",
+        "expires_in": 300,
+    }
+
+
 def test_admin_detail_serializes_database_numeric_values(monkeypatch) -> None:
     signal_id = str(uuid4())
     monkeypatch.setattr(

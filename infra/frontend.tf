@@ -58,6 +58,20 @@ resource "aws_cloudfront_distribution" "frontend" {
     }
   }
 
+  custom_error_response {
+    error_code            = 403
+    response_code         = 200
+    response_page_path    = "/index.html"
+    error_caching_min_ttl = 0
+  }
+
+  custom_error_response {
+    error_code            = 404
+    response_code         = 200
+    response_page_path    = "/index.html"
+    error_caching_min_ttl = 0
+  }
+
   restrictions {
     geo_restriction { restriction_type = "none" }
   }
@@ -89,10 +103,38 @@ resource "aws_s3_bucket_policy" "frontend" {
 }
 
 resource "aws_s3_object" "frontend_index" {
-  bucket       = aws_s3_bucket.frontend.id
-  key          = "index.html"
-  source       = "${path.module}/../frontend/index.html"
-  content_type = "text/html"
-  etag         = filemd5("${path.module}/../frontend/index.html")
+  bucket        = aws_s3_bucket.frontend.id
+  key           = "index.html"
+  source        = "${path.module}/../build/frontend/index.html"
+  content_type  = "text/html"
+  cache_control = "no-cache, no-store, must-revalidate"
+  etag          = filemd5("${path.module}/../build/frontend/index.html")
 }
 
+locals {
+  frontend_files = fileset("${path.module}/../build/frontend", "**")
+  frontend_asset_files = toset([
+    for file in local.frontend_files : file if file != "index.html"
+  ])
+  frontend_content_types = {
+    ".css"   = "text/css"
+    ".html"  = "text/html"
+    ".js"    = "application/javascript"
+    ".json"  = "application/json"
+    ".svg"   = "image/svg+xml"
+    ".png"   = "image/png"
+    ".ico"   = "image/x-icon"
+    ".woff"  = "font/woff"
+    ".woff2" = "font/woff2"
+  }
+}
+
+resource "aws_s3_object" "frontend_assets" {
+  for_each      = local.frontend_asset_files
+  bucket        = aws_s3_bucket.frontend.id
+  key           = each.value
+  source        = "${path.module}/../build/frontend/${each.value}"
+  content_type  = lookup(local.frontend_content_types, lower(regex("\\.[^.]+$", each.value)), "application/octet-stream")
+  cache_control = "public, max-age=31536000, immutable"
+  etag          = filemd5("${path.module}/../build/frontend/${each.value}")
+}
