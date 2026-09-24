@@ -1,0 +1,45 @@
+name: Deploy
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: eu-west-1
+  TF_VAR_aws_region: eu-west-1
+  # OIDC credentials are exported by configure-aws-credentials; no local AWS profile exists on the runner.
+  TF_VAR_aws_profile: ""
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build Lambda package
+        run: make build-lambda
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: eu-west-1
+          role-to-assume: ${{ vars.NURSERYSIGNAL_AWS_ROLE_ARN }}
+
+      - name: Verify AWS identity
+        run: aws sts get-caller-identity --region eu-west-1
+
+      - name: Plan
+        run: |
+          terraform -chdir=infra init -input=false
+          terraform -chdir=infra fmt -check -recursive
+          terraform -chdir=infra validate
+          terraform -chdir=infra plan -input=false -out=tfplan
+
+      - name: Apply reviewed workflow plan
+        run: terraform -chdir=infra apply -input=false tfplan

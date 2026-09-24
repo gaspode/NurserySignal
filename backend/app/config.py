@@ -1,0 +1,20 @@
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class Settings:
+    service_name: str = "nurserysignal-api"
+    environment: str = "local"
+    database_url: str | None = None
+
+    @classmethod
+    def from_env(cls) -> Settings:
+        return cls(
+            service_name=os.getenv("SERVICE_NAME", "nurserysignal-api"),
+            environment=os.getenv("APP_ENV", "local"),
+            database_url=os.getenv("DATABASE_URL") or None,
+        )
+
