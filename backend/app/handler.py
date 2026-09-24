@@ -91,6 +91,9 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     method = (event.get("requestContext", {}).get("http", {}).get("method") or "GET").upper()
     logger.info("request path=%s method=%s environment=%s", path, method, settings.environment)
 
+    if method == "OPTIONS":
+        return _response(204, {})
+
     if path == "/health" and method == "GET":
         db_configured = settings.database_url is not None or settings.db_secret_arn is not None
         db_ok = check_connection(settings) if db_configured else False
