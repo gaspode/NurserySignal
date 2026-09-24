@@ -48,12 +48,16 @@ EXCLUSION_PATTERNS = (
     r"\bsaplings?\b",
     r"\bforest\s+nurser(?:y|ies)\b",
     r"\bprimary\s+and\s+nurser(?:y|ies)\b",
+    r"\b(?:primary|secondary|infant|junior)\s+school\s+and\s+nurser(?:y|ies)\b",
     r"\b(?:primary|secondary|infant|junior)\s+school\s+nurser(?:y|ies)\b",
     r"\bnursery\s+(?:bedroom|room)\b",
     r"\bbedroom\s+(?:nursery|for\s+a\s+nursery)\b",
     r"\bschool\s+nursery\s+class(?:es)?\b",
     r"\bnursery\s+class(?:es)?\b",
     r"\bnursery\s+school\b",
+    r"\bnon[- ]material\s+amendment\b",
+    r"\bdetails\s+pursuant\s+to\s+condition\b",
+    r"\bdischarge\s+of\s+(?:a\s+)?condition(?:s)?\b",
 )
 
 

@@ -7,7 +7,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
-CLASSIFICATION_RULE_VERSION = "horticultural-guardrail-v1"
+CLASSIFICATION_RULE_VERSION = "planning-context-v2"
 
 # These terms describe meaningful childcare context.  A bare "nursery" is
 # intentionally not included: it is too ambiguous to override horticultural

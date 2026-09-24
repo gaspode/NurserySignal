@@ -71,6 +71,16 @@ def test_positive_and_exclusion_matching() -> None:
             "entry primary and nursery.",
             "The Basildon Centre, SS14 1DL",
         ),
+        (
+            "Details pursuant to condition 56 on permission for 1,400 dwellings including "
+            "a primary school and nursery.",
+            "Phase 7 Rochester Riverside, ME1 1NH",
+        ),
+        (
+            "Application for a Non-Material Amendment in relation to an approved nursery "
+            "elevation: minor alterations to doors and windows.",
+            "Land at Foxlow Farm, Harpur Hill Road",
+        ),
     ],
 )
 def test_live_sample_false_positive_contexts_are_excluded(
@@ -78,6 +88,16 @@ def test_live_sample_false_positive_contexts_are_excluded(
 ) -> None:
     decision = candidate_decision(record(description, address=address))
     assert decision.matched is False
+
+
+def test_explicit_childcare_amendment_remains_detectable() -> None:
+    decision = candidate_decision(
+        record(
+            "Non-Material Amendment to approved Early Years Day Nursery elevations.",
+            address="12 High Street, Bristol BS1 1AA",
+        )
+    )
+    assert decision.matched is True
 
 
 @pytest.mark.parametrize(
