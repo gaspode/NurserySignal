@@ -6,10 +6,7 @@ resource "aws_apigatewayv2_api" "http" {
   cors_configuration {
     allow_headers = ["content-type", "authorization"]
     allow_methods = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
-    allow_origins = [
-      "https://${aws_cloudfront_distribution.frontend.domain_name}",
-      "http://localhost:5173",
-    ]
+    allow_origins = ["https://${aws_cloudfront_distribution.frontend.domain_name}"]
   }
   tags = local.common_tags
 }
@@ -66,6 +63,13 @@ resource "aws_apigatewayv2_route" "admin" {
   target             = "integrations/${aws_apigatewayv2_integration.backend.id}"
   authorization_type = "JWT"
   authorizer_id      = aws_apigatewayv2_authorizer.cognito.id
+}
+
+resource "aws_apigatewayv2_route" "cors_options" {
+  api_id             = aws_apigatewayv2_api.http.id
+  route_key          = "OPTIONS /{proxy+}"
+  target             = "integrations/${aws_apigatewayv2_integration.backend.id}"
+  authorization_type = "NONE"
 }
 
 resource "aws_apigatewayv2_stage" "default" {
