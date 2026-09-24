@@ -20,7 +20,7 @@ The MVP succeeds by being trustworthy and actionable, not by maximizing raw sign
 - Terraform and GitHub Actions/OIDC deployment path.
 - Deterministic shared classification rules and regression fixtures.
 
-## Phase 2 — Planning signal validation — IN PROGRESS
+## Phase 2 — Planning signal validation — COMPLETE
 
 Primary provider: Plota.
 
@@ -35,6 +35,8 @@ Completed:
 - School-context exclusions refined without suppressing explicit early-years proposals.
 - Persistence-level idempotency verified on repeated live collection.
 - Bounded administrator reprocessing of stored planning evidence implemented with audit records, review-state preservation and no new ingestion artefacts.
+- Production Cognito authorization verified: API Gateway supplies `cognito:groups` as a bracketed string and the exact-group check now handles it safely.
+- Historical reprocess run twice by an administrator: each run re-evaluated 9 pending signals and preserved 1 reviewed record, with no new evidence or queue artefacts.
 - Cognito admin-group claim normalization hardened for API Gateway string, comma-separated and JSON-array representations while retaining exact-group authorization.
 - Fresh bounded Plota validation completed: 14 records returned, 11 excluded, and 3 explicit childcare candidates matched; follow-up/context exclusions were added and deployed.
 - Existing invited operator added to `NurserySignalAdmins` and membership verified server-side.
@@ -42,13 +44,11 @@ Completed:
 - Daily EventBridge schedule remains deliberately disabled.
 
 Current gate:
-- Verify the deployed authorization fix with a refreshed invited-operator token carrying `NurserySignalAdmins`, then run the bounded reprocess against the existing live sample.
-- Review the reprocessed historical state and confirm reviewed decisions and audit history remain intact.
-- Keep the daily EventBridge schedule disabled until that administrator-only validation is complete.
+- Planning validation is complete; keep the daily EventBridge schedule disabled until an explicit enablement decision is made.
 
-## Phase 3 — Safe unattended planning collection — NOT YET ENABLED
+## Phase 3 — Safe unattended planning collection — READY FOR EXPLICIT ENABLEMENT
 
-Enable daily planning collection only after Phase 2 demonstrates adequate precision and operational safety.
+Phase 2 demonstrated adequate precision and operational safety. Enablement remains a deliberate production decision and has not been performed.
 
 Readiness gate:
 - representative live samples show strong precision
@@ -120,4 +120,4 @@ Do not build these before the underlying signal quality justifies them.
 
 ## Current next step
 
-Refresh the invited administrator session, run/review the bounded historical reprocess, and confirm the production audit/review results. Then decide whether the observed precision supports enabling the daily Plota schedule; do not enable it automatically.
+Make the separate explicit decision to enable the daily Plota schedule. If enabled, monitor the first unattended runs and sample accepted/rejected records for precision and provider failures.
