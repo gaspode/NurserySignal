@@ -130,7 +130,7 @@ describe("Cognito authentication", () => {
     await userEvent.type(screen.getByLabelText(/^New password$/), "short");
     await userEvent.type(screen.getByLabelText(/^Confirm new password$/), "short");
     await userEvent.click(screen.getByRole("button", { name: "Set password" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("at least 12 characters");
+    expect(await screen.findByRole("alert")).toHaveTextContent("at least 8 characters");
     expect(state.completionCallbacks).toBeNull();
   });
 

@@ -97,8 +97,8 @@ export function LoginPage({ onLogin, authError = "", configured = true, password
   async function submitNewPassword(event) {
     event.preventDefault();
     setError("");
-    if (newPassword.length < 12 || !/[a-z]/.test(newPassword) || !/[A-Z]/.test(newPassword) || !/[0-9]/.test(newPassword) || !/[^A-Za-z0-9]/.test(newPassword)) {
-      setError("Use at least 12 characters including uppercase, lowercase, a number and a symbol.");
+    if (newPassword.length < 8 || !/[a-z]/.test(newPassword) || !/[A-Z]/.test(newPassword) || !/[0-9]/.test(newPassword) || !/[^A-Za-z0-9]/.test(newPassword)) {
+      setError("Use at least 8 characters including uppercase, lowercase, a number and a symbol.");
       return;
     }
     if (newPassword !== confirmPassword) {
@@ -137,7 +137,7 @@ export function LoginPage({ onLogin, authError = "", configured = true, password
               <label key={attribute}>{displayAttributeName(attribute)}<input autoComplete="off" type={attribute === "email" ? "email" : "text"} value={attributeValues[attribute] || ""} onChange={(event) => setAttributeValues((current) => ({ ...current, [attribute]: event.target.value }))} required /></label>
             ))}
             <label>New password<input autoComplete="new-password" type="password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} required aria-describedby="password-requirements" /></label>
-            <p id="password-requirements" className="muted small-text">At least 12 characters, with uppercase, lowercase, a number and a symbol.</p>
+            <p id="password-requirements" className="muted small-text">At least 8 characters, with uppercase, lowercase, a number/symbol.</p>
             <label>Confirm new password<input autoComplete="new-password" type="password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} required /></label>
             {(error || authError) && <p className="form-error" role="alert">{error || authError}</p>}
             <button className="button primary full-width" disabled={busy}>{busy ? "Setting password…" : "Set password"}</button>
