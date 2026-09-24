@@ -9,6 +9,7 @@ This repository contains the first deployable foundation:
 - A small Python 3.12 Lambda backend in `backend/`.
 - SQL migrations and the initial relational model.
 - A normalized signal ingestion contract.
+- A fixture-driven authenticated signal ingestion and enrichment flow.
 - A minimal static frontend served through CloudFront.
 - Local tests and GitHub Actions checks.
 
@@ -23,14 +24,33 @@ The initial database is a single-AZ encrypted RDS PostgreSQL `db.t4g.micro` in
 the account's existing default VPC. It is private from the public internet and
 accessible only from the backend Lambda security group. This is intentionally
 less expensive than Aurora Serverless v2 at very low usage; Aurora's minimum
-capacity would be an always-on cost floor. Multi-AZ, read replicas, NAT and
-VPC interface endpoints are deferred until workload or connectivity needs
-justify them.
+capacity would be an always-on cost floor. Multi-AZ, read replicas and NAT are
+deferred until workload or connectivity needs justify them; the single Secrets
+Manager interface endpoint is already required by the VPC-attached Lambdas.
 
-The first backend Lambda is VPC-attached for database access. It does not yet
-call AWS APIs from inside the VPC, so the initial stack does not create paid NAT
-gateways or interface endpoints. Future collector/worker Lambdas should either
-use a deliberately added endpoint strategy or be kept outside the database VPC.
+The backend and enrichment worker Lambdas are VPC-attached for database access.
+The existing single-AZ Secrets Manager interface endpoint lets them retrieve
+runtime credentials without a NAT gateway. Future collector Lambdas should use
+an explicitly chosen endpoint strategy or remain outside the database VPC.
+
+## Ingestion vertical slice
+
+`POST /signals` accepts the versioned normalized signal contract. The API writes
+the original JSON body to the raw-evidence bucket, creates the `raw_signals`
+record, and sends a small reference message to the enrichment queue. Duplicate
+`source_type` plus `external_id` submissions return the original signal ID.
+
+The enrichment Lambda currently applies deterministic fixture classification and
+stores a `PENDING` candidate in `signal_enrichments`. Authenticated admins can
+inspect and review candidates with:
+
+- `GET /admin/signals`
+- `GET /admin/signals/{id}`
+- `POST /admin/signals/{id}/approve`
+- `POST /admin/signals/{id}/reject`
+
+Sample signals are in `fixtures/signals.json`. With a Cognito ID token, submit
+them using `COGNITO_ID_TOKEN=... SIGNALS_API_URL=... make ingest-fixtures`.
 
 ## Repository setup
 

@@ -28,4 +28,3 @@ def database_url_from_secret(secret_arn: str) -> str:
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise RuntimeError("database secret is missing required fields") from exc
-

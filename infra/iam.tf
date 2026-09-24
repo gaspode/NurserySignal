@@ -38,8 +38,50 @@ resource "aws_iam_role_policy" "lambda_application" {
       },
       {
         Effect   = "Allow"
-        Action   = ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes", "sqs:SendMessage"]
-        Resource = [aws_sqs_queue.ingestion.arn, aws_sqs_queue.enrichment.arn]
+        Action   = ["sqs:SendMessage"]
+        Resource = aws_sqs_queue.enrichment.arn
+      }
+    ]
+  })
+}
+
+data "aws_iam_policy_document" "enrichment_assume_role" {
+  statement {
+    effect = "Allow"
+    principals {
+      type        = "Service"
+      identifiers = ["lambda.amazonaws.com"]
+    }
+    actions = ["sts:AssumeRole"]
+  }
+}
+
+resource "aws_iam_role" "enrichment" {
+  name               = "${local.name_prefix}-enrichment"
+  assume_role_policy = data.aws_iam_policy_document.enrichment_assume_role.json
+  tags               = local.common_tags
+}
+
+resource "aws_iam_role_policy_attachment" "enrichment_vpc" {
+  role       = aws_iam_role.enrichment.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole"
+}
+
+resource "aws_iam_role_policy" "enrichment_application" {
+  name = "${local.name_prefix}-enrichment-application"
+  role = aws_iam_role.enrichment.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = ["secretsmanager:GetSecretValue"]
+        Resource = aws_secretsmanager_secret.database.arn
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes"]
+        Resource = aws_sqs_queue.enrichment.arn
       }
     ]
   })

@@ -30,6 +30,10 @@ output "enrichment_queue_url" {
   value = aws_sqs_queue.enrichment.url
 }
 
+output "enrichment_function_name" {
+  value = aws_lambda_function.enrichment.function_name
+}
+
 output "cognito_user_pool_id" {
   value = aws_cognito_user_pool.main.id
 }
@@ -41,4 +45,3 @@ output "cognito_app_client_id" {
 output "github_actions_role_arn" {
   value = var.github_repository == "" ? null : aws_iam_role.github_actions[0].arn
 }
-

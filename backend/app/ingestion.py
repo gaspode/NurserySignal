@@ -5,14 +5,18 @@ from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlparse
 
+CURRENT_SIGNAL_SCHEMA_VERSION = "1.0"
+SUPPORTED_SIGNAL_SCHEMA_VERSIONS = {CURRENT_SIGNAL_SCHEMA_VERSION}
+
 
 @dataclass(frozen=True)
 class NormalizedSignal:
     """Common collector output persisted before classification or enrichment."""
 
+    schema_version: str
     source_type: str
     source_url: str
-    external_id: str | None
+    external_id: str
     discovered_at: datetime
     title: str
     raw_text: str
@@ -22,10 +26,21 @@ class NormalizedSignal:
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> NormalizedSignal:
-        required = ("source_type", "source_url", "discovered_at", "title", "raw_text")
+        required = (
+            "source_type",
+            "source_url",
+            "external_id",
+            "discovered_at",
+            "title",
+            "raw_text",
+        )
         missing = [key for key in required if not payload.get(key)]
         if missing:
             raise ValueError(f"missing required signal fields: {', '.join(missing)}")
+
+        schema_version = str(payload.get("schema_version", CURRENT_SIGNAL_SCHEMA_VERSION))
+        if schema_version not in SUPPORTED_SIGNAL_SCHEMA_VERSIONS:
+            raise ValueError(f"unsupported schema_version: {schema_version}")
 
         parsed_url = urlparse(str(payload["source_url"]))
         if parsed_url.scheme not in {"http", "https"} or not parsed_url.netloc:
@@ -44,9 +59,10 @@ class NormalizedSignal:
             raise ValueError("metadata must be an object")
 
         return cls(
+            schema_version=schema_version,
             source_type=str(payload["source_type"]),
             source_url=str(payload["source_url"]),
-            external_id=str(payload["external_id"]) if payload.get("external_id") else None,
+            external_id=str(payload["external_id"]),
             discovered_at=discovered_at.astimezone(UTC),
             title=str(payload["title"]),
             raw_text=str(payload["raw_text"]),
@@ -56,4 +72,3 @@ class NormalizedSignal:
             ),
             metadata=metadata,
         )
-

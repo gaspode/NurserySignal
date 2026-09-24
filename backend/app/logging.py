@@ -28,4 +28,3 @@ def configure_logging() -> logging.Logger:
     logger.setLevel(logging.INFO)
     logger.propagate = False
     return logger
-

@@ -1,0 +1,50 @@
+[
+  {
+    "schema_version": "1.0",
+    "source_type": "planning",
+    "source_url": "https://planning.example.gov.uk/applications/NS-2026-001",
+    "external_id": "NS-2026-001",
+    "discovered_at": "2026-09-24T08:00:00Z",
+    "title": "Proposed new nursery at 12 High Street",
+    "raw_text": "A planning application proposes a 72-place day nursery at the former library site.",
+    "location_hint": "12 High Street, Bristol BS1 1AA",
+    "organisation_hint": "Little Acorns Bristol",
+    "metadata": {"capacity": 72, "expected_opening_date": "2027-01-15", "council": "Example Council"}
+  },
+  {
+    "schema_version": "1.0",
+    "source_type": "recruitment",
+    "source_url": "https://jobs.example.co.uk/roles/room-leader-884",
+    "external_id": "room-leader-884",
+    "discovered_at": "2026-09-24T08:05:00Z",
+    "title": "Room Leader - new nursery opening",
+    "raw_text": "Join our team ahead of the opening of a new nursery in Leeds. Recruitment is underway.",
+    "location_hint": "Leeds LS6",
+    "organisation_hint": "Bright Start Nurseries",
+    "metadata": {"role": "Room Leader"}
+  },
+  {
+    "schema_version": "1.0",
+    "source_type": "operator_announcement",
+    "source_url": "https://news.example.co.uk/bright-start-expansion",
+    "external_id": "bright-start-expansion-2026",
+    "discovered_at": "2026-09-24T08:10:00Z",
+    "title": "Little Oaks announces new Manchester nursery",
+    "raw_text": "The nursery chain announced its next site will open in Manchester early next year.",
+    "location_hint": "Manchester M1",
+    "organisation_hint": "Little Oaks Group",
+    "metadata": {"expected_opening_date": "2027-02-01"}
+  },
+  {
+    "schema_version": "1.0",
+    "source_type": "local_news",
+    "source_url": "https://news.example.co.uk/garden-nursery",
+    "external_id": "garden-nursery-2026",
+    "discovered_at": "2026-09-24T08:15:00Z",
+    "title": "Community garden nursery wins award",
+    "raw_text": "The community garden nursery has won an award for its biodiversity project; no childcare opening is planned.",
+    "location_hint": "York YO1",
+    "organisation_hint": "York Community Garden",
+    "metadata": {}
+  }
+]

@@ -1,4 +1,4 @@
-.PHONY: build-lambda test lint check fmt
+.PHONY: build-lambda test lint check fmt ingest-fixtures
 
 build-lambda:
 	./scripts/build-lambda.sh
@@ -19,3 +19,5 @@ check: test lint
 	terraform -chdir=infra validate
 	terraform -chdir=infra/bootstrap validate
 
+ingest-fixtures:
+	python3 scripts/ingest_fixtures.py

@@ -10,6 +10,8 @@ class Settings:
     environment: str = "local"
     database_url: str | None = None
     db_secret_arn: str | None = None
+    evidence_bucket: str | None = None
+    enrichment_queue_url: str | None = None
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -18,4 +20,6 @@ class Settings:
             environment=os.getenv("APP_ENV", "local"),
             database_url=os.getenv("DATABASE_URL") or None,
             db_secret_arn=os.getenv("DB_SECRET_ARN") or None,
+            evidence_bucket=os.getenv("EVIDENCE_BUCKET") or None,
+            enrichment_queue_url=os.getenv("ENRICHMENT_QUEUE_URL") or None,
         )

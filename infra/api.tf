@@ -49,6 +49,22 @@ resource "aws_apigatewayv2_route" "authenticated" {
   authorizer_id      = aws_apigatewayv2_authorizer.cognito.id
 }
 
+resource "aws_apigatewayv2_route" "signals" {
+  api_id             = aws_apigatewayv2_api.http.id
+  route_key          = "POST /signals"
+  target             = "integrations/${aws_apigatewayv2_integration.backend.id}"
+  authorization_type = "JWT"
+  authorizer_id      = aws_apigatewayv2_authorizer.cognito.id
+}
+
+resource "aws_apigatewayv2_route" "admin" {
+  api_id             = aws_apigatewayv2_api.http.id
+  route_key          = "ANY /admin/{proxy+}"
+  target             = "integrations/${aws_apigatewayv2_integration.backend.id}"
+  authorization_type = "JWT"
+  authorizer_id      = aws_apigatewayv2_authorizer.cognito.id
+}
+
 resource "aws_apigatewayv2_stage" "default" {
   api_id      = aws_apigatewayv2_api.http.id
   name        = "$default"

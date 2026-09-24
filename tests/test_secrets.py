@@ -7,13 +7,15 @@ class FakeSecretsManager:
     def get_secret_value(self, *, SecretId: str) -> dict[str, str]:
         assert SecretId == "arn:aws:secretsmanager:eu-west-1:123:secret:test"
         return {
-            "SecretString": json.dumps({
-                "host": "db.example",
-                "port": 5432,
-                "dbname": "nurserysignal",
-                "username": "app-user",
-                "password": "p@ss word",
-            })
+            "SecretString": json.dumps(
+                {
+                    "host": "db.example",
+                    "port": 5432,
+                    "dbname": "nurserysignal",
+                    "username": "app-user",
+                    "password": "p@ss word",
+                }
+            )
         }
 
 
@@ -27,4 +29,3 @@ def test_database_secret_is_converted_to_safe_conninfo(monkeypatch) -> None:
     assert "dbname=nurserysignal" in conninfo
     assert "password='p@ss word'" in conninfo
     assert "SecretString" not in conninfo
-
