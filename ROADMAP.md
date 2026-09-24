@@ -41,14 +41,14 @@ Completed:
 - Fresh bounded Plota validation completed: 14 records returned, 11 excluded, and 3 explicit childcare candidates matched; follow-up/context exclusions were added and deployed.
 - Existing invited operator added to `NurserySignalAdmins` and membership verified server-side.
 - Latest bounded repeat for 2026-09-18 through 2026-09-24 returned 15 records, matched 3 explicit childcare candidates, and drained without provider errors or DLQ messages; all three remain strong genuine signals.
-- Daily EventBridge schedule remains deliberately disabled.
+- Daily EventBridge schedule enabled after validation; the first bounded scheduled-equivalent runs completed cleanly.
 
 Current gate:
-- Planning validation is complete; keep the daily EventBridge schedule disabled until an explicit enablement decision is made.
+- Planning validation and explicit schedule enablement are complete; monitor the first unattended runs before adding another provider.
 
-## Phase 3 — Safe unattended planning collection — READY FOR EXPLICIT ENABLEMENT
+## Phase 3 — Safe unattended planning collection — OPERATIONAL
 
-Phase 2 demonstrated adequate precision and operational safety. Enablement remains a deliberate production decision and has not been performed.
+Phase 2 demonstrated adequate precision and operational safety. The existing daily EventBridge schedule is now enabled with a bounded, overlapping collection window.
 
 Readiness gate:
 - representative live samples show strong precision
@@ -58,9 +58,9 @@ Readiness gate:
 - queues and DLQs remain healthy
 - provider/rate-limit failures are visible
 - operational cost remains proportionate
-- schedule enablement is an explicit decision
+- schedule enablement was an explicit decision and is now complete
 
-After enablement:
+Operational follow-up:
 - monitor signal quality and provider failures
 - periodically sample rejected/excluded records for false negatives
 - continue expanding the regression corpus from real-world observations
@@ -120,4 +120,4 @@ Do not build these before the underlying signal quality justifies them.
 
 ## Current next step
 
-Make the separate explicit decision to enable the daily Plota schedule. If enabled, monitor the first unattended runs and sample accepted/rejected records for precision and provider failures.
+Monitor the first unattended daily runs and sample accepted/rejected records for precision, false negatives and provider failures before considering another signal source.
