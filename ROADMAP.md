@@ -36,10 +36,12 @@ Completed:
 - Persistence-level idempotency verified on repeated live collection.
 - Bounded administrator reprocessing of stored planning evidence implemented with audit records, review-state preservation and no new ingestion artefacts.
 - Fresh bounded Plota validation completed: 14 records returned, 11 excluded, and 3 explicit childcare candidates matched; follow-up/context exclusions were added and deployed.
+- Existing invited operator added to `NurserySignalAdmins` and membership verified server-side.
+- Latest bounded repeat for 2026-09-18 through 2026-09-24 returned 15 records, matched 3 explicit childcare candidates, and drained without provider errors or DLQ messages; all three remain strong genuine signals.
 - Daily EventBridge schedule remains deliberately disabled.
 
 Current gate:
-- Assign the invited operator to `NurserySignalAdmins`, sign in again, and run the bounded reprocess against the existing live sample.
+- Sign in again with the invited operator so the refreshed Cognito token carries `NurserySignalAdmins`, then run the bounded reprocess against the existing live sample.
 - Review the reprocessed historical state and confirm reviewed decisions and audit history remain intact.
 - Keep the daily EventBridge schedule disabled until that administrator-only validation is complete.
 
@@ -117,4 +119,4 @@ Do not build these before the underlying signal quality justifies them.
 
 ## Current next step
 
-Complete the pending administrator assignment and run/review the bounded historical reprocess. Then decide whether the observed precision supports enabling the daily Plota schedule; do not enable it automatically.
+Refresh the invited administrator session, run/review the bounded historical reprocess, and confirm the production audit/review results. Then decide whether the observed precision supports enabling the daily Plota schedule; do not enable it automatically.
