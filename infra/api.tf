@@ -65,9 +65,9 @@ resource "aws_apigatewayv2_route" "admin" {
   authorizer_id      = aws_apigatewayv2_authorizer.cognito.id
 }
 
-resource "aws_apigatewayv2_route" "cors_options" {
+resource "aws_apigatewayv2_route" "admin_options" {
   api_id             = aws_apigatewayv2_api.http.id
-  route_key          = "OPTIONS /{proxy+}"
+  route_key          = "OPTIONS /admin/{proxy+}"
   target             = "integrations/${aws_apigatewayv2_integration.backend.id}"
   authorization_type = "NONE"
 }
