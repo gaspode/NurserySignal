@@ -3,6 +3,7 @@ resource "aws_secretsmanager_secret" "planning_provider" {
   description             = "Planning provider API key for the NurserySignal collector"
   recovery_window_in_days = 7
   tags                    = local.common_tags
+  depends_on              = [aws_iam_policy.github_actions]
 }
 
 resource "aws_cloudwatch_log_group" "planning_collector" {
@@ -15,6 +16,7 @@ resource "aws_iam_role" "planning_collector" {
   name               = "${local.name_prefix}-planning-collector"
   assume_role_policy = data.aws_iam_policy_document.lambda_assume_role.json
   tags               = local.common_tags
+  depends_on         = [aws_iam_policy.github_actions]
 }
 
 resource "aws_iam_role_policy_attachment" "planning_collector_logs" {
@@ -93,6 +95,7 @@ resource "aws_iam_role" "ingestion_worker" {
   name               = "${local.name_prefix}-ingestion-worker"
   assume_role_policy = data.aws_iam_policy_document.lambda_assume_role.json
   tags               = local.common_tags
+  depends_on         = [aws_iam_policy.github_actions]
 }
 
 resource "aws_iam_role_policy_attachment" "ingestion_worker_vpc" {
