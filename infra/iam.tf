@@ -167,6 +167,14 @@ resource "aws_iam_policy" "github_actions" {
       {
         Effect = "Allow"
         Action = [
+          "iam:CreatePolicyVersion", "iam:DeletePolicyVersion", "iam:GetPolicyVersion",
+          "iam:SetDefaultPolicyVersion"
+        ]
+        Resource = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:policy/${local.name_prefix}-github-actions"
+      },
+      {
+        Effect = "Allow"
+        Action = [
           "secretsmanager:DeleteSecret", "secretsmanager:DeleteSecretVersion", "secretsmanager:DescribeSecret",
           "secretsmanager:GetResourcePolicy", "secretsmanager:GetSecretValue", "secretsmanager:ListSecretVersionIds",
           "secretsmanager:PutSecretValue",
