@@ -105,4 +105,4 @@ If a task includes a live validation, report:
 
 ## Roadmap discipline
 
-ROADMAP.md records product direction and readiness gates. Update it when a completed task materially changes phase status, a gate is passed, or a significant deferred item becomes active. Do not turn it into a detailed ticket backlog.
+Update `ROADMAP.md` at the end of every piece of work, including documentation-only, code-only, infrastructure, deployment and live-validation work. Record the resulting phase status, passed/failed/pending gates, remaining blockers and exact next step. A task is not complete until the roadmap reflects the new state. Keep it lightweight and strategic rather than turning it into a detailed ticket backlog.

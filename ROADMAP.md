@@ -35,12 +35,13 @@ Completed:
 - School-context exclusions refined without suppressing explicit early-years proposals.
 - Persistence-level idempotency verified on repeated live collection.
 - Bounded administrator reprocessing of stored planning evidence implemented with audit records, review-state preservation and no new ingestion artefacts.
+- Fresh bounded Plota validation completed: 14 records returned, 11 excluded, and 3 explicit childcare candidates matched; follow-up/context exclusions were added and deployed.
 - Daily EventBridge schedule remains deliberately disabled.
 
 Current gate:
-- Reprocess the existing live sample.
-- Run and manually review a fresh 25-record live Plota sample.
-- Confirm remaining false-positive rate is acceptable before considering unattended collection.
+- Assign the invited operator to `NurserySignalAdmins`, sign in again, and run the bounded reprocess against the existing live sample.
+- Review the reprocessed historical state and confirm reviewed decisions and audit history remain intact.
+- Keep the daily EventBridge schedule disabled until that administrator-only validation is complete.
 
 ## Phase 3 — Safe unattended planning collection — NOT YET ENABLED
 
@@ -116,4 +117,4 @@ Do not build these before the underlying signal quality justifies them.
 
 ## Current next step
 
-Implement bounded admin planning reprocessing, validate it against the existing Plota sample, then run and manually assess a fresh 25-record Plota sample. Keep the daily schedule disabled until that validation is complete.
+Complete the pending administrator assignment and run/review the bounded historical reprocess. Then decide whether the observed precision supports enabling the daily Plota schedule; do not enable it automatically.
