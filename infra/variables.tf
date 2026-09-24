@@ -24,6 +24,12 @@ variable "github_repository" {
   description = "GitHub owner/repository used by Actions."
 }
 
+variable "github_oidc_subject_prefix" {
+  type        = string
+  default     = "gaspode@856445/NurserySignal@1385020285"
+  description = "Immutable GitHub OIDC subject prefix for gaspode/NurserySignal."
+}
+
 variable "db_name" {
   type    = string
   default = "nurserysignal"

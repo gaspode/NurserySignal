@@ -34,9 +34,10 @@ use a deliberately added endpoint strategy or be kept outside the database VPC.
 
 ## Repository setup
 
-The GitHub Actions OIDC deployment role is restricted to
-`gaspode/NurserySignal` on the `main` branch. The workflow expects its ARN in
-the `NURSERYSIGNAL_AWS_ROLE_ARN` repository variable.
+The GitHub Actions OIDC deployment role is restricted to the immutable GitHub
+subject for `gaspode/NurserySignal` (`gaspode@856445/NurserySignal@1385020285`)
+and the workflow expects its ARN in the `NURSERYSIGNAL_AWS_ROLE_ARN` repository
+variable.
 
 ## Local checks
 
