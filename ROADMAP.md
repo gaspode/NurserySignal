@@ -34,10 +34,10 @@ Completed:
 - False-positive handling for nursery terms present only in addresses/property names.
 - School-context exclusions refined without suppressing explicit early-years proposals.
 - Persistence-level idempotency verified on repeated live collection.
+- Bounded administrator reprocessing of stored planning evidence implemented with audit records, review-state preservation and no new ingestion artefacts.
 - Daily EventBridge schedule remains deliberately disabled.
 
 Current gate:
-- Add bounded administrator reprocessing of stored planning evidence using current classification rules while preserving review history. The operation is administrator-only, capped, auditable and does not create ingestion artefacts.
 - Reprocess the existing live sample.
 - Run and manually review a fresh 25-record live Plota sample.
 - Confirm remaining false-positive rate is acceptable before considering unattended collection.
