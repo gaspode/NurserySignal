@@ -26,7 +26,8 @@ ROLE_PATTERNS = (
     ("nursery_nurse", r"\bnursery\s+nurse\b"),
     (
         "childcare_apprentice",
-        r"\b(?:childcare|early\s+years|nursery)\s+apprentice\b",
+        r"\b(?:childcare|early\s+years|nursery)\s+(?:apprentice|apprenticeship)\b"
+        r"|\bapprentice\s+(?:nursery|early\s+years|childcare)\b",
     ),
     ("teaching_assistant", r"\bteaching\s+assistant\b"),
 )
@@ -324,7 +325,11 @@ def classify_recruitment(record: RecruitmentRecord) -> dict[str, Any]:
     exclusions = [
         pattern for pattern in EXCLUDED_RECRUITMENT_PATTERNS if re.search(pattern, full_text)
     ]
-    roles = [name for name, pattern in ROLE_PATTERNS if re.search(pattern, role_text)]
+    title_roles = [name for name, pattern in ROLE_PATTERNS if re.search(pattern, title)]
+    course_roles = [name for name, pattern in ROLE_PATTERNS if re.search(pattern, course_text)]
+    # Prefer the advertised title: a course route such as "early years
+    # educator" must not relabel an explicit "childcare apprenticeship" role.
+    roles = title_roles or course_roles
     if not roles and re.search(OTHER_EDUCATION_ROLE_PATTERN, role_text):
         roles = ["other_education_role"]
     setting_categories = [

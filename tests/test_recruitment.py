@@ -117,6 +117,9 @@ def test_recruitment_role_and_setting_evidence_are_separate() -> None:
     )
     early_years = classify_recruitment(vacancy("Early Years Apprentice"))
     educator = classify_recruitment(vacancy("Early Years Educator"))
+    childcare_apprenticeship = classify_recruitment(
+        vacancy("Level 3 Childcare Apprenticeship")
+    )
     generic_ta = classify_recruitment(
         replace(
             vacancy("Teaching Assistant Apprentice", "A mainstream secondary school role."),
@@ -128,6 +131,7 @@ def test_recruitment_role_and_setting_evidence_are_separate() -> None:
     assert teaching_assistant["matched"] is True
     assert early_years["role_category"] == "childcare_apprentice"
     assert educator["role_category"] == "early_years_educator"
+    assert childcare_apprenticeship["role_category"] == "childcare_apprentice"
     assert generic_ta["matched"] is False
     assert generic_ta["relevance"] == "IRRELEVANT"
 
