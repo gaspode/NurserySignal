@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import json
-import logging
 from typing import Any
 
 from app.config import Settings
+from app.logging import configure_logging
 from app.planning import (
     CandidateDecision,
     PlanningProvider,
@@ -16,7 +16,7 @@ from app.planning import (
 from app.queueing import SignalIngestionMessage, send_ingestion_message
 from app.secrets import provider_api_key_from_secret
 
-logger = logging.getLogger("nurserysignal.collector")
+logger = configure_logging()
 
 
 def collect_planning(
