@@ -708,6 +708,39 @@ def ai_review_exists(
     return row is not None
 
 
+def get_ai_review(
+    settings: Settings, signal_id: str, model_id: str, prompt_version: str
+) -> dict[str, Any] | None:
+    """Return the versioned shadow result for a signal, if it exists."""
+    with connection(settings) as conn:
+        row = conn.execute(
+            """SELECT id, provider, model_id, prompt_version, recommendation, confidence,
+                      reason, status, failure_category, attempted_at, evaluated_at,
+                      input_tokens, output_tokens, latency_ms, created_at
+               FROM signal_ai_reviews
+               WHERE raw_signal_id = %s AND provider = 'BEDROCK'
+                 AND model_id = %s AND prompt_version = %s
+               ORDER BY created_at DESC LIMIT 1""",
+            (signal_id, model_id, prompt_version),
+        ).fetchone()
+    if row is None:
+        return None
+    return dict(zip(
+        ("id", "provider", "model_id", "prompt_version", "recommendation", "confidence",
+         "reason", "status", "failure_category", "attempted_at", "evaluated_at",
+         "input_tokens", "output_tokens", "latency_ms", "created_at"), row
+    ))
+
+
+def get_signal_review_status(settings: Settings, signal_id: str) -> str | None:
+    with connection(settings) as conn:
+        row = conn.execute(
+            "SELECT review_status FROM signal_enrichments WHERE raw_signal_id = %s",
+            (signal_id,),
+        ).fetchone()
+    return row[0] if row else None
+
+
 def save_ai_review(settings: Settings, signal_id: str, review: dict[str, Any]) -> bool:
     with connection(settings) as conn:
         row = conn.execute(

@@ -14,6 +14,7 @@ from app.ingestion import NormalizedSignal
 from app.logging import configure_logging
 from app.repository import list_signals, reprocess_planning_signals, review_signal, signal_detail
 from app.service import EnrichmentQueueError, SignalConflictError, ingest_signal, parse_json_payload
+from app.shadow_review import reevaluate_ai_shadow
 from app.storage import EvidencePersistenceError, presigned_evidence_url
 
 logger = configure_logging()
@@ -91,7 +92,7 @@ def _admin_path(path: str) -> tuple[str, str | None]:
         parts = remainder.split("/")
         if len(parts) == 1:
             return "detail", parts[0]
-        if len(parts) == 2 and parts[1] in {"approve", "reject", "evidence"}:
+        if len(parts) == 2 and parts[1] in {"approve", "reject", "evidence", "ai-review"}:
             return parts[1], parts[0]
     return "unknown", None
 
@@ -198,6 +199,12 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                         "excluded": result.excluded,
                     },
                 )
+            if action == "ai-review" and method == "POST" and signal_id:
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                result = reevaluate_ai_shadow(settings, signal_id)
+                return _response(200, result) if result else _response(404, {"error": "not_found"})
             if action == "list" and method == "GET":
                 limit = min(max(int(_query(event, "limit") or "25"), 1), 100)
                 offset = max(int(_query(event, "offset") or "0"), 0)

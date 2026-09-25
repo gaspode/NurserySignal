@@ -379,6 +379,7 @@ export function SignalDetail({ signalId, apiClient, onBack, queueMode = false, i
   const [notice, setNotice] = useState(initialNotice);
   const [modalAction, setModalAction] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [aiBusy, setAiBusy] = useState(false);
   const load = async () => { setLoading(true); setError(""); try { setSignal(await apiClient(`/admin/signals/${signalId}`)); } catch (loadError) { setError(loadError.message); } finally { setLoading(false); } };
   useEffect(() => { load(); }, [signalId]);
   async function confirmReview() {
@@ -413,6 +414,20 @@ export function SignalDetail({ signalId, apiClient, onBack, queueMode = false, i
     const tab = window.open("about:blank", "_blank");
     try { const result = await apiClient(`/admin/signals/${signalId}/evidence`); if (tab) tab.location = result.url; } catch (evidenceError) { tab?.close(); setError(evidenceError.message); }
   }
+  async function runAiAssessment() {
+    setAiBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const result = await apiClient(`/admin/signals/${signalId}/ai-review`, { method: "POST" });
+      setNotice(result.idempotent ? "Existing AI shadow assessment returned." : "AI shadow assessment completed.");
+      await load();
+    } catch (assessmentError) {
+      setError(assessmentError.message);
+    } finally {
+      setAiBusy(false);
+    }
+  }
   if (loading) return <LoadingState label="Loading signal" />;
   if (error && !signal) return <ErrorState message={error} onRetry={load} />;
   const enrichment = signal?.enrichment;
@@ -437,7 +452,7 @@ export function SignalDetail({ signalId, apiClient, onBack, queueMode = false, i
       <DetailPanel title="Raw signal"><Field label="Source type" value={titleCase(signal.source_type)} /><Field label="Source URL" value={<a href={signal.source_url} target="_blank" rel="noreferrer">{signal.source_url}</a>} /><Field label="External ID" value={signal.external_id} /><Field label="Discovered" value={formatDate(signal.discovered_at, true)} /><Field label="Title" value={signal.title} /><Field label="Raw text" value={<p className="raw-text">{signal.raw_text}</p>} /><Field label="Organisation hint" value={signal.organisation_hint} /><Field label="Location hint" value={signal.location_hint} /><Field label="Metadata" value={<pre>{JSON.stringify(signal.metadata || {}, null, 2)}</pre>} /></DetailPanel>
       {planning && <DetailPanel title="Planning application"><Field label="Provider reference" value={planning.provider_application_id} /><Field label="Council" value={planning.council} /><Field label="Application date" value={planning.application_date} /><Field label="Planning status" value={planning.planning_status} /><Field label="Decision" value={planning.decision} /><Field label="Postcode" value={planning.postcode} /><Field label="Coordinates" value={planning.latitude == null ? null : `${planning.latitude}, ${planning.longitude}`} /><Field label="Tracked revisions" value={signal.planning_revisions?.length || 0} /></DetailPanel>}
       <DetailPanel title="Deterministic assessment">{enrichment ? <><Field label="Event type" value={titleCase(enrichment.event_type)} /><Field label="Nursery name" value={enrichment.nursery_name} /><Field label="Operator" value={enrichment.operator_name} /><Field label="Address" value={enrichment.address} /><Field label="Expected opening" value={enrichment.expected_opening_date} /><Field label="Capacity" value={enrichment.capacity} /><Field label="Lifecycle stage" value={<Badge>{titleCase(enrichment.lifecycle_stage)}</Badge>} /><Field label="Rule confidence" value={enrichment.confidence == null ? "—" : `${Math.round(enrichment.confidence * 100)}%`} />{falsePositive && <div className="false-positive-callout">Likely false positive · {enrichment.extracted_facts?.classification}</div>}<Field label="Extracted facts" value={<pre>{JSON.stringify(enrichment.extracted_facts || {}, null, 2)}</pre>} /><Field label="Evidence used" value={<pre>{JSON.stringify(enrichment.evidence || {}, null, 2)}</pre>} /></> : <p className="muted">Enrichment is still processing.</p>}</DetailPanel>
-      <DetailPanel title="AI shadow assessment"><p className="muted small-text">Advisory only — human review remains authoritative.</p>{signal.ai_reviews?.[0]?.status === "SUCCEEDED" ? <><Field label="AI assessment" value={titleCase(signal.ai_reviews[0].recommendation)} /><Field label="AI confidence" value={`${Math.round(signal.ai_reviews[0].confidence * 100)}%`} /><Field label="Reason" value={signal.ai_reviews[0].reason} /><Field label="Model" value={signal.ai_reviews[0].model_id} /><Field label="Evaluated" value={formatDate(signal.ai_reviews[0].evaluated_at, true)} /></> : signal.ai_reviews?.[0]?.status === "FAILED" ? <p className="muted">AI assessment unavailable ({titleCase(signal.ai_reviews[0].failure_category)}). Human review is unaffected.</p> : <p className="muted">No AI shadow assessment available.</p>}</DetailPanel>
+      <DetailPanel title="AI shadow assessment"><p className="muted small-text">Advisory only — human review remains authoritative.</p>{signal.ai_reviews?.[0]?.status === "SUCCEEDED" ? <><Field label="AI assessment" value={titleCase(signal.ai_reviews[0].recommendation)} /><Field label="AI confidence" value={`${Math.round(signal.ai_reviews[0].confidence * 100)}%`} /><Field label="Reason" value={signal.ai_reviews[0].reason} /><Field label="Model" value={signal.ai_reviews[0].model_id} /><Field label="Evaluated" value={formatDate(signal.ai_reviews[0].evaluated_at, true)} /></> : signal.ai_reviews?.[0]?.status === "FAILED" ? <p className="muted">AI assessment unavailable ({titleCase(signal.ai_reviews[0].failure_category)}). Human review is unaffected.</p> : <p className="muted">No AI shadow assessment available.</p>}<button className="button secondary" onClick={runAiAssessment} disabled={aiBusy}>{aiBusy ? "Running AI assessment…" : signal.ai_reviews?.length ? "Re-run AI assessment" : "Run AI assessment"}</button></DetailPanel>
       <DetailPanel title="Evidence & provenance"><Field label="First seen" value={formatDate(signal.created_at, true)} /><Field label="Latest update" value={formatDate(signal.planning_revisions?.[0]?.observed_at || enrichment?.updated_at, true)} /><Field label="Evidence key" value={<code>{latestDocument?.s3_key || "—"}</code>} /><Field label="Evidence checksum" value={<code>{latestDocument?.sha256 || "—"}</code>} /><button className="button secondary" onClick={openEvidence} disabled={!signal.documents?.length}>View preserved JSON</button><p className="muted small-text">Access uses a short-lived authenticated download URL. The evidence bucket remains private.</p></DetailPanel>
       <DetailPanel title="Review"><Field label="Current state" value={<Badge tone={reviewTone(enrichment?.review_status)}>{enrichment?.review_status || "PROCESSING"}</Badge>} /><Field label="Reviewer" value={enrichment?.reviewed_by} /><Field label="Reviewed at" value={formatDate(enrichment?.reviewed_at, true)} /></DetailPanel>
     </div>

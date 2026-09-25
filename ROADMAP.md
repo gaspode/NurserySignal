@@ -73,6 +73,8 @@ Operational follow-up:
 
 Bedrock assessments are stored separately from deterministic classification and human review. This phase is for measuring usefulness and disagreement, not automating decisions.
 
+The deployed shadow path also supports a bounded, administrator-only re-evaluation of stored signals. It is idempotent for a model/prompt version and cannot change deterministic classification or human review state.
+
 Gate before any automated decision-making:
 - collect a meaningful reviewed sample across genuine, ambiguous and false-positive cases
 - measure agreement, high-confidence agreement, false-approve, false-reject and NEEDS_HUMAN rates

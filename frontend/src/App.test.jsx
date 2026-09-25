@@ -151,6 +151,28 @@ describe("admin frontend", () => {
     expect(screen.queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();
   });
 
+  it("runs an advisory AI assessment without changing human review state", async () => {
+    const apiClient = vi.fn()
+      .mockResolvedValueOnce(detail())
+      .mockResolvedValueOnce({
+        status: "SUCCEEDED",
+        recommendation: "APPROVE",
+        confidence: 0.9,
+        reason: "New childcare provision.",
+        model_id: "amazon.nova-lite-v1:0",
+        prompt_version: "shadow-v1",
+        human_review_status: "PENDING",
+        idempotent: false,
+      })
+      .mockResolvedValueOnce(detail());
+    render(<SignalDetail signalId="signal-1" apiClient={apiClient} onBack={vi.fn()} />);
+    await screen.findByText("No AI shadow assessment available.");
+    await userEvent.click(screen.getByRole("button", { name: "Run AI assessment" }));
+    await waitFor(() => expect(apiClient).toHaveBeenCalledWith("/admin/signals/signal-1/ai-review", { method: "POST" }));
+    expect(await screen.findByRole("status")).toHaveTextContent("AI shadow assessment completed.");
+    expect(apiClient).toHaveBeenCalledTimes(3);
+  });
+
   it("links dashboard metrics to the inbox and reviewed history", async () => {
     const apiClient = vi.fn()
       .mockResolvedValueOnce({ total: 2 })
