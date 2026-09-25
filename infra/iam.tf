@@ -157,7 +157,8 @@ resource "aws_iam_policy" "github_actions" {
         Resource = [
           "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.name_prefix}-enrichment",
           "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.name_prefix}-planning-collector",
-          "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.name_prefix}-ingestion-worker"
+          "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.name_prefix}-ingestion-worker",
+          "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.name_prefix}-recruitment-collector"
         ]
       },
       {
@@ -166,10 +167,17 @@ resource "aws_iam_policy" "github_actions" {
         Resource = "*"
         Condition = {
           StringEquals = {
-            "secretsmanager:Name" = [
-              "${local.name_prefix}/planning-provider",
-              "${local.name_prefix}/recruitment-provider"
-            ]
+            "secretsmanager:Name" = "${local.name_prefix}/planning-provider"
+          }
+        }
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["secretsmanager:CreateSecret"]
+        Resource = "*"
+        Condition = {
+          StringEquals = {
+            "secretsmanager:Name" = "${local.name_prefix}/recruitment-provider"
           }
         }
       },
