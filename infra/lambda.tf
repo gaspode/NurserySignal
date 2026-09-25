@@ -39,10 +39,12 @@ resource "aws_lambda_function" "backend" {
       EVIDENCE_BUCKET      = aws_s3_bucket.raw_evidence.bucket
       ENRICHMENT_QUEUE_URL = aws_sqs_queue.enrichment.url
       ADMIN_GROUP          = aws_cognito_user_group.administrators.name
+      AI_MODEL_ID          = var.ai_model_id
+      AI_PROMPT_VERSION    = var.ai_prompt_version
     }
   }
 
-  depends_on = [aws_cloudwatch_log_group.backend]
+  depends_on = [aws_cloudwatch_log_group.backend, aws_vpc_endpoint.bedrock_runtime]
   tags       = local.common_tags
 }
 

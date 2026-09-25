@@ -90,6 +90,14 @@ describe("admin frontend", () => {
     expect(apiClient).toHaveBeenLastCalledWith(expect.stringContaining("offset=10"));
   });
 
+  it("shows the advisory AI shadow figure in reviewed history rows", async () => {
+    const item = { ...approvedItem, ai_recommendation: "APPROVE", ai_confidence: 0.91, ai_status: "SUCCEEDED" };
+    const apiClient = vi.fn().mockResolvedValue(listResult([item]));
+    render(<ReviewedSignalsPage apiClient={apiClient} onNavigate={vi.fn()} />);
+    expect((await screen.findAllByText("AI shadow")).length).toBeGreaterThan(0);
+    expect(screen.getByText("APPROVE · 91%")).toBeInTheDocument();
+  });
+
   it("renders an empty inbox state", async () => {
     const apiClient = vi.fn().mockResolvedValue(listResult([], 0));
     render(<ReviewInboxPage apiClient={apiClient} onNavigate={vi.fn()} />);

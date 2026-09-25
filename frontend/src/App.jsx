@@ -354,7 +354,7 @@ function SignalListPage({ apiClient, onNavigate, initialQuery = "", mode }) {
       {error && <ErrorState message={error} onRetry={load} />}
       {!loading && !error && result?.items.length === 0 && <div className="state-card"><strong>{inbox ? "Inbox clear" : "No reviewed signals match these filters."}</strong><p className="muted">{inbox ? "There are no pending signals waiting for review." : "Try changing the search or filters."}</p></div>}
       {!loading && !error && result?.items.length > 0 && <>
-        <div className="table-wrap"><table><thead><tr><th>Discovered</th><th>Signal</th><th>Source</th><th>Location / operator</th><th>Candidate</th><th>Confidence</th><th>Review</th></tr></thead><tbody>{result.items.map((item) => <SignalRow key={item.id} item={item} onClick={() => onNavigate(`/${inbox ? "inbox" : "history"}/${item.id}`)} />)}</tbody></table></div>
+        <div className="table-wrap"><table><thead><tr><th>Discovered</th><th>Signal</th><th>Source</th><th>Location / operator</th><th>Candidate</th><th>Rule confidence</th><th>AI shadow</th><th>Review</th></tr></thead><tbody>{result.items.map((item) => <SignalRow key={item.id} item={item} onClick={() => onNavigate(`/${inbox ? "inbox" : "history"}/${item.id}`)} />)}</tbody></table></div>
         <div className="pagination"><span>Page {page + 1} of {totalPages}</span><div><button className="button secondary" disabled={page === 0} onClick={() => setPage((current) => current - 1)}>Previous</button><button className="button secondary" disabled={page + 1 >= totalPages} onClick={() => setPage((current) => current + 1)}>Next</button></div></div>
       </>}
     </section>
@@ -367,8 +367,11 @@ export function SignalsPage(props) { return <ReviewInboxPage {...props} />; }
 
 function SignalRow({ item, onClick }) {
   const council = item.metadata?.council;
+  const aiLabel = item.ai_status === "SUCCEEDED" && item.ai_recommendation
+    ? `${titleCase(item.ai_recommendation)} · ${Math.round(item.ai_confidence * 100)}%`
+    : item.ai_status === "FAILED" ? "Unavailable" : "—";
   return <tr className={isFalsePositive(item) ? "false-positive-row" : "clickable-row"} onClick={onClick} tabIndex="0" onKeyDown={(event) => event.key === "Enter" && onClick()}>
-    <td className="nowrap">{formatDate(item.discovered_at)}</td><td><strong>{item.title}</strong><span className="cell-subtitle">{item.external_id}</span></td><td><Badge>{titleCase(item.source_type)}</Badge></td><td>{council || item.organisation_hint || "—"}<span className="cell-subtitle">{item.location_hint || "—"}</span></td><td><strong>{titleCase(item.event_type)}</strong><span className="cell-subtitle">{titleCase(item.lifecycle_stage)}</span>{isFalsePositive(item) && <span className="false-label">Likely false positive</span>}</td><td>{item.confidence == null ? "—" : `${Math.round(item.confidence * 100)}%`}</td><td><Badge tone={reviewTone(item.review_status)}>{item.review_status || "PROCESSING"}</Badge></td>
+    <td className="nowrap">{formatDate(item.discovered_at)}</td><td><strong>{item.title}</strong><span className="cell-subtitle">{item.external_id}</span></td><td><Badge>{titleCase(item.source_type)}</Badge></td><td>{council || item.organisation_hint || "—"}<span className="cell-subtitle">{item.location_hint || "—"}</span></td><td><strong>{titleCase(item.event_type)}</strong><span className="cell-subtitle">{titleCase(item.lifecycle_stage)}</span>{isFalsePositive(item) && <span className="false-label">Likely false positive</span>}</td><td>{item.confidence == null ? "—" : `${Math.round(item.confidence * 100)}%`}</td><td><span className="cell-subtitle">AI shadow</span>{aiLabel}</td><td><Badge tone={reviewTone(item.review_status)}>{item.review_status || "PROCESSING"}</Badge></td>
   </tr>;
 }
 
