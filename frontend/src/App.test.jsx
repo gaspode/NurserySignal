@@ -146,6 +146,49 @@ describe("admin frontend", () => {
     expect(onNavigate).toHaveBeenCalledWith("/history?review_status=APPROVED");
   });
 
+  it("refreshes all overview data in place and disables the control while busy", async () => {
+    let resolveFirstRefresh;
+    let callCount = 0;
+    const apiClient = vi.fn(() => {
+      callCount += 1;
+      if (callCount === 5) return new Promise((resolve) => { resolveFirstRefresh = resolve; });
+      if (callCount % 4 === 1) return Promise.resolve({ total: 2 });
+      if (callCount % 4 === 2) return Promise.resolve({ total: 3 });
+      if (callCount % 4 === 3) return Promise.resolve({ total: 4 });
+      return Promise.resolve(listResult([pendingItem]));
+    });
+    const onNavigate = vi.fn();
+    render(<Dashboard apiClient={apiClient} onNavigate={onNavigate} />);
+    await screen.findByText("Pending review");
+    await userEvent.click(screen.getByRole("button", { name: "Refresh data" }));
+    expect(screen.getByRole("button", { name: "Refreshing data" })).toBeDisabled();
+    expect(onNavigate).not.toHaveBeenCalled();
+    resolveFirstRefresh({ total: 2 });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Refresh data" })).not.toBeDisabled());
+    expect(apiClient).toHaveBeenCalledTimes(8);
+  });
+
+  it("refreshes the pending inbox without changing its pagination state or navigation", async () => {
+    const apiClient = vi.fn().mockResolvedValue(listResult());
+    const onNavigate = vi.fn();
+    render(<ReviewInboxPage apiClient={apiClient} onNavigate={onNavigate} />);
+    await screen.findByText(pendingItem.title);
+    await userEvent.click(screen.getByRole("button", { name: "Refresh data" }));
+    await waitFor(() => expect(apiClient).toHaveBeenCalledTimes(2));
+    expect(apiClient).toHaveBeenLastCalledWith(expect.stringContaining("review_status=PENDING"));
+    expect(onNavigate).not.toHaveBeenCalled();
+  });
+
+  it("preserves reviewed history search state when refreshing", async () => {
+    const apiClient = vi.fn().mockResolvedValue(listResult([approvedItem], 1));
+    render(<ReviewedSignalsPage apiClient={apiClient} onNavigate={vi.fn()} />);
+    await screen.findByText(approvedItem.title);
+    await userEvent.type(screen.getByLabelText("Search reviewed signals"), "Bristol");
+    await waitFor(() => expect(apiClient).toHaveBeenLastCalledWith(expect.stringContaining("q=Bristol")));
+    await userEvent.click(screen.getByRole("button", { name: "Refresh data" }));
+    await waitFor(() => expect(apiClient).toHaveBeenLastCalledWith(expect.stringContaining("q=Bristol")));
+  });
+
   it("shows API failures without losing the inbox shell", async () => {
     const apiClient = vi.fn().mockRejectedValue(new Error("API unavailable"));
     render(<ReviewInboxPage apiClient={apiClient} onNavigate={vi.fn()} />);

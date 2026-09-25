@@ -44,6 +44,7 @@ h2 { color: #102a43; font-size: 1rem; margin-bottom: 1rem; }
 .button.secondary { background: #fff; border-color: #bcccdc; color: #334e68; }
 .button.secondary:hover { border-color: #627d98; }
 .button.ghost { background: transparent; border-color: #d9e2ec; color: #52606d; padding: 0.45rem 0.7rem; }
+.refresh-button span { display: inline-block; font-size: 1rem; line-height: 0; vertical-align: -0.05em; }
 .button.full-width { width: 100%; }
 .button.approve { background: #087f5b; color: #fff; }
 .button.reject { background: #c92a2a; color: #fff; }

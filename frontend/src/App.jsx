@@ -53,6 +53,12 @@ function LoadingState({ label = "Loading" }) {
   return <div className="state-card"><span className="spinner" /> {label}…</div>;
 }
 
+export function RefreshButton({ busy = false, onClick }) {
+  return <button type="button" className="button secondary refresh-button" onClick={onClick} disabled={busy} aria-label={busy ? "Refreshing data" : "Refresh data"}>
+    <span aria-hidden="true">↻</span> {busy ? "Refreshing…" : "Refresh"}
+  </button>;
+}
+
 function Badge({ children, tone = "neutral" }) {
   return <span className={`badge badge-${tone}`}>{children || "—"}</span>;
 }
@@ -214,8 +220,10 @@ export function Dashboard({ apiClient, onNavigate }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
-  const load = async () => {
-    setLoading(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const load = async ({ initial = false } = {}) => {
+    if (initial) setLoading(true);
+    else setRefreshing(true);
     setError("");
     try {
       const [pending, approved, rejected, recent] = await Promise.all([
@@ -233,13 +241,14 @@ export function Dashboard({ apiClient, onNavigate }) {
     } catch (loadError) {
       setError(loadError.message);
     } finally {
-      setLoading(false);
+      if (initial) setLoading(false);
+      else setRefreshing(false);
     }
   };
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load({ initial: true }); }, []);
   return (
     <section>
-      <div className="page-heading"><div><p className="eyebrow">Operations overview</p><h1>Signal review desk</h1><p className="muted">Triage incoming nursery signals and preserve the evidence trail.</p></div><button className="button primary" onClick={() => onNavigate("/inbox")}>Review inbox</button></div>
+      <div className="page-heading"><div><p className="eyebrow">Operations overview</p><h1>Signal review desk</h1><p className="muted">Triage incoming nursery signals and preserve the evidence trail.</p></div><div className="page-actions"><RefreshButton busy={refreshing} onClick={() => load()} /><button className="button primary" onClick={() => onNavigate("/inbox")}>Review inbox</button></div></div>
       {loading && <LoadingState label="Loading overview" />}
       {error && <ErrorState message={error} onRetry={load} />}
       {data && <>
@@ -308,6 +317,7 @@ function SignalListPage({ apiClient, onNavigate, initialQuery = "", mode }) {
   const [page, setPage] = useState(0);
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState(() => new URLSearchParams(initialQuery).get("notice") || "");
   const query = useMemo(() => {
@@ -315,18 +325,22 @@ function SignalListPage({ apiClient, onNavigate, initialQuery = "", mode }) {
     Object.entries(filters).forEach(([key, value]) => value && params.set(key, value));
     return params.toString();
   }, [filters, page]);
-  const load = async () => {
-    setLoading(true);
+  const load = async ({ initial = false } = {}) => {
+    if (initial) setLoading(true);
+    else setRefreshing(true);
     setError("");
-    try { setResult(await apiClient(`/admin/signals?${query}`)); } catch (loadError) { setError(loadError.message); } finally { setLoading(false); }
+    try { setResult(await apiClient(`/admin/signals?${query}`)); } catch (loadError) { setError(loadError.message); } finally {
+      if (initial) setLoading(false);
+      else setRefreshing(false);
+    }
   };
-  useEffect(() => { load(); }, [query]);
+  useEffect(() => { load({ initial: true }); }, [query]);
   function updateFilter(name, value) { setPage(0); setFilters((current) => ({ ...current, [name]: value })); }
   const totalPages = result ? Math.max(1, Math.ceil(result.total / PAGE_SIZE)) : 1;
   const inbox = mode === "inbox";
   return (
     <section>
-      <div className="page-heading"><div><p className="eyebrow">{inbox ? "Active queue" : "Decision history"}</p><h1>{inbox ? "Review Inbox" : "Reviewed Signals"}</h1><p className="muted">{inbox ? "Work through pending signals one at a time." : "Search and correct previous review decisions without changing evidence."}</p></div><div className="page-actions">{inbox ? <button className="button secondary" onClick={() => onNavigate("/history")}>View reviewed signals</button> : <ReprocessTool apiClient={apiClient} onComplete={setNotice} />}<span className="result-count">{result?.total ?? "—"} total</span></div></div>
+      <div className="page-heading"><div><p className="eyebrow">{inbox ? "Active queue" : "Decision history"}</p><h1>{inbox ? "Review Inbox" : "Reviewed Signals"}</h1><p className="muted">{inbox ? "Work through pending signals one at a time." : "Search and correct previous review decisions without changing evidence."}</p></div><div className="page-actions"><RefreshButton busy={refreshing} onClick={() => load()} />{inbox ? <button className="button secondary" onClick={() => onNavigate("/history")}>View reviewed signals</button> : <ReprocessTool apiClient={apiClient} onComplete={setNotice} />}<span className="result-count">{result?.total ?? "—"} total</span></div></div>
       {notice && <div className="notice" role="status">{notice}</div>}
       <div className="filter-bar" aria-label="Signal filters">
         {!inbox && <label>Status<select aria-label="Review status" value={filters.review_status} onChange={(event) => updateFilter("review_status", event.target.value)}><option value="REVIEWED">All reviewed</option><option value="APPROVED">Approved</option><option value="REJECTED">Rejected</option></select></label>}

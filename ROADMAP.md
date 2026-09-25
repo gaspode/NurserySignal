@@ -20,6 +20,7 @@ The MVP succeeds by being trustworthy and actionable, not by maximizing raw sign
 - Terraform and GitHub Actions/OIDC deployment path.
 - Deterministic shared classification rules and regression fixtures.
 - Admin review UX now uses a pending inbox, separate searchable decision history and deliberate review-decision correction without changing evidence.
+- Admin overview and review views support in-app data refresh without a browser reload or Cognito session reset.
 
 ## Phase 2 — Planning signal validation — COMPLETE
 
