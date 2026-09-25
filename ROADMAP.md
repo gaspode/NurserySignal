@@ -120,6 +120,7 @@ Each new source should first be validated with a bounded sample before scheduled
 - Bedrock recruitment shadow assessments use versioned `shadow-v2` output with a separate commercial-change assessment; AI remains advisory-only.
 - The recruitment Lambda, private evidence flow and disabled daily `rate(1 day)` schedule are deployed through Terraform. The schedule remains disabled until the GOV.UK API key is configured and a bounded live sample is manually reviewed.
 - A bounded admin-only recruitment reprocess operation is available for stored evidence and preserves human review history without creating ingestion, evidence or queue artefacts.
+- Final bounded validation of the deployed provider window fetched 100 records, matched 10 relevant routine vacancies, found no explicit change signals or provider errors, and retained postcodes for all 100 records; the schedule remains disabled pending explicit operational approval.
 - GOV.UK provider requests use a stable identifying User-Agent, trim secret-key whitespace, and expose only bounded/redacted provider error diagnostics for safe operational troubleshooting.
 
 Validation gate:
