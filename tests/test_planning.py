@@ -264,6 +264,7 @@ def test_planning_signal_maps_metadata_and_stable_identity() -> None:
 
 
 def test_collector_queues_only_candidates_and_reports_counts(monkeypatch) -> None:
+    logged = []
     queued = []
 
     class FakeProvider:
@@ -274,10 +275,13 @@ def test_collector_queues_only_candidates_and_reports_counts(monkeypatch) -> Non
     monkeypatch.setattr(
         "app.collector.send_ingestion_message", lambda settings, message: queued.append(message)
     )
+    monkeypatch.setattr(
+        "app.collector.logger.info", lambda message, *args: logged.append(message % args)
+    )
     settings = Settings(ingestion_queue_url="https://sqs.example/ingestion")
     counts = collect_planning(
         settings,
-        {"from_date": "2026-09-23", "to_date": "2026-09-24"},
+        {"from_date": "2026-09-23", "to_date": "2026-09-24", "source": "manual"},
         FakeProvider(),
     )
     assert counts == {
@@ -285,9 +289,14 @@ def test_collector_queues_only_candidates_and_reports_counts(monkeypatch) -> Non
         "candidates_matched": 1,
         "signals_queued": 1,
         "duplicates": 0,
+        "excluded": 1,
         "errors": 0,
     }
     assert queued[0].signal["external_id"] == "plota:abc123"
+    assert logged == [
+        "planning_collection_summary fetched=2 matched=1 queued=1 duplicates=0 "
+        "excluded=1 errors=0 lookback_days=2 max_records=100 page_size=50 source=manual"
+    ]
 
 
 def test_provider_invalid_shape_is_rejected() -> None:

@@ -65,6 +65,7 @@ Readiness gate:
 
 Operational follow-up:
 - monitor signal quality and provider failures
+- use the single aggregate collector summary log to monitor fetched, excluded, matched and queued volumes
 - periodically sample rejected/excluded records for false negatives
 - continue expanding the regression corpus from real-world observations
 
