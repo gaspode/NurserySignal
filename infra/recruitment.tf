@@ -15,7 +15,6 @@ resource "aws_cloudwatch_log_group" "recruitment_collector" {
 resource "aws_iam_role" "recruitment_collector" {
   name               = "${local.name_prefix}-recruitment-collector"
   assume_role_policy = data.aws_iam_policy_document.lambda_assume_role.json
-  tags               = local.common_tags
   depends_on         = [aws_iam_policy.github_actions]
 }
 
