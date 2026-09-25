@@ -38,6 +38,7 @@ Avoid bypassing existing layers just because a direct implementation is quicker.
 - Manual ACCEPTED/REJECTED or equivalent review decisions are historical facts and must not be silently reset.
 - Reclassification of historical records must not masquerade as fresh ingestion.
 - New admin mutations that materially affect stored state should be auditable.
+- AI shadow assessments are advisory evidence only; they must never mutate deterministic fields or human review state.
 
 ## Classification rules
 

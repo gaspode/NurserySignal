@@ -41,8 +41,11 @@ the original JSON body to the raw-evidence bucket, creates the `raw_signals`
 record, and sends a small reference message to the enrichment queue. Duplicate
 `source_type` plus `external_id` submissions return the original signal ID.
 
-The enrichment Lambda currently applies deterministic fixture classification and
-stores a `PENDING` candidate in `signal_enrichments`. Authenticated admins can
+The enrichment Lambda applies deterministic fixture classification and stores a
+`PENDING` candidate in `signal_enrichments`. New enrichment messages also get a
+separate advisory Bedrock shadow assessment in `signal_ai_reviews`; it never
+changes deterministic fields or human review state. The initial configurable
+model is `amazon.nova-lite-v1:0` with prompt version `shadow-v1`. Authenticated admins can
 inspect and review candidates with:
 
 - `GET /admin/signals`
@@ -54,6 +57,13 @@ inspect and review candidates with:
 The admin frontend uses `GET /admin/signals/{id}/evidence` to obtain a
 five-minute presigned URL for the private raw JSON evidence object. The
 evidence bucket is never made public.
+
+The VPC-attached enrichment Lambda reaches Bedrock Runtime through a private
+Interface VPC endpoint rather than a NAT gateway. It uses one availability zone
+to keep fixed endpoint cost near $7.30/month, plus standard data processing;
+model invocation cost is usage-based. Bedrock failures are recorded as safe
+failed shadow assessments and never block deterministic enrichment or human
+review.
 
 ## Planning collector
 

@@ -16,6 +16,9 @@ class Settings:
     planning_provider_secret_arn: str | None = None
     planning_provider_base_url: str = "https://api.plota.co.uk/v1"
     admin_group: str = "NurserySignalAdmins"
+    ai_shadow_enabled: bool = False
+    ai_model_id: str = "amazon.nova-lite-v1:0"
+    ai_prompt_version: str = "shadow-v1"
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -32,4 +35,8 @@ class Settings:
                 "PLANNING_PROVIDER_BASE_URL", "https://api.plota.co.uk/v1"
             ),
             admin_group=os.getenv("ADMIN_GROUP", "NurserySignalAdmins"),
+            ai_shadow_enabled=os.getenv("AI_SHADOW_ENABLED", "false").lower()
+            in {"1", "true", "yes"},
+            ai_model_id=os.getenv("AI_MODEL_ID", "amazon.nova-lite-v1:0"),
+            ai_prompt_version=os.getenv("AI_PROMPT_VERSION", "shadow-v1"),
         )

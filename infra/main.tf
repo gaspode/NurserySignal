@@ -113,6 +113,37 @@ resource "aws_vpc_endpoint" "secretsmanager" {
   tags                = local.common_tags
 }
 
+resource "aws_security_group" "bedrock_endpoint" {
+  name        = "${local.name_prefix}-bedrock-endpoint"
+  description = "Allow the enrichment Lambda to reach Bedrock Runtime"
+  vpc_id      = data.aws_vpc.default.id
+  tags        = local.common_tags
+
+  ingress {
+    protocol        = "tcp"
+    from_port       = 443
+    to_port         = 443
+    security_groups = [aws_security_group.lambda.id]
+  }
+
+  egress {
+    protocol    = "-1"
+    from_port   = 0
+    to_port     = 0
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+resource "aws_vpc_endpoint" "bedrock_runtime" {
+  vpc_id              = data.aws_vpc.default.id
+  service_name        = "com.amazonaws.${var.aws_region}.bedrock-runtime"
+  vpc_endpoint_type   = "Interface"
+  private_dns_enabled = true
+  subnet_ids          = [local.lambda_subnet_ids[0]]
+  security_group_ids  = [aws_security_group.bedrock_endpoint.id]
+  tags                = local.common_tags
+}
+
 resource "aws_vpc_endpoint" "s3" {
   vpc_id            = data.aws_vpc.default.id
   service_name      = "com.amazonaws.${var.aws_region}.s3"

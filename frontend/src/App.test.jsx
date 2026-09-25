@@ -131,6 +131,26 @@ describe("admin frontend", () => {
     expect(apiClient).toHaveBeenCalledWith("/admin/signals/signal-1/reject", { method: "POST" });
   });
 
+  it("shows deterministic and advisory AI assessments separately", async () => {
+    const value = detail();
+    value.ai_reviews = [{
+      status: "SUCCEEDED",
+      recommendation: "APPROVE",
+      confidence: 0.91,
+      reason: "Explicit new childcare provision.",
+      model_id: "amazon.nova-lite-v1:0",
+      evaluated_at: "2026-09-25T09:00:00Z",
+    }];
+    const apiClient = vi.fn().mockResolvedValue(value);
+    render(<SignalDetail signalId="signal-1" apiClient={apiClient} onBack={vi.fn()} />);
+    expect(await screen.findByText("Deterministic assessment")).toBeInTheDocument();
+    expect(screen.getByText("Rule confidence")).toBeInTheDocument();
+    expect(screen.getByText("AI shadow assessment")).toBeInTheDocument();
+    expect(screen.getByText("AI confidence")).toBeInTheDocument();
+    expect(screen.getByText("Explicit new childcare provision.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();
+  });
+
   it("links dashboard metrics to the inbox and reviewed history", async () => {
     const apiClient = vi.fn()
       .mockResolvedValueOnce({ total: 2 })

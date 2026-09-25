@@ -39,3 +39,21 @@ variable "db_username" {
   type    = string
   default = "nurserysignal"
 }
+
+variable "ai_shadow_enabled" {
+  type        = bool
+  default     = true
+  description = "Enable non-authoritative Bedrock shadow assessments for new enrichment messages."
+}
+
+variable "ai_model_id" {
+  type        = string
+  default     = "amazon.nova-lite-v1:0"
+  description = "Bedrock model ID used by the enrichment shadow assessment."
+}
+
+variable "ai_prompt_version" {
+  type        = string
+  default     = "shadow-v1"
+  description = "Version of the shadow review prompt."
+}

@@ -104,13 +104,16 @@ resource "aws_lambda_function" "enrichment" {
 
   environment {
     variables = {
-      APP_ENV       = var.environment
-      SERVICE_NAME  = "${local.name_prefix}-enrichment"
-      DB_SECRET_ARN = aws_secretsmanager_secret.database.arn
+      APP_ENV           = var.environment
+      SERVICE_NAME      = "${local.name_prefix}-enrichment"
+      DB_SECRET_ARN     = aws_secretsmanager_secret.database.arn
+      AI_SHADOW_ENABLED = tostring(var.ai_shadow_enabled)
+      AI_MODEL_ID       = var.ai_model_id
+      AI_PROMPT_VERSION = var.ai_prompt_version
     }
   }
 
-  depends_on = [aws_cloudwatch_log_group.enrichment]
+  depends_on = [aws_cloudwatch_log_group.enrichment, aws_vpc_endpoint.bedrock_runtime]
   tags       = local.common_tags
 }
 

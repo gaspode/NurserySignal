@@ -314,9 +314,17 @@ def list_signals(
                    rs.discovered_at, rs.title, rs.location_hint, rs.organisation_hint,
                    rs.metadata, rs.created_at, rs.enrichment_queued_at, se.review_status,
                    se.event_type, se.nursery_name, se.operator_name, se.lifecycle_stage,
-                   se.confidence, se.extracted_facts
+                   se.confidence, se.extracted_facts, ai.recommendation,
+                   ai.confidence, ai.status
             FROM raw_signals rs
             LEFT JOIN signal_enrichments se ON se.raw_signal_id = rs.id
+            LEFT JOIN LATERAL (
+                SELECT recommendation, confidence, status
+                FROM signal_ai_reviews
+                WHERE raw_signal_id = rs.id
+                ORDER BY created_at DESC
+                LIMIT 1
+            ) ai ON TRUE
             WHERE {where}
             ORDER BY rs.discovered_at DESC, rs.id DESC
             LIMIT %s OFFSET %s
@@ -343,6 +351,9 @@ def list_signals(
         "lifecycle_stage",
         "confidence",
         "extracted_facts",
+        "ai_recommendation",
+        "ai_confidence",
+        "ai_status",
     )
     return {
         "items": [dict(zip(fields, row)) for row in rows],
@@ -384,6 +395,13 @@ def signal_detail(settings: Settings, signal_id: str) -> dict[str, Any] | None:
             """,
             (signal_id,),
         ).fetchall()
+        ai_reviews = conn.execute(
+            """SELECT id, provider, model_id, prompt_version, recommendation, confidence,
+                      reason, status, failure_category, attempted_at, evaluated_at,
+                      input_tokens, output_tokens, latency_ms, created_at
+               FROM signal_ai_reviews WHERE raw_signal_id = %s ORDER BY created_at DESC""",
+            (signal_id,),
+        ).fetchall()
     raw["documents"] = [
         dict(zip(("id", "s3_bucket", "s3_key", "sha256", "mime_type", "captured_at"), row))
         for row in documents
@@ -406,6 +424,31 @@ def signal_detail(settings: Settings, signal_id: str) -> dict[str, Any] | None:
             )
         )
         for row in revisions
+    ]
+    raw["ai_reviews"] = [
+        dict(
+            zip(
+                (
+                    "id",
+                    "provider",
+                    "model_id",
+                    "prompt_version",
+                    "recommendation",
+                    "confidence",
+                    "reason",
+                    "status",
+                    "failure_category",
+                    "attempted_at",
+                    "evaluated_at",
+                    "input_tokens",
+                    "output_tokens",
+                    "latency_ms",
+                    "created_at",
+                ),
+                row,
+            )
+        )
+        for row in ai_reviews
     ]
     if enrichment:
         raw["enrichment"] = dict(
@@ -646,6 +689,51 @@ def save_enrichment(settings: Settings, candidate: dict[str, Any]) -> bool:
                 candidate["confidence"],
                 Jsonb(candidate["extracted_facts"]),
                 Jsonb(candidate["evidence"]),
+            ),
+        ).fetchone()
+        conn.commit()
+    return row is not None
+
+
+def ai_review_exists(
+    settings: Settings, signal_id: str, model_id: str, prompt_version: str
+) -> bool:
+    with connection(settings) as conn:
+        row = conn.execute(
+            """SELECT 1 FROM signal_ai_reviews
+               WHERE raw_signal_id = %s AND provider = 'BEDROCK'
+                 AND model_id = %s AND prompt_version = %s LIMIT 1""",
+            (signal_id, model_id, prompt_version),
+        ).fetchone()
+    return row is not None
+
+
+def save_ai_review(settings: Settings, signal_id: str, review: dict[str, Any]) -> bool:
+    with connection(settings) as conn:
+        row = conn.execute(
+            """INSERT INTO signal_ai_reviews (
+                raw_signal_id, provider, model_id, prompt_version, recommendation,
+                confidence, reason, status, failure_category, attempted_at,
+                evaluated_at, input_tokens, output_tokens, latency_ms
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s,
+                      to_timestamp(%s), to_timestamp(%s), %s, %s, %s)
+            ON CONFLICT (raw_signal_id, provider, model_id, prompt_version) DO NOTHING
+            RETURNING id""",
+            (
+                signal_id,
+                review["provider"],
+                review["model_id"],
+                review["prompt_version"],
+                review.get("recommendation"),
+                review.get("confidence"),
+                review.get("reason"),
+                review["status"],
+                review.get("failure_category"),
+                review["attempted_at"],
+                review.get("evaluated_at"),
+                review.get("input_tokens"),
+                review.get("output_tokens"),
+                review.get("latency_ms"),
             ),
         ).fetchone()
         conn.commit()

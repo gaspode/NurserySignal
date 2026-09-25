@@ -68,7 +68,16 @@ Operational follow-up:
 - periodically sample rejected/excluded records for false negatives
 - continue expanding the regression corpus from real-world observations
 
-## Phase 4 — Commercial signal usefulness
+## Phase 4 — AI shadow-review validation — ACTIVE
+
+Bedrock assessments are stored separately from deterministic classification and human review. This phase is for measuring usefulness and disagreement, not automating decisions.
+
+Gate before any automated decision-making:
+- collect a meaningful reviewed sample across genuine, ambiguous and false-positive cases
+- measure agreement, high-confidence agreement, false-approve, false-reject and NEEDS_HUMAN rates
+- keep AI advisory-only until those measurements support an explicit decision
+
+## Phase 5 — Commercial signal usefulness
 
 Once planning collection is reliable, improve the usefulness of each signal rather than immediately adding more sources.
 
@@ -82,7 +91,7 @@ Likely areas:
 
 Any scoring or prioritisation should remain explainable and testable.
 
-## Phase 5 — Additional signal sources
+## Phase 6 — Additional signal sources
 
 Only add another source when it fills a demonstrated gap in planning coverage or timing.
 
@@ -96,7 +105,7 @@ Potential categories to investigate:
 
 Each new source should first be validated with a bounded sample before scheduled ingestion is enabled.
 
-## Phase 6 — Customer-facing product
+## Phase 7 — Customer-facing product
 
 Defer external/customer access until the signal pipeline is demonstrably useful.
 
@@ -112,7 +121,7 @@ Do not build these before the underlying signal quality justifies them.
 
 ## Explicitly deferred
 
-- broad AI/LLM classification as a substitute for deterministic rules
+- automated AI approval/rejection before the shadow-review validation gate is passed
 - unbounded historical backfills
 - automatic rewriting of reviewed decisions
 - multiple providers collecting the same data without a clear benefit
@@ -123,4 +132,4 @@ Do not build these before the underlying signal quality justifies them.
 
 ## Current next step
 
-Monitor the first unattended daily runs and sample accepted/rejected records for precision, false negatives and provider failures before considering another signal source.
+Monitor shadow assessments alongside the first unattended daily runs and build the reviewed sample needed to evaluate AI agreement and error rates before considering automated decisions or another signal source.
