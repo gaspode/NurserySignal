@@ -138,11 +138,18 @@ def evaluate_shadow(raw: dict[str, Any], settings: Settings) -> dict[str, Any]:
         result = _failure(settings, "TIMEOUT", started)
     except ClientError as exc:
         code = str(exc.response.get("Error", {}).get("Code", ""))
+        http_status = exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
         category = (
             "THROTTLED"
             if code
             in {"ThrottlingException", "TooManyRequestsException", "ServiceUnavailableException"}
             else "SERVICE_ERROR"
+        )
+        logger.warning(
+            "ai_shadow bedrock_client_error code=%s http_status=%s category=%s",
+            code or "UNKNOWN",
+            http_status or "UNKNOWN",
+            category,
         )
         result = _failure(settings, category, started)
     except (ValueError, json.JSONDecodeError):
