@@ -34,6 +34,26 @@ The existing single-AZ Secrets Manager interface endpoint lets them retrieve
 runtime credentials without a NAT gateway. Future collector Lambdas should use
 an explicitly chosen endpoint strategy or remain outside the database VPC.
 
+### Recruitment and opportunities
+
+The first recruitment provider is the documented GOV.UK Find an Apprenticeship
+Display Advert API v2. It is accessed through its JSON API with an
+`Ocp-Apim-Subscription-Key`, bounded recent-vacancy/page parameters and stable
+vacancy references. Store the key only in the Secrets Manager secret
+`nurserysignal-prod/recruitment-provider` using `{"api_key":"REDACTED"}`.
+The collector schedule is deployed disabled until the key is configured and a
+bounded sample is reviewed. Recruitment adverts are supporting evidence, not
+standalone opening/expansion decisions. Reed and specialist/operator job pages
+remain deferred until their access and downstream-use terms are separately
+validated.
+
+Enriched planning and recruitment signals can be linked to an Opportunity.
+Version-one correlation requires an exact postcode plus compatible
+operator/nursery names; same-town, same-chain and generic-name matches are not
+sufficient. Links retain a deterministic reason and original signals remain
+independently reviewable. Recruitment-only opportunities remain weak until
+independent evidence is linked.
+
 ## Ingestion vertical slice
 
 `POST /signals` accepts the versioned normalized signal contract. The API writes

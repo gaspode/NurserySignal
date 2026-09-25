@@ -9,6 +9,7 @@ def test_initial_migration_exists_and_contains_provenance_tables() -> None:
         "0003_planning_revisions.sql",
         "0004_planning_reprocess_audit.sql",
         "0005_ai_shadow_reviews.sql",
+        "0006_opportunity_correlation_v1.sql",
     ]
     sql = "\n".join(path.read_text(encoding="utf-8") for path in files)
     tables = (

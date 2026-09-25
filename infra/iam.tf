@@ -166,7 +166,10 @@ resource "aws_iam_policy" "github_actions" {
         Resource = "*"
         Condition = {
           StringEquals = {
-            "secretsmanager:Name" = "${local.name_prefix}/planning-provider"
+            "secretsmanager:Name" = [
+              "${local.name_prefix}/planning-provider",
+              "${local.name_prefix}/recruitment-provider"
+            ]
           }
         }
       },
@@ -176,7 +179,10 @@ resource "aws_iam_policy" "github_actions" {
           "secretsmanager:DescribeSecret", "secretsmanager:GetResourcePolicy", "secretsmanager:TagResource",
           "secretsmanager:UntagResource"
         ]
-        Resource = "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:${local.name_prefix}/planning-provider-*"
+        Resource = [
+          "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:${local.name_prefix}/planning-provider-*",
+          "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:${local.name_prefix}/recruitment-provider-*"
+        ]
       },
       {
         Effect = "Allow"

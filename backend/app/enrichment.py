@@ -5,6 +5,7 @@ from typing import Any
 
 from app.classification import CLASSIFICATION_RULE_VERSION, classify_signal_text
 from app.planning import candidate_decision, planning_record_from_signal
+from app.recruitment import classify_recruitment, recruitment_record_from_signal
 
 
 def fixture_enrichment(
@@ -21,6 +22,9 @@ def fixture_enrichment(
     )
     text = classification_result.text
     source_type = str(raw["source_type"]).lower()
+    recruitment_candidate = None
+    if source_type == "recruitment":
+        recruitment_candidate = classify_recruitment(recruitment_record_from_signal(raw))
     if planning_candidate is None and source_type == "planning":
         try:
             planning_candidate = candidate_decision(planning_record_from_signal(raw))
@@ -31,12 +35,17 @@ def fixture_enrichment(
             planning_candidate = None
 
     planning_excluded = planning_candidate is not None and not planning_candidate.matched
+    recruitment_excluded = (
+        recruitment_candidate is not None and not recruitment_candidate["matched"]
+    )
     school_nursery = planning_candidate is not None and planning_candidate.school_nursery
-    if classification_result.likely_false_positive or planning_excluded:
+    if classification_result.likely_false_positive or planning_excluded or recruitment_excluded:
         event_type, lifecycle_stage, confidence = "other", "DISCOVERED", 0.2
         classification = (
             "horticultural-nursery"
             if classification_result.likely_false_positive
+            else "recruitment-excluded"
+            if recruitment_excluded
             else "planning-excluded"
         )
     elif "planning" in source_type or any(
@@ -45,9 +54,12 @@ def fixture_enrichment(
         confidence = 0.72 if school_nursery else 0.86
         event_type, lifecycle_stage = "opening", "PLANNING"
         classification = "school-nursery" if school_nursery else "planning-opening"
-    elif any(word in text for word in ("recruit", "vacancy", "room leader", "staff")):
-        event_type, lifecycle_stage, confidence = "opening", "RECRUITING", 0.76
-        classification = "recruitment-opening"
+    elif recruitment_candidate is not None and recruitment_candidate["matched"]:
+        event_type, lifecycle_stage = "other", "RECRUITING"
+        confidence = recruitment_candidate["confidence"]
+        classification = "recruitment-role"
+        if recruitment_candidate["explicit_change_terms"]:
+            event_type = "opening"
     elif any(word in text for word in ("announce", "opening", "new nursery", "chain")):
         event_type, lifecycle_stage, confidence = "opening", "OPENING_SOON", 0.8
         classification = "operator-announcement"
@@ -94,6 +106,21 @@ def fixture_enrichment(
             ),
             "school_nursery": school_nursery,
             "source_type": raw["source_type"],
+            "recruitment_candidate_matched": recruitment_candidate["matched"]
+            if recruitment_candidate
+            else None,
+            "recruitment_role_categories": recruitment_candidate["role_categories"]
+            if recruitment_candidate
+            else [],
+            "recruitment_explicit_change_terms": recruitment_candidate["explicit_change_terms"]
+            if recruitment_candidate
+            else [],
+            "recruitment_exclusions": recruitment_candidate["exclusions"]
+            if recruitment_candidate
+            else [],
+            "recruitment_is_apprenticeship": recruitment_candidate["is_apprenticeship"]
+            if recruitment_candidate
+            else False,
         },
         "evidence": {
             "source_url": raw["source_url"],

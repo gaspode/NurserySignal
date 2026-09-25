@@ -19,7 +19,9 @@ def process_message(settings: Settings, body: str) -> None:
         message.raw_provider_record, separators=(",", ":"), sort_keys=True
     ).encode()
     ingest_signal(settings, signal, evidence)
-    logger.info("planning_signal_ingested external_id=%s", signal.external_id)
+    logger.info(
+        "signal_ingested source_type=%s external_id=%s", signal.source_type, signal.external_id
+    )
 
 
 def handler(event: dict[str, Any], context: Any) -> dict[str, list[dict[str, str]]]:

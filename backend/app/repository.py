@@ -9,6 +9,7 @@ from psycopg.types.json import Jsonb
 
 from app.classification import CLASSIFICATION_RULE_VERSION
 from app.config import Settings
+from app.correlation import deterministic_match
 from app.db import connection
 from app.enrichment import fixture_enrichment
 from app.ingestion import NormalizedSignal
@@ -695,6 +696,227 @@ def save_enrichment(settings: Settings, candidate: dict[str, Any]) -> bool:
     return row is not None
 
 
+def correlate_signal(
+    settings: Settings, signal_id: str, candidate: dict[str, Any]
+) -> dict[str, Any]:
+    """Create/link a conservative v1 opportunity without changing the signal."""
+    metadata = candidate.get("metadata") or {}
+    postcode = metadata.get("postcode")
+    name = (
+        candidate.get("nursery_name")
+        or candidate.get("operator_name")
+        or candidate.get("address")
+        or "Unmatched nursery signal"
+    )
+    operator = candidate.get("operator_name")
+    base_confidence = float(candidate.get("confidence") or 0.2)
+    source_type = str(metadata.get("source_type") or "")
+    with connection(settings) as conn:
+        existing = conn.execute(
+            """SELECT o.id, o.name, o.operator_id, o.lifecycle_stage, o.confidence,
+                      o.confidence_breakdown, COALESCE(n.postcode, linked.postcode),
+                      COALESCE(op.name, linked.operator_name)
+               FROM opportunities o
+               LEFT JOIN nurseries n ON n.id = o.nursery_id
+               LEFT JOIN operators op ON op.id = o.operator_id
+               LEFT JOIN LATERAL (
+                 SELECT rs.metadata->>'postcode' AS postcode,
+                        COALESCE(se.operator_name, rs.organisation_hint) AS operator_name
+                 FROM opportunity_signals os JOIN raw_signals rs ON rs.id = os.raw_signal_id
+                 LEFT JOIN signal_enrichments se ON se.raw_signal_id = rs.id
+                 WHERE os.opportunity_id = o.id ORDER BY rs.discovered_at LIMIT 1
+               ) linked ON TRUE
+               ORDER BY o.updated_at DESC"""
+        ).fetchall()
+        match = None
+        match_reason = None
+        for row in existing:
+            comparison = deterministic_match(postcode, name, row[6], row[1])
+            operator_comparison = deterministic_match(postcode, operator, row[6], row[7])
+            if comparison.matched or operator_comparison.matched:
+                match = row
+                match_reason = (
+                    comparison.reason if comparison.matched else operator_comparison.reason
+                )
+                break
+        if match:
+            opportunity_id = match[0]
+            breakdown = dict(match[5] or {})
+            evidence = breakdown.setdefault("evidence", [])
+            if signal_id not in {
+                item.get("signal_id") for item in evidence if isinstance(item, dict)
+            }:
+                evidence.append(
+                    {
+                        "signal_id": signal_id,
+                        "source_type": source_type,
+                        "confidence": base_confidence,
+                        "reason": match_reason,
+                    }
+                )
+            unique_sources = {
+                item.get("source_type") for item in evidence if isinstance(item, dict)
+            }
+            confidence = min(
+                0.98,
+                max(float(match[4] or 0), base_confidence)
+                + (0.18 if len(unique_sources) > 1 else 0),
+            )
+            stage = (
+                "STAFFING" if len(unique_sources) > 1 and source_type == "recruitment" else match[3]
+            )
+            conn.execute(
+                """UPDATE opportunities SET confidence = %s, lifecycle_stage = %s,
+                   confidence_breakdown = %s, stage_reason = %s,
+                   latest_update_at = now(), updated_at = now()
+                   WHERE id = %s""",
+                (confidence, stage, Jsonb(breakdown), match_reason, opportunity_id),
+            )
+        else:
+            opportunity_id = conn.execute(
+                """INSERT INTO opportunities (name, event_type, lifecycle_stage, confidence,
+                   confidence_breakdown, stage_reason)
+                   VALUES (%s, %s, %s, %s, %s, %s) RETURNING id""",
+                (
+                    name,
+                    candidate.get("event_type") or "other",
+                    "PLANNING" if source_type == "planning" else "DISCOVERED",
+                    base_confidence,
+                    Jsonb(
+                        {
+                            "evidence": [
+                                {
+                                    "signal_id": signal_id,
+                                    "source_type": source_type,
+                                    "confidence": base_confidence,
+                                    "reason": "initial signal",
+                                }
+                            ],
+                            "independence": 1,
+                        }
+                    ),
+                    "planning evidence"
+                    if source_type == "planning"
+                    else "recruitment clue only; not evidence of opening",
+                ),
+            ).fetchone()[0]
+        conn.execute(
+            """INSERT INTO opportunity_signals (
+                   opportunity_id, raw_signal_id, relationship_type,
+                   extracted_facts, provenance)
+               VALUES (%s, %s, 'SUPPORTS', %s, %s)
+               ON CONFLICT (opportunity_id, raw_signal_id) DO NOTHING""",
+            (
+                opportunity_id,
+                signal_id,
+                Jsonb(candidate.get("extracted_facts") or {}),
+                Jsonb({"method": "deterministic-v1", "reason": match_reason or "initial signal"}),
+            ),
+        )
+        conn.commit()
+    return {
+        "opportunity_id": str(opportunity_id),
+        "linked": bool(match),
+        "reason": match_reason or "initial signal",
+    }
+
+
+def list_opportunities(
+    settings: Settings, *, limit: int, offset: int, search: str | None = None
+) -> dict[str, Any]:
+    clauses = ["TRUE"]
+    params: list[Any] = []
+    if search:
+        clauses.append("(o.name ILIKE %s OR COALESCE(o.stage_reason, '') ILIKE %s)")
+        pattern = f"%{search[:200]}%"
+        params.extend([pattern, pattern])
+    where = " AND ".join(clauses)
+    with connection(settings) as conn:
+        total = conn.execute(
+            f"SELECT count(*) FROM opportunities o WHERE {where}", params
+        ).fetchone()[0]
+        rows = conn.execute(
+            f"""SELECT o.id, o.name, o.operator_id, o.event_type, o.lifecycle_stage, o.confidence,
+                       o.confidence_breakdown, o.stage_reason, o.first_seen_at, o.latest_update_at,
+                       count(os.raw_signal_id)
+                FROM opportunities o LEFT JOIN opportunity_signals os ON os.opportunity_id = o.id
+                WHERE {where} GROUP BY o.id ORDER BY o.latest_update_at DESC LIMIT %s OFFSET %s""",
+            [*params, limit, offset],
+        ).fetchall()
+    fields = (
+        "id",
+        "name",
+        "operator_id",
+        "event_type",
+        "lifecycle_stage",
+        "confidence",
+        "confidence_breakdown",
+        "stage_reason",
+        "first_seen_at",
+        "latest_update_at",
+        "signal_count",
+    )
+    return {
+        "items": [dict(zip(fields, row)) for row in rows],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+def opportunity_detail(settings: Settings, opportunity_id: str) -> dict[str, Any] | None:
+    with connection(settings) as conn:
+        opportunity = conn.execute(
+            """SELECT id, name, event_type, lifecycle_stage, confidence,
+                      confidence_breakdown, stage_reason, first_seen_at,
+                      latest_update_at FROM opportunities WHERE id = %s""",
+            (opportunity_id,),
+        ).fetchone()
+        if not opportunity:
+            return None
+        rows = conn.execute(
+            """SELECT rs.id, rs.source_type, rs.title, rs.external_id, rs.discovered_at,
+                      rs.source_url, rs.metadata, rs.organisation_hint, rs.location_hint,
+                      os.provenance, se.confidence, se.review_status,
+                      ai.recommendation, ai.confidence, ai.status
+               FROM opportunity_signals os JOIN raw_signals rs ON rs.id = os.raw_signal_id
+               LEFT JOIN signal_enrichments se ON se.raw_signal_id = rs.id
+               LEFT JOIN LATERAL (SELECT recommendation, confidence, status FROM signal_ai_reviews
+                 WHERE raw_signal_id = rs.id ORDER BY created_at DESC LIMIT 1) ai ON TRUE
+               WHERE os.opportunity_id = %s ORDER BY rs.discovered_at""",
+            (opportunity_id,),
+        ).fetchall()
+    fields = (
+        "id",
+        "source_type",
+        "title",
+        "external_id",
+        "discovered_at",
+        "source_url",
+        "metadata",
+        "organisation_hint",
+        "location_hint",
+        "provenance",
+        "rule_confidence",
+        "review_status",
+        "ai_recommendation",
+        "ai_confidence",
+        "ai_status",
+    )
+    return {
+        "id": opportunity[0],
+        "name": opportunity[1],
+        "event_type": opportunity[2],
+        "lifecycle_stage": opportunity[3],
+        "confidence": opportunity[4],
+        "confidence_breakdown": opportunity[5],
+        "stage_reason": opportunity[6],
+        "first_seen_at": opportunity[7],
+        "latest_update_at": opportunity[8],
+        "signals": [dict(zip(fields, row)) for row in rows],
+    }
+
+
 def ai_review_exists(
     settings: Settings, signal_id: str, model_id: str, prompt_version: str
 ) -> bool:
@@ -725,11 +947,28 @@ def get_ai_review(
         ).fetchone()
     if row is None:
         return None
-    return dict(zip(
-        ("id", "provider", "model_id", "prompt_version", "recommendation", "confidence",
-         "reason", "status", "failure_category", "attempted_at", "evaluated_at",
-         "input_tokens", "output_tokens", "latency_ms", "created_at"), row
-    ))
+    return dict(
+        zip(
+            (
+                "id",
+                "provider",
+                "model_id",
+                "prompt_version",
+                "recommendation",
+                "confidence",
+                "reason",
+                "status",
+                "failure_category",
+                "attempted_at",
+                "evaluated_at",
+                "input_tokens",
+                "output_tokens",
+                "latency_ms",
+                "created_at",
+            ),
+            row,
+        )
+    )
 
 
 def get_signal_review_status(settings: Settings, signal_id: str) -> str | None:

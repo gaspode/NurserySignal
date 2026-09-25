@@ -12,7 +12,14 @@ from app.config import Settings
 from app.db import check_connection
 from app.ingestion import NormalizedSignal
 from app.logging import configure_logging
-from app.repository import list_signals, reprocess_planning_signals, review_signal, signal_detail
+from app.repository import (
+    list_opportunities,
+    list_signals,
+    opportunity_detail,
+    reprocess_planning_signals,
+    review_signal,
+    signal_detail,
+)
 from app.service import EnrichmentQueueError, SignalConflictError, ingest_signal, parse_json_payload
 from app.shadow_review import reevaluate_ai_shadow
 from app.storage import EvidencePersistenceError, presigned_evidence_url
@@ -55,9 +62,7 @@ def _require_claims(event: dict[str, Any]) -> tuple[dict[str, Any] | None, dict[
     return claims, None
 
 
-def _require_admin(
-    claims: dict[str, Any], settings: Settings
-) -> dict[str, Any] | None:
+def _require_admin(claims: dict[str, Any], settings: Settings) -> dict[str, Any] | None:
     if settings.admin_group not in normalized_groups(claims.get("cognito:groups")):
         return _response(403, {"error": "administrator_role_required"})
     return None
@@ -84,6 +89,10 @@ def _query(event: dict[str, Any], name: str) -> str | None:
 def _admin_path(path: str) -> tuple[str, str | None]:
     if path == "/admin/planning/reprocess":
         return "reprocess", None
+    if path == "/admin/opportunities":
+        return "opportunity-list", None
+    if path.startswith("/admin/opportunities/"):
+        return "opportunity-detail", path[len("/admin/opportunities/") :]
     prefix = "/admin/signals"
     if path == prefix:
         return "list", None
@@ -221,6 +230,18 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                         search=_query(event, "q"),
                     ),
                 )
+            if action == "opportunity-list" and method == "GET":
+                limit = min(max(int(_query(event, "limit") or "25"), 1), 100)
+                offset = max(int(_query(event, "offset") or "0"), 0)
+                return _response(
+                    200,
+                    list_opportunities(
+                        settings, limit=limit, offset=offset, search=_query(event, "q")
+                    ),
+                )
+            if action == "opportunity-detail" and method == "GET" and signal_id:
+                detail = opportunity_detail(settings, signal_id)
+                return _response(200, detail) if detail else _response(404, {"error": "not_found"})
             if action == "detail" and method == "GET" and signal_id:
                 detail = signal_detail(settings, signal_id)
                 return _response(200, detail) if detail else _response(404, {"error": "not_found"})
@@ -235,9 +256,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 return _response(
                     200,
                     {
-                        "url": presigned_evidence_url(
-                            document["s3_bucket"], document["s3_key"]
-                        ),
+                        "url": presigned_evidence_url(document["s3_bucket"], document["s3_key"]),
                         "expires_in": 300,
                     },
                 )

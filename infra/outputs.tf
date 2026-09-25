@@ -46,6 +46,14 @@ output "planning_provider_secret_arn" {
   value = aws_secretsmanager_secret.planning_provider.arn
 }
 
+output "recruitment_collector_function_name" {
+  value = aws_lambda_function.recruitment_collector.function_name
+}
+
+output "recruitment_provider_secret_arn" {
+  value = aws_secretsmanager_secret.recruitment_provider.arn
+}
+
 output "cognito_user_pool_id" {
   value = aws_cognito_user_pool.main.id
 }

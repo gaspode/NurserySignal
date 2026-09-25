@@ -1,7 +1,7 @@
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { Dashboard, LoginPage, ReviewInboxPage, ReviewedSignalsPage, SignalDetail } from "./App.jsx";
+import { Dashboard, LoginPage, OpportunitiesPage, ReviewInboxPage, ReviewedSignalsPage, SignalDetail } from "./App.jsx";
 
 const pendingItem = {
   id: "signal-1",
@@ -269,6 +269,17 @@ describe("admin frontend", () => {
     render(<ReviewInboxPage apiClient={apiClient} onNavigate={vi.fn()} />);
     expect(await screen.findByRole("alert")).toHaveTextContent("API unavailable");
     expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
+  });
+
+  it("shows opportunities and links their evidence", async () => {
+    const apiClient = vi.fn()
+      .mockResolvedValueOnce({ items: [{ id: "opp-1", name: "Little Acorns Nursery", lifecycle_stage: "STAFFING", confidence: 0.93, signal_count: 2, stage_reason: "same postcode and compatible operator/nursery name", event_type: "opening" }], total: 1 })
+      .mockResolvedValueOnce({ id: "opp-1", name: "Little Acorns Nursery", lifecycle_stage: "STAFFING", confidence: 0.93, signals: [{ id: "signal-1", source_type: "planning", title: "Change of use to day nursery", discovered_at: "2026-09-20T00:00:00Z", rule_confidence: 0.86, provenance: { reason: "same postcode" } }] });
+    const onNavigate = vi.fn();
+    render(<OpportunitiesPage apiClient={apiClient} onNavigate={onNavigate} />);
+    expect(await screen.findByText("Little Acorns Nursery")).toBeInTheDocument();
+    await userEvent.click(screen.getByText("Little Acorns Nursery"));
+    expect(onNavigate).toHaveBeenCalledWith("/opportunities/opp-1");
   });
 
   it("keeps stored planning reprocess behind the custom confirmation modal", async () => {

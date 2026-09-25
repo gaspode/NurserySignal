@@ -110,6 +110,19 @@ Potential categories to investigate:
 
 Each new source should first be validated with a bounded sample before scheduled ingestion is enabled.
 
+## Phase 7 — Recruitment signals and opportunity correlation — IMPLEMENTED / VALIDATION PENDING
+
+- Selected the documented GOV.UK Find an Apprenticeship Display Advert API as the first recruitment provider. It supports bounded JSON vacancy queries, stable vacancy references and an independent subscription-key access path.
+- Reed was not selected for this first implementation because it requires a separate API key and its public documentation is less explicit about downstream data-use terms for this product. Specialist job boards and operator careers pages were deferred because they would add brittle, terms-sensitive HTML collection.
+- Recruitment records use the canonical raw-signal/evidence path with provider-prefixed stable identities, deterministic early-years role filtering and explicit new-setting/expansion facts.
+- Opportunities and signal links now support conservative v1 correlation using exact postcode plus compatible operator/nursery names, with explainable provenance and independent evidence scoring. Recruitment alone remains a weak clue and cannot create a high-confidence opening opportunity.
+- The recruitment Lambda, private evidence flow and disabled daily `rate(1 day)` schedule are deployed through Terraform. The schedule remains disabled until the GOV.UK API key is configured and a bounded live sample is manually reviewed.
+
+Validation gate:
+- configure the Display Advert API subscription key in the recruitment-provider secret;
+- run a bounded sample and inspect every childcare candidate and automatic correlation;
+- enable the schedule only after precision, idempotency and correlation safety are demonstrated.
+
 ## Phase 7 — Customer-facing product
 
 Defer external/customer access until the signal pipeline is demonstrably useful.
@@ -137,4 +150,4 @@ Do not build these before the underlying signal quality justifies them.
 
 ## Current next step
 
-Monitor shadow assessments alongside the first unattended daily runs and build the reviewed sample needed to evaluate AI agreement and error rates before considering automated decisions or another signal source.
+Configure the GOV.UK Display Advert API key, run the first bounded recruitment sample, and manually validate candidate quality and opportunity links before enabling recruitment collection.

@@ -15,6 +15,8 @@ class Settings:
     enrichment_queue_url: str | None = None
     planning_provider_secret_arn: str | None = None
     planning_provider_base_url: str = "https://api.plota.co.uk/v1"
+    recruitment_provider_secret_arn: str | None = None
+    recruitment_provider_base_url: str = "https://api.apprenticeships.education.gov.uk/vacancies"
     admin_group: str = "NurserySignalAdmins"
     ai_shadow_enabled: bool = False
     ai_model_id: str = "eu.amazon.nova-lite-v1:0"
@@ -33,6 +35,11 @@ class Settings:
             planning_provider_secret_arn=os.getenv("PLANNING_PROVIDER_SECRET_ARN") or None,
             planning_provider_base_url=os.getenv(
                 "PLANNING_PROVIDER_BASE_URL", "https://api.plota.co.uk/v1"
+            ),
+            recruitment_provider_secret_arn=os.getenv("RECRUITMENT_PROVIDER_SECRET_ARN") or None,
+            recruitment_provider_base_url=os.getenv(
+                "RECRUITMENT_PROVIDER_BASE_URL",
+                "https://api.apprenticeships.education.gov.uk/vacancies",
             ),
             admin_group=os.getenv("ADMIN_GROUP", "NurserySignalAdmins"),
             ai_shadow_enabled=os.getenv("AI_SHADOW_ENABLED", "false").lower()

@@ -8,7 +8,13 @@ from app.config import Settings
 from app.enrichment import fixture_enrichment
 from app.logging import configure_logging
 from app.queueing import EnrichmentMessage
-from app.repository import ai_review_exists, get_raw_signal, save_ai_review, save_enrichment
+from app.repository import (
+    ai_review_exists,
+    correlate_signal,
+    get_raw_signal,
+    save_ai_review,
+    save_enrichment,
+)
 
 logger = configure_logging()
 
@@ -21,7 +27,17 @@ def process_message(settings: Settings, body: str) -> None:
         raise ValueError("enrichment message references an unknown signal")
     candidate = fixture_enrichment(raw)
     created = save_enrichment(settings, candidate)
-    logger.info("enrichment signal_id=%s created=%s", message.signal_id, created)
+    candidate["metadata"] = {**(raw.get("metadata") or {}), "source_type": raw.get("source_type")}
+    opportunity = {"opportunity_id": "disabled", "linked": False}
+    if getattr(settings, "database_url", None) or getattr(settings, "db_secret_arn", None):
+        opportunity = correlate_signal(settings, message.signal_id, candidate)
+    logger.info(
+        "enrichment signal_id=%s created=%s opportunity_id=%s linked=%s",
+        message.signal_id,
+        created,
+        opportunity["opportunity_id"],
+        opportunity["linked"],
+    )
     if getattr(settings, "ai_shadow_enabled", False):
         model_id = getattr(settings, "ai_model_id", "eu.amazon.nova-lite-v1:0")
         prompt_version = getattr(settings, "ai_prompt_version", "shadow-v1")

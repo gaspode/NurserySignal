@@ -200,6 +200,7 @@ function Shell({ user, onLogout, onNavigate, currentPath, children }) {
           <button className={currentPath === "/" ? "nav-link active" : "nav-link"} onClick={() => onNavigate("/")}>Overview</button>
           <button className={route.startsWith("/inbox") ? "nav-link active" : "nav-link"} onClick={() => onNavigate("/inbox")}>Review Inbox</button>
           <button className={route.startsWith("/history") ? "nav-link active" : "nav-link"} onClick={() => onNavigate("/history")}>Reviewed Signals</button>
+          <button className={route.startsWith("/opportunities") ? "nav-link active" : "nav-link"} onClick={() => onNavigate("/opportunities")}>Opportunities</button>
         </nav>
         <div className="sidebar-bottom">
           <span className="connection-dot" /> Production workspace
@@ -365,6 +366,24 @@ export function ReviewInboxPage(props) { return <SignalListPage {...props} mode=
 export function ReviewedSignalsPage(props) { return <SignalListPage {...props} mode="history" />; }
 export function SignalsPage(props) { return <ReviewInboxPage {...props} />; }
 
+export function OpportunitiesPage({ apiClient, onNavigate }) {
+  const [result, setResult] = useState(null);
+  const [search, setSearch] = useState("");
+  const [page, setPage] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const load = async () => { setLoading(true); setError(""); try { const params = new URLSearchParams({ limit: PAGE_SIZE, offset: page * PAGE_SIZE }); if (search) params.set("q", search); setResult(await apiClient(`/admin/opportunities?${params}`)); } catch (e) { setError(e.message); } finally { setLoading(false); } };
+  useEffect(() => { load(); }, [page]);
+  return <section><div className="page-heading"><div><p className="eyebrow">Commercial evidence</p><h1>Opportunities</h1><p className="muted">Facilities supported by one or more independent signals.</p></div><RefreshButton busy={loading} onClick={load} /></div><div className="filter-bar"><label>Search<input aria-label="Search opportunities" type="search" value={search} onChange={(event) => setSearch(event.target.value)} onKeyDown={(event) => event.key === "Enter" && (setPage(0), load())} placeholder="Name or explanation…" /></label><button className="button secondary" onClick={() => { setSearch(""); setPage(0); }}>Reset</button></div>{error && <ErrorState message={error} onRetry={load} />}{loading && !result && <LoadingState label="Loading opportunities" />}{result?.items?.length === 0 && <div className="state-card"><strong>No opportunities yet.</strong><p className="muted">Opportunities appear after signals are enriched.</p></div>}{result?.items?.length > 0 && <><div className="table-wrap"><table><thead><tr><th>Opportunity</th><th>Lifecycle</th><th>Confidence</th><th>Evidence</th><th>Why</th></tr></thead><tbody>{result.items.map((item) => <tr className="clickable-row" key={item.id} onClick={() => onNavigate(`/opportunities/${item.id}`)}><td><strong>{item.name}</strong><span className="cell-subtitle">{titleCase(item.event_type)}</span></td><td><Badge>{titleCase(item.lifecycle_stage)}</Badge></td><td>{Math.round((item.confidence || 0) * 100)}%</td><td>{item.signal_count}</td><td>{item.stage_reason || "—"}</td></tr>)}</tbody></table></div><div className="pagination"><span>Page {page + 1} of {Math.max(1, Math.ceil(result.total / PAGE_SIZE))}</span><div><button className="button secondary" disabled={page === 0} onClick={() => setPage((value) => value - 1)}>Previous</button><button className="button secondary" disabled={(page + 1) * PAGE_SIZE >= result.total} onClick={() => setPage((value) => value + 1)}>Next</button></div></div></>}</section>;
+}
+
+export function OpportunityDetail({ opportunityId, apiClient, onBack }) {
+  const [opportunity, setOpportunity] = useState(null); const [error, setError] = useState("");
+  useEffect(() => { apiClient(`/admin/opportunities/${opportunityId}`).then(setOpportunity).catch((e) => setError(e.message)); }, [opportunityId]);
+  if (error) return <ErrorState message={error} />; if (!opportunity) return <LoadingState label="Loading opportunity" />;
+  return <section><button className="back-link" onClick={onBack}>← Back to Opportunities</button><div className="page-heading"><div><p className="eyebrow">Opportunity evidence</p><h1>{opportunity.name}</h1><p className="muted">{titleCase(opportunity.lifecycle_stage)} · {Math.round((opportunity.confidence || 0) * 100)}% opportunity confidence</p></div><Badge>{titleCase(opportunity.lifecycle_stage)}</Badge></div><div className="panel"><h2>Evidence timeline</h2>{opportunity.signals.map((signal) => <article className="timeline-item" key={signal.id}><div><Badge>{titleCase(signal.source_type)}</Badge><strong>{signal.title}</strong><span className="cell-subtitle">{formatDate(signal.discovered_at)} · Rule confidence {signal.rule_confidence == null ? "—" : `${Math.round(signal.rule_confidence * 100)}%`}</span></div><p className="muted">{signal.provenance?.reason || "Linked by deterministic v1 correlation."}</p><button className="button ghost" onClick={() => window.location.hash = `/history/${signal.id}`}>Open signal</button>{signal.ai_status === "SUCCEEDED" && <span className="cell-subtitle">AI shadow: {titleCase(signal.ai_recommendation)} · {Math.round(signal.ai_confidence * 100)}%</span>}</article>)}</div><div className="panel"><h2>Correlation explanation</h2><p>{opportunity.stage_reason || "Evidence collected from the signal pipeline."}</p><pre>{JSON.stringify(opportunity.confidence_breakdown || {}, null, 2)}</pre></div></section>;
+}
+
 function SignalRow({ item, onClick }) {
   const council = item.metadata?.council;
   const aiLabel = item.ai_status === "SUCCEEDED" && item.ai_recommendation
@@ -475,9 +494,10 @@ export default function App() {
   const route = path.split("?")[0];
   const listQuery = path.includes("?") ? path.split("?")[1] : "";
   const detailMatch = route.match(/^\/(inbox|history)\/([^/?#]+)/);
+  const opportunityMatch = route.match(/^\/opportunities\/([^/?#]+)/);
   const detailMode = detailMatch?.[1] === "inbox" ? "inbox" : "history";
   const detailNotice = new URLSearchParams(listQuery).get("notice") || "";
   return <Shell user={auth.user} onLogout={auth.logout} onNavigate={navigate} currentPath={path}>
-    {detailMatch ? <SignalDetail signalId={detailMatch[2]} apiClient={apiClient} queueMode={detailMode === "inbox"} initialNotice={detailNotice} onBack={() => navigate(detailMode === "inbox" ? "/inbox" : "/history")} onReviewed={({ message, nextId }) => navigate(nextId ? `/inbox/${nextId}?notice=${encodeURIComponent(message)}` : `/inbox?notice=${encodeURIComponent(message)}`)} /> : route === "/inbox" ? <ReviewInboxPage apiClient={apiClient} onNavigate={navigate} initialQuery={listQuery} /> : route === "/history" ? <ReviewedSignalsPage apiClient={apiClient} onNavigate={navigate} initialQuery={listQuery} /> : <Dashboard apiClient={apiClient} onNavigate={navigate} />}
+    {detailMatch ? <SignalDetail signalId={detailMatch[2]} apiClient={apiClient} queueMode={detailMode === "inbox"} initialNotice={detailNotice} onBack={() => navigate(detailMode === "inbox" ? "/inbox" : "/history")} onReviewed={({ message, nextId }) => navigate(nextId ? `/inbox/${nextId}?notice=${encodeURIComponent(message)}` : `/inbox?notice=${encodeURIComponent(message)}`)} /> : opportunityMatch ? <OpportunityDetail opportunityId={opportunityMatch[1]} apiClient={apiClient} onBack={() => navigate("/opportunities")} /> : route === "/inbox" ? <ReviewInboxPage apiClient={apiClient} onNavigate={navigate} initialQuery={listQuery} /> : route === "/history" ? <ReviewedSignalsPage apiClient={apiClient} onNavigate={navigate} initialQuery={listQuery} /> : route === "/opportunities" ? <OpportunitiesPage apiClient={apiClient} onNavigate={navigate} /> : <Dashboard apiClient={apiClient} onNavigate={navigate} />}
   </Shell>;
 }
