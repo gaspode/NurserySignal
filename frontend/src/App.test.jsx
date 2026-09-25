@@ -159,6 +159,23 @@ describe("admin frontend", () => {
     expect(screen.queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();
   });
 
+  it("shows recruitment role, setting, routine relevance and change evidence", async () => {
+    const value = detail();
+    value.source_type = "recruitment";
+    value.enrichment.extracted_facts = {
+      recruitment_role_category: "teaching_assistant",
+      recruitment_setting_category: "school_with_nursery",
+      recruitment_relevance: "RELEVANT_ROUTINE",
+      commercial_change_evidence: "NONE",
+    };
+    const apiClient = vi.fn().mockResolvedValue(value);
+    render(<SignalDetail signalId="signal-1" apiClient={apiClient} onBack={vi.fn()} />);
+    expect(await screen.findByText("Teaching Assistant")).toBeInTheDocument();
+    expect(screen.getByText("School With Nursery")).toBeInTheDocument();
+    expect(screen.getByText("RELEVANT ROUTINE")).toBeInTheDocument();
+    expect(screen.getByText("NONE")).toBeInTheDocument();
+  });
+
   it("runs an advisory AI assessment without changing human review state", async () => {
     const apiClient = vi.fn()
       .mockResolvedValueOnce(detail())

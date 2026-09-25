@@ -4,7 +4,7 @@ from contextlib import contextmanager
 from uuid import uuid4
 
 from app.config import Settings
-from app.repository import reprocess_planning_signals
+from app.repository import reprocess_planning_signals, reprocess_recruitment_signals
 
 
 class FakeConnection:
@@ -114,3 +114,38 @@ def test_reprocess_repeat_is_reclassification_not_ingestion(monkeypatch):
     # Each invocation has one legitimate operation audit row; neither run
     # creates an ingestion, evidence, or enrichment-queue operation.
     assert first_fake.audit_inserts == second_fake.audit_inserts == 1
+
+
+def test_recruitment_reprocess_updates_pending_and_preserves_reviewed_state(monkeypatch):
+    row = list(stored_row("PENDING", "Teaching Assistant Apprentice"))
+    row[2] = "recruitment"
+    row[3] = "https://example.test/vacancy/1"
+    row[4] = "govuk-apprenticeships:1"
+    row[8] = "Stephenson Way, DL5 7DD"
+    row[9] = "TUDHOE LEARNING TRUST"
+    row[10] = {
+        "provider": "govuk-apprenticeships",
+        "postcode": "DL5 7DD",
+        "provider_record": {
+            "vacancyReference": "1",
+            "title": "Teaching Assistant Apprentice",
+            "description": "Stephenson Way Academy & Nursery School.",
+            "employer": {"name": "TUDHOE LEARNING TRUST"},
+            "addresses": [{"addressLine1": "Stephenson Way", "postcode": "DL5 7DD"}],
+        },
+    }
+    fake = FakeConnection([tuple(row)])
+
+    @contextmanager
+    def fake_connection(settings):
+        yield fake
+
+    monkeypatch.setattr("app.repository.connection", fake_connection)
+    result = reprocess_recruitment_signals(Settings(), actor="admin-1", limit=25)
+
+    assert result["selected"] == 1
+    assert result["pending_updated"] == 1
+    assert result["matched"] == 1
+    assert result["excluded"] == 0
+    assert fake.audit_inserts == 1
+    assert all("source_documents" not in sql for sql, _ in fake.statements)

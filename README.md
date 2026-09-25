@@ -51,8 +51,10 @@ Enriched planning and recruitment signals can be linked to an Opportunity.
 Version-one correlation requires an exact postcode plus compatible
 operator/nursery names; same-town, same-chain and generic-name matches are not
 sufficient. Links retain a deterministic reason and original signals remain
-independently reviewable. Recruitment-only opportunities remain weak until
-independent evidence is linked.
+independently reviewable. Recruitment classification separates role from
+setting, preserves school-based nursery recruitment as relevant routine
+evidence, and distinguishes routine vacancies from explicit change evidence.
+Recruitment-only opportunities remain weak until independent evidence is linked.
 
 ## Ingestion vertical slice
 
@@ -65,7 +67,7 @@ The enrichment Lambda applies deterministic fixture classification and stores a
 `PENDING` candidate in `signal_enrichments`. New enrichment messages also get a
 separate advisory Bedrock shadow assessment in `signal_ai_reviews`; it never
 changes deterministic fields or human review state. The initial configurable
-model is `amazon.nova-lite-v1:0` with prompt version `shadow-v1`. Authenticated admins can
+model is `amazon.nova-lite-v1:0` with prompt version `shadow-v2`. Authenticated admins can
 inspect and review candidates with:
 
 - `GET /admin/signals`
@@ -73,6 +75,9 @@ inspect and review candidates with:
 - `GET /admin/signals/{id}`
 - `POST /admin/signals/{id}/approve`
 - `POST /admin/signals/{id}/reject`
+- `POST /admin/recruitment/reprocess` for bounded, stored-evidence-only
+  administrator reclassification; it preserves reviewed decisions and does not
+  create new evidence or queue messages.
 
 The admin frontend uses `GET /admin/signals/{id}/evidence` to obtain a
 five-minute presigned URL for the private raw JSON evidence object. The

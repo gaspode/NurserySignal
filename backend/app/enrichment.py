@@ -57,7 +57,11 @@ def fixture_enrichment(
     elif recruitment_candidate is not None and recruitment_candidate["matched"]:
         event_type, lifecycle_stage = "other", "RECRUITING"
         confidence = recruitment_candidate["confidence"]
-        classification = "recruitment-role"
+        classification = (
+            "recruitment-change"
+            if recruitment_candidate["relevance"] == "RELEVANT_CHANGE"
+            else "recruitment-routine"
+        )
         if recruitment_candidate["explicit_change_terms"]:
             event_type = "opening"
     elif any(word in text for word in ("announce", "opening", "new nursery", "chain")):
@@ -110,6 +114,32 @@ def fixture_enrichment(
             if recruitment_candidate
             else None,
             "recruitment_role_categories": recruitment_candidate["role_categories"]
+            if recruitment_candidate
+            else [],
+            "recruitment_role_category": recruitment_candidate["role_category"]
+            if recruitment_candidate
+            else "unknown",
+            "recruitment_setting_categories": recruitment_candidate["setting_categories"]
+            if recruitment_candidate
+            else [],
+            "recruitment_setting_category": recruitment_candidate["setting_category"]
+            if recruitment_candidate
+            else "unknown",
+            "recruitment_relevance": recruitment_candidate["relevance"]
+            if recruitment_candidate
+            else "unknown",
+            "commercial_change_evidence": recruitment_candidate[
+                "commercial_change_evidence"
+            ]
+            if recruitment_candidate
+            else "NONE",
+            "recruitment_matched_role_terms": recruitment_candidate["matched_role_terms"]
+            if recruitment_candidate
+            else [],
+            "recruitment_matched_setting_terms": recruitment_candidate["matched_setting_terms"]
+            if recruitment_candidate
+            else [],
+            "recruitment_ambiguity_flags": recruitment_candidate["ambiguity_flags"]
             if recruitment_candidate
             else [],
             "recruitment_explicit_change_terms": recruitment_candidate["explicit_change_terms"]

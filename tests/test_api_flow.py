@@ -296,3 +296,56 @@ def test_planning_reprocess_rejects_unbounded_id_lists() -> None:
         None,
     )
     assert response["statusCode"] == 400
+
+
+def test_recruitment_reprocess_is_admin_only_and_bounded(monkeypatch) -> None:
+    expected = {
+        "operation_id": "operation-2",
+        "selected": 3,
+        "pending_updated": 3,
+        "reviewed_preserved": 0,
+        "matched": 3,
+        "excluded": 0,
+    }
+    captured = {}
+
+    def fake_reprocess(settings, **kwargs):
+        captured.update(kwargs)
+        return expected
+
+    monkeypatch.setattr("app.handler.reprocess_recruitment_signals", fake_reprocess)
+    denied = handler(
+        event(
+            "/admin/recruitment/reprocess",
+            "POST",
+            body=json.dumps({"limit": 200}),
+            claims=CLAIMS,
+        ),
+        None,
+    )
+    assert denied["statusCode"] == 403
+    response = handler(
+        event(
+            "/admin/recruitment/reprocess",
+            "POST",
+            body=json.dumps({"limit": 200, "signal_ids": [str(uuid4())]}),
+            claims={**CLAIMS, "cognito:groups": ["NurserySignalAdmins"]},
+        ),
+        None,
+    )
+    assert response["statusCode"] == 200
+    assert captured["limit"] == 100
+    assert len(captured["signal_ids"]) == 1
+
+
+def test_recruitment_reprocess_rejects_unbounded_id_lists() -> None:
+    response = handler(
+        event(
+            "/admin/recruitment/reprocess",
+            "POST",
+            body=json.dumps({"limit": 1, "signal_ids": [str(uuid4()), str(uuid4())]}),
+            claims={**CLAIMS, "cognito:groups": ["NurserySignalAdmins"]},
+        ),
+        None,
+    )
+    assert response["statusCode"] == 400

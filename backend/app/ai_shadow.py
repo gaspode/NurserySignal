@@ -20,16 +20,18 @@ from app.logging import configure_logging
 
 logger = configure_logging()
 ALLOWED_RECOMMENDATIONS = {"APPROVE", "REJECT", "NEEDS_HUMAN"}
-PROMPT_VERSION = "shadow-v1"
-SYSTEM_PROMPT = """NurserySignal shadow review, prompt version shadow-v1.
-Decide whether this UK planning/source signal is commercially useful to a supplier
-of nursery and early-years equipment or services. Judge the proposed change, not
-just the word nursery. APPROVE new/expanded day nurseries, pre-schools, school
-nurseries, early-years accommodation or credible openings. REJECT horticultural,
-plant or tree nurseries, address-only terms, nearby existing nurseries, stale
-follow-ups, incidental childcare references and obvious test data. Use
-NEEDS_HUMAN when evidence is ambiguous or insufficient. Return JSON only:
-{"recommendation":"APPROVE|REJECT|NEEDS_HUMAN","confidence":0.0,"reason":"brief reason"}."""
+PROMPT_VERSION = "shadow-v2"
+SYSTEM_PROMPT = """NurserySignal shadow review, prompt version shadow-v2.
+Assess whether this UK source is commercially useful to a supplier of nursery and
+early-years equipment or services. Separate setting relevance from evidence of a
+new opening or expansion. Routine recruitment at an existing nursery or
+nursery-school can be relevant, but does not prove commercial change. APPROVE
+credible nursery/early-years signals, including school-based nursery provision;
+REJECT horticultural/plant/tree nursery roles, address-only terms, unrelated
+school roles, stale follow-ups and incidental references. Use NEEDS_HUMAN when
+evidence is ambiguous. Return strict JSON only:
+{"recommendation":"APPROVE|REJECT|NEEDS_HUMAN","confidence":0.0,
+"reason":"brief reason","commercial_change_evidence":"NONE|WEAK|STRONG"}."""
 
 
 def _input_for_model(raw: dict[str, Any]) -> dict[str, Any]:
@@ -66,6 +68,7 @@ def _failure(settings: Settings, category: str, started: float) -> dict[str, Any
         "recommendation": None,
         "confidence": None,
         "reason": None,
+        "commercial_change_evidence": None,
         "failure_category": category,
         "attempted_at": time.time(),
         "evaluated_at": None,
@@ -89,12 +92,15 @@ def _parse(response: dict[str, Any], settings: Settings, started: float) -> dict
     recommendation = parsed.get("recommendation")
     confidence = parsed.get("confidence")
     reason = parsed.get("reason")
+    change_evidence = parsed.get("commercial_change_evidence", "NONE")
     if recommendation not in ALLOWED_RECOMMENDATIONS or not isinstance(confidence, (int, float)):
         raise ValueError("invalid structured response")
     if not math.isfinite(float(confidence)) or not 0 <= float(confidence) <= 1:
         raise ValueError("confidence outside range")
     if not isinstance(reason, str) or not reason.strip():
         raise ValueError("missing reason")
+    if change_evidence not in {"NONE", "WEAK", "STRONG"}:
+        raise ValueError("invalid commercial change evidence")
     usage = response.get("usage") or {}
     return {
         "provider": "BEDROCK",
@@ -104,6 +110,7 @@ def _parse(response: dict[str, Any], settings: Settings, started: float) -> dict
         "recommendation": recommendation,
         "confidence": float(confidence),
         "reason": reason.strip()[:500],
+        "commercial_change_evidence": change_evidence,
         "failure_category": None,
         "attempted_at": time.time(),
         "evaluated_at": time.time(),

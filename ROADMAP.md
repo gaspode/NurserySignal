@@ -115,8 +115,11 @@ Each new source should first be validated with a bounded sample before scheduled
 - Selected the documented GOV.UK Find an Apprenticeship Display Advert API as the first recruitment provider. It supports bounded JSON vacancy queries, stable vacancy references and an independent subscription-key access path.
 - Reed was not selected for this first implementation because it requires a separate API key and its public documentation is less explicit about downstream data-use terms for this product. Specialist job boards and operator careers pages were deferred because they would add brittle, terms-sensitive HTML collection.
 - Recruitment records use the canonical raw-signal/evidence path with provider-prefixed stable identities, deterministic early-years role filtering and explicit new-setting/expansion facts.
+- Recruitment classification now separates role evidence from setting evidence, preserves school-based nursery recruitment as relevant routine evidence, captures GOV.UK `addresses` postcodes, and distinguishes routine versus strong commercial-change evidence.
 - Opportunities and signal links now support conservative v1 correlation using exact postcode plus compatible operator/nursery names, with explainable provenance and independent evidence scoring. Recruitment alone remains a weak clue and cannot create a high-confidence opening opportunity.
+- Bedrock recruitment shadow assessments use versioned `shadow-v2` output with a separate commercial-change assessment; AI remains advisory-only.
 - The recruitment Lambda, private evidence flow and disabled daily `rate(1 day)` schedule are deployed through Terraform. The schedule remains disabled until the GOV.UK API key is configured and a bounded live sample is manually reviewed.
+- A bounded admin-only recruitment reprocess operation is available for stored evidence and preserves human review history without creating ingestion, evidence or queue artefacts.
 - GOV.UK provider requests use a stable identifying User-Agent, trim secret-key whitespace, and expose only bounded/redacted provider error diagnostics for safe operational troubleshooting.
 
 Validation gate:

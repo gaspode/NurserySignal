@@ -9,7 +9,7 @@ from psycopg.types.json import Jsonb
 
 from app.classification import CLASSIFICATION_RULE_VERSION
 from app.config import Settings
-from app.correlation import deterministic_match
+from app.correlation import deterministic_match, recruitment_evidence_strength
 from app.db import connection
 from app.enrichment import fixture_enrichment
 from app.ingestion import NormalizedSignal
@@ -398,7 +398,8 @@ def signal_detail(settings: Settings, signal_id: str) -> dict[str, Any] | None:
         ).fetchall()
         ai_reviews = conn.execute(
             """SELECT id, provider, model_id, prompt_version, recommendation, confidence,
-                      reason, status, failure_category, attempted_at, evaluated_at,
+                      reason, commercial_change_evidence, status, failure_category,
+                      attempted_at, evaluated_at,
                       input_tokens, output_tokens, latency_ms, created_at
                FROM signal_ai_reviews WHERE raw_signal_id = %s ORDER BY created_at DESC""",
             (signal_id,),
@@ -437,6 +438,7 @@ def signal_detail(settings: Settings, signal_id: str) -> dict[str, Any] | None:
                     "recommendation",
                     "confidence",
                     "reason",
+                    "commercial_change_evidence",
                     "status",
                     "failure_category",
                     "attempted_at",
@@ -650,6 +652,133 @@ def reprocess_planning_signals(
     )
 
 
+def reprocess_recruitment_signals(
+    settings: Settings,
+    *,
+    actor: str,
+    limit: int,
+    signal_ids: list[str] | None = None,
+) -> dict[str, Any]:
+    """Reclassify stored recruitment evidence without re-ingesting it."""
+    clauses = ["rs.source_type = 'recruitment'"]
+    params: list[Any] = []
+    if signal_ids:
+        clauses.append("rs.id = ANY(%s::uuid[])")
+        params.append(signal_ids)
+    where = " AND ".join(clauses)
+    with connection(settings) as conn:
+        rows = conn.execute(
+            f"""
+            SELECT rs.id, rs.schema_version, rs.source_type, rs.source_url,
+                   rs.external_id, rs.discovered_at, rs.title, rs.raw_text,
+                   rs.location_hint, rs.organisation_hint, rs.metadata,
+                   se.review_status
+            FROM raw_signals rs
+            LEFT JOIN signal_enrichments se ON se.raw_signal_id = rs.id
+            WHERE {where}
+            ORDER BY rs.discovered_at DESC, rs.id DESC
+            LIMIT %s
+            """,
+            [*params, limit],
+        ).fetchall()
+        operation_id = conn.execute(
+            """
+            INSERT INTO admin_audit_events (action, actor, target_type, details)
+            VALUES ('recruitment_reprocess', %s, 'raw_signal', '{}'::jsonb)
+            RETURNING id
+            """,
+            (actor,),
+        ).fetchone()[0]
+        pending_updated = 0
+        reviewed_preserved = 0
+        without_enrichment = 0
+        matched = 0
+        excluded = 0
+        for row in rows:
+            raw = dict(
+                zip(
+                    (
+                        "id", "schema_version", "source_type", "source_url", "external_id",
+                        "discovered_at", "title", "raw_text", "location_hint",
+                        "organisation_hint", "metadata", "review_status",
+                    ),
+                    row,
+                )
+            )
+            if raw["review_status"] is None:
+                without_enrichment += 1
+                continue
+            candidate = fixture_enrichment(raw)
+            candidate_matched = bool(
+                candidate["extracted_facts"].get("recruitment_candidate_matched")
+            )
+            matched += int(candidate_matched)
+            excluded += int(not candidate_matched)
+            if raw["review_status"] == "PENDING":
+                conn.execute(
+                    """
+                    UPDATE signal_enrichments
+                    SET schema_version = %s, event_type = %s, nursery_name = %s,
+                        operator_name = %s, address = %s, expected_opening_date = %s,
+                        capacity = %s, lifecycle_stage = %s, confidence = %s,
+                        extracted_facts = %s, evidence = %s, updated_at = now()
+                    WHERE raw_signal_id = %s AND review_status = 'PENDING'
+                    """,
+                    (
+                        candidate["schema_version"],
+                        candidate["event_type"],
+                        candidate["nursery_name"],
+                        candidate["operator_name"],
+                        candidate["address"],
+                        candidate["expected_opening_date"],
+                        candidate["capacity"],
+                        candidate["lifecycle_stage"],
+                        candidate["confidence"],
+                        Jsonb(candidate["extracted_facts"]),
+                        Jsonb(candidate["evidence"]),
+                        raw["id"],
+                    ),
+                )
+                pending_updated += 1
+            else:
+                evaluation = {
+                    "recruitment_rule_version": "recruitment-v2",
+                    "recruitment_candidate_matched": candidate_matched,
+                    "relevance": candidate["extracted_facts"].get("recruitment_relevance"),
+                    "commercial_change_evidence": candidate["extracted_facts"].get(
+                        "commercial_change_evidence"
+                    ),
+                    "evaluated_at": datetime.now(UTC).isoformat(),
+                    "operation_id": str(operation_id),
+                }
+                conn.execute(
+                    """
+                    UPDATE signal_enrichments
+                    SET extracted_facts = extracted_facts || %s, updated_at = now()
+                    WHERE raw_signal_id = %s AND review_status IN ('APPROVED', 'REJECTED')
+                    """,
+                    (Jsonb({"latest_recruitment_reprocess_evaluation": evaluation}), raw["id"]),
+                )
+                reviewed_preserved += 1
+        details = {
+            "limit": limit,
+            "explicit_id_count": len(signal_ids or []),
+            "selected": len(rows),
+            "pending_updated": pending_updated,
+            "reviewed_preserved": reviewed_preserved,
+            "without_enrichment": without_enrichment,
+            "matched": matched,
+            "excluded": excluded,
+            "recruitment_rule_version": "recruitment-v2",
+        }
+        conn.execute(
+            "UPDATE admin_audit_events SET target_count = %s, details = %s WHERE id = %s",
+            (len(rows), Jsonb(details), operation_id),
+        )
+        conn.commit()
+    return {"operation_id": str(operation_id), **details}
+
+
 def review_signal(settings: Settings, signal_id: str, status: str, reviewer: str | None) -> bool:
     with connection(settings) as conn:
         row = conn.execute(
@@ -711,6 +840,11 @@ def correlate_signal(
     operator = candidate.get("operator_name")
     base_confidence = float(candidate.get("confidence") or 0.2)
     source_type = str(metadata.get("source_type") or "")
+    recruitment_contribution, recruitment_reason = recruitment_evidence_strength(candidate)
+    if source_type == "recruitment" and recruitment_contribution == 0:
+        base_confidence = min(base_confidence, 0.35)
+    elif source_type == "recruitment" and recruitment_contribution == 0.05:
+        base_confidence = min(base_confidence, 0.55)
     with connection(settings) as conn:
         existing = conn.execute(
             """SELECT o.id, o.name, o.operator_id, o.lifecycle_stage, o.confidence,
@@ -757,20 +891,30 @@ def correlate_signal(
             unique_sources = {
                 item.get("source_type") for item in evidence if isinstance(item, dict)
             }
-            confidence = min(
-                0.98,
-                max(float(match[4] or 0), base_confidence)
-                + (0.18 if len(unique_sources) > 1 else 0),
-            )
+            confidence = min(0.98, max(float(match[4] or 0), base_confidence))
+            if source_type == "recruitment":
+                confidence = min(0.98, confidence + recruitment_contribution)
             stage = (
-                "STAFFING" if len(unique_sources) > 1 and source_type == "recruitment" else match[3]
+                "STAFFING"
+                if len(unique_sources) > 1
+                and source_type == "recruitment"
+                and recruitment_contribution > 0.05
+                else match[3]
             )
             conn.execute(
                 """UPDATE opportunities SET confidence = %s, lifecycle_stage = %s,
                    confidence_breakdown = %s, stage_reason = %s,
                    latest_update_at = now(), updated_at = now()
                    WHERE id = %s""",
-                (confidence, stage, Jsonb(breakdown), match_reason, opportunity_id),
+                (
+                    confidence,
+                    stage,
+                    Jsonb(breakdown),
+                    f"{match_reason}; {recruitment_reason}"
+                    if source_type == "recruitment"
+                    else match_reason,
+                    opportunity_id,
+                ),
             )
         else:
             opportunity_id = conn.execute(
@@ -797,7 +941,7 @@ def correlate_signal(
                     ),
                     "planning evidence"
                     if source_type == "planning"
-                    else "recruitment clue only; not evidence of opening",
+                    else recruitment_reason,
                 ),
             ).fetchone()[0]
         conn.execute(
@@ -937,7 +1081,8 @@ def get_ai_review(
     with connection(settings) as conn:
         row = conn.execute(
             """SELECT id, provider, model_id, prompt_version, recommendation, confidence,
-                      reason, status, failure_category, attempted_at, evaluated_at,
+                      reason, commercial_change_evidence, status, failure_category,
+                      attempted_at, evaluated_at,
                       input_tokens, output_tokens, latency_ms, created_at
                FROM signal_ai_reviews
                WHERE raw_signal_id = %s AND provider = 'BEDROCK'
@@ -957,6 +1102,7 @@ def get_ai_review(
                 "recommendation",
                 "confidence",
                 "reason",
+                "commercial_change_evidence",
                 "status",
                 "failure_category",
                 "attempted_at",
@@ -985,9 +1131,10 @@ def save_ai_review(settings: Settings, signal_id: str, review: dict[str, Any]) -
         row = conn.execute(
             """INSERT INTO signal_ai_reviews (
                 raw_signal_id, provider, model_id, prompt_version, recommendation,
-                confidence, reason, status, failure_category, attempted_at,
+                confidence, reason, commercial_change_evidence, status,
+                failure_category, attempted_at,
                 evaluated_at, input_tokens, output_tokens, latency_ms
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s,
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                       to_timestamp(%s), to_timestamp(%s), %s, %s, %s)
             ON CONFLICT (raw_signal_id, provider, model_id, prompt_version) DO NOTHING
             RETURNING id""",
@@ -999,6 +1146,7 @@ def save_ai_review(settings: Settings, signal_id: str, review: dict[str, Any]) -
                 review.get("recommendation"),
                 review.get("confidence"),
                 review.get("reason"),
+                review.get("commercial_change_evidence"),
                 review["status"],
                 review.get("failure_category"),
                 review["attempted_at"],

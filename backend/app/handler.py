@@ -17,6 +17,7 @@ from app.repository import (
     list_signals,
     opportunity_detail,
     reprocess_planning_signals,
+    reprocess_recruitment_signals,
     review_signal,
     signal_detail,
 )
@@ -89,6 +90,8 @@ def _query(event: dict[str, Any], name: str) -> str | None:
 def _admin_path(path: str) -> tuple[str, str | None]:
     if path == "/admin/planning/reprocess":
         return "reprocess", None
+    if path == "/admin/recruitment/reprocess":
+        return "recruitment-reprocess", None
     if path == "/admin/opportunities":
         return "opportunity-list", None
     if path.startswith("/admin/opportunities/"):
@@ -207,6 +210,28 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                         "matched": result.matched,
                         "excluded": result.excluded,
                     },
+                )
+            if action == "recruitment-reprocess" and method == "POST":
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                payload = parse_json_payload(_raw_body(event))
+                limit = min(max(int(payload.get("limit", 25)), 1), 100)
+                signal_ids = payload.get("signal_ids")
+                if signal_ids is not None:
+                    if (
+                        not isinstance(signal_ids, list)
+                        or not signal_ids
+                        or len(signal_ids) > limit
+                    ):
+                        raise ValueError("signal_ids must be a non-empty list within the limit")
+                    signal_ids = [str(UUID(str(value))) for value in signal_ids]
+                actor = str(claims.get("sub") or claims.get("username") or "unknown")
+                return _response(
+                    200,
+                    reprocess_recruitment_signals(
+                        settings, actor=actor, limit=limit, signal_ids=signal_ids
+                    ),
                 )
             if action == "ai-review" and method == "POST" and signal_id:
                 admin_error = _require_admin(claims, settings)

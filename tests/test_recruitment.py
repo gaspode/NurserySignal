@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import UTC, datetime
 from io import BytesIO
 from urllib.error import HTTPError
 
 import pytest
 from app.config import Settings
-from app.correlation import deterministic_match
+from app.correlation import deterministic_match, recruitment_evidence_strength
 from app.recruitment import (
     GovApprenticeshipProvider,
     RecruitmentQuery,
@@ -80,6 +81,94 @@ def test_normalization_preserves_reference_and_location() -> None:
         recruitment_signal(record, classify_recruitment(record))["external_id"]
         == "govuk-apprenticeships:VAC-99"
     )
+
+
+def test_gov_addresses_shape_preserves_teaching_assistant_postcode() -> None:
+    record = normalize_gov_vacancy(
+        {
+            "vacancyReference": "VAC-TA-1",
+            "title": "Teaching Assistant Apprentice",
+            "description": (
+                "Stephenson Way Academy & Nursery School offer the opportunity "
+                "for achievement and development."
+            ),
+            "employer": {"name": "TUDHOE LEARNING TRUST"},
+            "addresses": [{"addressLine1": "Stephenson Way", "postcode": "DL5 7DD"}],
+            "course": {"route": "Education and early years", "title": "Teaching assistant"},
+        },
+        "https://api.apprenticeships.education.gov.uk/vacancies",
+    )
+    assert record.address == "Stephenson Way"
+    assert record.postcode == "DL5 7DD"
+    decision = classify_recruitment(record)
+    assert decision["role_category"] == "teaching_assistant"
+    assert "school_with_nursery" in decision["setting_categories"]
+    assert decision["relevance"] == "RELEVANT_ROUTINE"
+    assert decision["commercial_change_evidence"] == "NONE"
+    assert decision["confidence"] < 0.8
+
+
+def test_recruitment_role_and_setting_evidence_are_separate() -> None:
+    teaching_assistant = classify_recruitment(
+        vacancy(
+            "Teaching Assistant Apprentice",
+            "Stephenson Way Academy & Nursery School support pupils.",
+        )
+    )
+    early_years = classify_recruitment(vacancy("Early Years Apprentice"))
+    educator = classify_recruitment(vacancy("Early Years Educator"))
+    generic_ta = classify_recruitment(
+        replace(
+            vacancy("Teaching Assistant Apprentice", "A mainstream secondary school role."),
+            employer_name="Secondary School Trust",
+            workplace_name="Secondary School",
+        )
+    )
+    assert teaching_assistant["role_category"] == "teaching_assistant"
+    assert teaching_assistant["matched"] is True
+    assert early_years["role_category"] == "childcare_apprentice"
+    assert educator["role_category"] == "early_years_educator"
+    assert generic_ta["matched"] is False
+    assert generic_ta["relevance"] == "IRRELEVANT"
+
+
+@pytest.mark.parametrize(
+    ("title", "description", "relevance", "change"),
+    [
+        ("Nursery Practitioner", "Established nursery setting.", "RELEVANT_ROUTINE", "NONE"),
+        ("Nursery Manager", "Join our established nursery.", "RELEVANT_ROUTINE", "WEAK"),
+        ("Nursery Manager", "Join our new nursery opening soon.", "RELEVANT_CHANGE", "STRONG"),
+    ],
+)
+def test_relevance_and_change_evidence_are_explicit(
+    title: str, description: str, relevance: str, change: str
+) -> None:
+    decision = classify_recruitment(vacancy(title, description))
+    assert decision["relevance"] == relevance
+    assert decision["commercial_change_evidence"] == change
+
+
+def test_recruitment_signal_preserves_coordinates_and_classification() -> None:
+    record = normalize_gov_vacancy(
+        {
+            "vacancyReference": "VAC-GEO",
+            "title": "Early Years Educator",
+            "description": "A role in our nursery.",
+            "addresses": [
+                {
+                    "addressLine1": "1 High Street",
+                    "postcode": "OX28 4XX",
+                    "latitude": 51.78,
+                    "longitude": -1.49,
+                }
+            ],
+        },
+        "https://api.apprenticeships.education.gov.uk/vacancies",
+    )
+    signal = recruitment_signal(record, classify_recruitment(record))
+    assert signal["metadata"]["postcode"] == "OX28 4XX"
+    assert signal["metadata"]["latitude"] == 51.78
+    assert signal["metadata"]["recruitment_classification"]["relevance"] == "RELEVANT_ROUTINE"
 
 
 class FakeResponse:
@@ -176,3 +265,17 @@ def test_correlation_requires_postcode_and_compatible_name() -> None:
     assert not deterministic_match(
         "OX28 4XX", "Little Acorns Nursery", "OX28 4XX", "Other Nursery"
     ).matched
+
+
+def test_routine_recruitment_is_weak_corroboration_and_change_is_stronger() -> None:
+    routine = {"extracted_facts": {"recruitment_relevance": "RELEVANT_ROUTINE"}}
+    change = {
+        "extracted_facts": {
+            "recruitment_relevance": "RELEVANT_CHANGE",
+            "commercial_change_evidence": "STRONG",
+        }
+    }
+    uncertain = {"extracted_facts": {"recruitment_relevance": "UNCERTAIN"}}
+    assert recruitment_evidence_strength(routine)[0] == 0.05
+    assert recruitment_evidence_strength(change)[0] == 0.18
+    assert recruitment_evidence_strength(uncertain)[0] == 0.0

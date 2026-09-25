@@ -75,6 +75,33 @@ def test_shadow_accepts_each_allowed_recommendation(monkeypatch):
         assert client.calls[0]["inferenceConfig"]["temperature"] == 0.0
 
 
+def test_shadow_v2_records_commercial_change_evidence(monkeypatch):
+    client = BedrockClient(
+        {
+            "output": {
+                "message": {
+                    "content": [
+                        {
+                            "text": json.dumps(
+                                {
+                                    "recommendation": "APPROVE",
+                                    "confidence": 0.85,
+                                    "reason": "Relevant recruitment at a nursery-school setting.",
+                                    "commercial_change_evidence": "NONE",
+                                }
+                            )
+                        }
+                    ]
+                }
+            }
+        }
+    )
+    monkeypatch.setattr("app.ai_shadow.boto3.client", lambda *args, **kwargs: client)
+    result = evaluate_shadow(raw(), Settings(ai_prompt_version="shadow-v2"))
+    assert result["prompt_version"] == "shadow-v2"
+    assert result["commercial_change_evidence"] == "NONE"
+
+
 def test_shadow_rejects_malformed_or_invalid_confidence(monkeypatch):
     client = BedrockClient(response(confidence=1.5))
     monkeypatch.setattr("app.ai_shadow.boto3.client", lambda *args, **kwargs: client)

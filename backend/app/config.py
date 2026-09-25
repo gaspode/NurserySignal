@@ -20,7 +20,7 @@ class Settings:
     admin_group: str = "NurserySignalAdmins"
     ai_shadow_enabled: bool = False
     ai_model_id: str = "eu.amazon.nova-lite-v1:0"
-    ai_prompt_version: str = "shadow-v1"
+    ai_prompt_version: str = "shadow-v2"
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -45,5 +45,5 @@ class Settings:
             ai_shadow_enabled=os.getenv("AI_SHADOW_ENABLED", "false").lower()
             in {"1", "true", "yes"},
             ai_model_id=os.getenv("AI_MODEL_ID", "eu.amazon.nova-lite-v1:0"),
-            ai_prompt_version=os.getenv("AI_PROMPT_VERSION", "shadow-v1"),
+            ai_prompt_version=os.getenv("AI_PROMPT_VERSION", "shadow-v2"),
         )

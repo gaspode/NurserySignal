@@ -32,3 +32,15 @@ def deterministic_match(
     if not compatible_names(name, other_name):
         return CorrelationMatch(False, "postcode matches but operator/nursery name is incompatible")
     return CorrelationMatch(True, "same postcode and compatible operator/nursery name")
+
+
+def recruitment_evidence_strength(candidate: dict[str, Any]) -> tuple[float, str]:
+    """Return a bounded confidence contribution for recruitment evidence."""
+    facts = candidate.get("extracted_facts") or {}
+    relevance = facts.get("recruitment_relevance")
+    change = facts.get("commercial_change_evidence")
+    if relevance == "RELEVANT_CHANGE" or change == "STRONG":
+        return 0.18, "strong recruitment change evidence"
+    if relevance == "RELEVANT_ROUTINE":
+        return 0.05, "routine recruitment corroboration"
+    return 0.0, "recruitment evidence is uncertain or not relevant"
