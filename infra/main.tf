@@ -30,6 +30,10 @@ locals {
     Environment = var.environment
     ManagedBy   = "terraform"
   }
+  ai_invoke_resources = concat(
+    ["arn:aws:bedrock:${var.aws_region}:${data.aws_caller_identity.current.account_id}:inference-profile/${var.ai_model_id}"],
+    [for region in var.ai_model_regions : "arn:aws:bedrock:${region}::foundation-model/${var.ai_foundation_model_id}"]
+  )
 }
 
 resource "random_password" "db" {

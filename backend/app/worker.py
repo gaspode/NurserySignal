@@ -23,7 +23,7 @@ def process_message(settings: Settings, body: str) -> None:
     created = save_enrichment(settings, candidate)
     logger.info("enrichment signal_id=%s created=%s", message.signal_id, created)
     if getattr(settings, "ai_shadow_enabled", False):
-        model_id = getattr(settings, "ai_model_id", "amazon.nova-lite-v1:0")
+        model_id = getattr(settings, "ai_model_id", "eu.amazon.nova-lite-v1:0")
         prompt_version = getattr(settings, "ai_prompt_version", "shadow-v1")
         if not ai_review_exists(settings, message.signal_id, model_id, prompt_version):
             save_ai_review(settings, message.signal_id, evaluate_shadow(raw, settings))

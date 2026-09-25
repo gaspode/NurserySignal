@@ -48,8 +48,20 @@ variable "ai_shadow_enabled" {
 
 variable "ai_model_id" {
   type        = string
+  default     = "eu.amazon.nova-lite-v1:0"
+  description = "Bedrock inference profile ID used by the shadow assessment."
+}
+
+variable "ai_foundation_model_id" {
+  type        = string
   default     = "amazon.nova-lite-v1:0"
-  description = "Bedrock model ID used by the enrichment shadow assessment."
+  description = "Foundation model contained by the configured Bedrock inference profile."
+}
+
+variable "ai_model_regions" {
+  type        = list(string)
+  default     = ["eu-west-1", "eu-west-3", "eu-central-1", "eu-north-1"]
+  description = "Regions containing the foundation model used by the EU inference profile."
 }
 
 variable "ai_prompt_version" {

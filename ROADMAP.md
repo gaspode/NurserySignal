@@ -73,6 +73,8 @@ Operational follow-up:
 
 Bedrock assessments are stored separately from deterministic classification and human review. This phase is for measuring usefulness and disagreement, not automating decisions.
 
+The Nova Lite shadow integration uses the EU Bedrock inference profile (`eu.amazon.nova-lite-v1:0`) because direct on-demand invocation is not supported in eu-west-1.
+
 The deployed shadow path also supports a bounded, administrator-only re-evaluation of stored signals, including reviewed history. It is idempotent for a model/prompt version and cannot change deterministic classification or human review state.
 
 Gate before any automated decision-making:

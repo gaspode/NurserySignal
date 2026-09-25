@@ -44,7 +44,7 @@ resource "aws_iam_role_policy" "lambda_application" {
       {
         Effect   = "Allow"
         Action   = ["bedrock:InvokeModel"]
-        Resource = "arn:aws:bedrock:${var.aws_region}::foundation-model/${var.ai_model_id}"
+        Resource = local.ai_invoke_resources
       }
     ]
   })
@@ -91,7 +91,7 @@ resource "aws_iam_role_policy" "enrichment_application" {
       {
         Effect   = "Allow"
         Action   = ["bedrock:InvokeModel"]
-        Resource = "arn:aws:bedrock:${var.aws_region}::foundation-model/${var.ai_model_id}"
+        Resource = local.ai_invoke_resources
       }
     ]
   })
