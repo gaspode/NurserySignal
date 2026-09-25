@@ -173,6 +173,31 @@ describe("admin frontend", () => {
     expect(apiClient).toHaveBeenCalledTimes(3);
   });
 
+  it("allows shadow assessment from reviewed history without changing the human decision", async () => {
+    const reviewed = detail("APPROVED");
+    const apiClient = vi.fn()
+      .mockResolvedValueOnce(reviewed)
+      .mockResolvedValueOnce({
+        status: "SUCCEEDED",
+        recommendation: "NEEDS_HUMAN",
+        confidence: 0.64,
+        reason: "The stored planning evidence is commercially ambiguous.",
+        model_id: "amazon.nova-lite-v1:0",
+        prompt_version: "shadow-v1",
+        human_review_status: "APPROVED",
+        idempotent: false,
+      })
+      .mockResolvedValueOnce({ ...reviewed, ai_reviews: [{ status: "SUCCEEDED", recommendation: "NEEDS_HUMAN", confidence: 0.64, reason: "The stored planning evidence is commercially ambiguous.", model_id: "amazon.nova-lite-v1:0" }] });
+    render(<SignalDetail signalId="signal-1" apiClient={apiClient} onBack={vi.fn()} />);
+    expect(await screen.findByText("Decision recorded")).toBeInTheDocument();
+    expect(screen.getAllByText("APPROVED").length).toBeGreaterThan(0);
+    await userEvent.click(screen.getByRole("button", { name: "Run AI shadow assessment" }));
+    await waitFor(() => expect(apiClient).toHaveBeenCalledWith("/admin/signals/signal-1/ai-review", { method: "POST" }));
+    expect(await screen.findByRole("status")).toHaveTextContent("AI shadow assessment completed.");
+    expect(screen.getAllByText("APPROVED").length).toBeGreaterThan(0);
+    expect(screen.getByText("The stored planning evidence is commercially ambiguous.")).toBeInTheDocument();
+  });
+
   it("links dashboard metrics to the inbox and reviewed history", async () => {
     const apiClient = vi.fn()
       .mockResolvedValueOnce({ total: 2 })
