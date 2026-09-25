@@ -13,6 +13,8 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 logger = logging.getLogger("nurserysignal.recruitment")
+PROVIDER_USER_AGENT = "NurserySignal/1.0"
+MAX_PROVIDER_ERROR_BODY = 512
 
 CHILDCARE_ROLE_PATTERNS = (
     ("nursery_manager", r"\bnursery\s+(?:deputy\s+)?manager\b"),
@@ -44,9 +46,25 @@ EXPLICIT_CHANGE_PATTERNS = {
 class RecruitmentProviderError(RuntimeError):
     """The recruitment provider returned an unusable response."""
 
+    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
 
 class RecruitmentRateLimitError(RecruitmentProviderError):
     """The provider rate limited the collector."""
+
+
+def _safe_error_body(raw: bytes, api_key: str) -> str:
+    """Return a bounded provider error body with credentials removed."""
+    body = raw.decode("utf-8", errors="replace")[:MAX_PROVIDER_ERROR_BODY]
+    body = body.replace(api_key, "[REDACTED]")
+    body = re.sub(
+        r"(?i)(ocp-apim-subscription-key|api[_-]?key)(\s*[=:]\s*)[^,;\s}\"]+",
+        r"\1\2[REDACTED]",
+        body,
+    )
+    return body
 
 
 @dataclass(frozen=True)
@@ -180,6 +198,7 @@ class GovApprenticeshipProvider:
                 "Accept": "application/json",
                 "X-Version": "2",
                 "Ocp-Apim-Subscription-Key": self.api_key,
+                "User-Agent": PROVIDER_USER_AGENT,
             },
         )
         for attempt in range(3):
@@ -195,10 +214,20 @@ class GovApprenticeshipProvider:
                     continue
                 if exc.code == 429:
                     raise RecruitmentRateLimitError(
-                        "Find an Apprenticeship API rate limit"
+                        f"Find an Apprenticeship API rate limit: "
+                        f"{_safe_error_body(exc.read(), self.api_key)}",
+                        status_code=exc.code,
                     ) from exc
+                detail = _safe_error_body(exc.read(), self.api_key)
+                logger.warning(
+                    "recruitment_provider_http_error status=%d body=%s",
+                    exc.code,
+                    detail or "<empty>",
+                )
                 raise RecruitmentProviderError(
                     f"Find an Apprenticeship API returned HTTP {exc.code}"
+                    + (f": {detail}" if detail else ""),
+                    status_code=exc.code,
                 ) from exc
             except (URLError, TimeoutError, json.JSONDecodeError) as exc:
                 if attempt < 2:

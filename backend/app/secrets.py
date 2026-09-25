@@ -24,9 +24,14 @@ def provider_api_key_from_secret(secret_arn: str) -> str:
     try:
         parsed = json.loads(value)
     except json.JSONDecodeError:
-        return value
+        key = value.strip()
+        if key:
+            return key
+        raise RuntimeError("provider secret must contain an api_key")
     if isinstance(parsed, dict) and parsed.get("api_key"):
-        return str(parsed["api_key"])
+        key = str(parsed["api_key"]).strip()
+        if key:
+            return key
     raise RuntimeError("provider secret must contain an api_key")
 
 

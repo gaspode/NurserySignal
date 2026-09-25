@@ -66,8 +66,13 @@ def collect_recruitment(
                 logger.exception(
                     "recruitment_record_queue_failed external_id=%s", record.external_id
                 )
-    except Exception:
+    except Exception as exc:
         counts["errors"] += 1
+        logger.error(
+            "recruitment_provider_failed error_type=%s error=%s",
+            type(exc).__name__,
+            str(exc)[:512],
+        )
         raise
     finally:
         logger.info(

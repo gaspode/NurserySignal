@@ -33,6 +33,11 @@ def test_database_secret_is_converted_to_safe_conninfo(monkeypatch) -> None:
 
 def test_provider_secret_supports_json_api_key(monkeypatch) -> None:
     monkeypatch.setattr(
-        "app.secrets.secret_string", lambda arn: json.dumps({"api_key": "not-logged"})
+        "app.secrets.secret_string", lambda arn: json.dumps({"api_key": "  not-logged\n"})
     )
+    assert provider_api_key_from_secret("provider") == "not-logged"
+
+
+def test_provider_secret_strips_raw_api_key_whitespace(monkeypatch) -> None:
+    monkeypatch.setattr("app.secrets.secret_string", lambda arn: "\nnot-logged\t")
     assert provider_api_key_from_secret("provider") == "not-logged"

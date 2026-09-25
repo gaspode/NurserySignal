@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
+from io import BytesIO
+from urllib.error import HTTPError
 
 import pytest
 from app.config import Settings
@@ -95,11 +97,11 @@ class FakeResponse:
 
 
 def test_gov_provider_paginates_bounded_results() -> None:
-    urls = []
+    requests = []
 
     def opener(request, timeout):
-        urls.append(request.full_url)
-        page = 1 if len(urls) == 1 else 2
+        requests.append(request)
+        page = 1 if len(requests) == 1 else 2
         return FakeResponse(
             {
                 "vacancies": [{"vacancyReference": f"VAC-{page}", "title": "Nursery Manager"}]
@@ -113,7 +115,32 @@ def test_gov_provider_paginates_bounded_results() -> None:
         item.external_id
         for item in provider.vacancies(RecruitmentQuery(max_records=2, page_size=1))
     ] == ["VAC-1"]
-    assert "X-Version=2" not in urls[0]  # version is deliberately a header
+    assert "X-Version=2" not in requests[0].full_url  # version is deliberately a header
+    assert requests[0].headers["X-version"] == "2"
+    assert requests[0].headers["Accept"] == "application/json"
+    assert requests[0].headers["Ocp-apim-subscription-key"] == "key"
+    assert requests[0].headers["User-agent"] == "NurserySignal/1.0"
+
+
+def test_gov_provider_reports_bounded_http_error_without_api_key(caplog) -> None:
+    api_key = "secret-api-key"
+
+    def opener(request, timeout):
+        raise HTTPError(
+            request.full_url,
+            403,
+            "forbidden",
+            {"Content-Type": "application/json"},
+            BytesIO(json.dumps({"message": "invalid key", "echo": api_key}).encode()),
+        )
+
+    provider = GovApprenticeshipProvider(api_key, opener=opener, sleep=lambda _: None)
+    with pytest.raises(Exception, match="HTTP 403") as caught:
+        list(provider.vacancies(RecruitmentQuery(max_records=1)))
+
+    assert "invalid key" in str(caught.value)
+    assert api_key not in str(caught.value)
+    assert api_key not in caplog.text
 
 
 def test_recruitment_collector_queues_only_childcare(monkeypatch) -> None:

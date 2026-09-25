@@ -117,6 +117,7 @@ Each new source should first be validated with a bounded sample before scheduled
 - Recruitment records use the canonical raw-signal/evidence path with provider-prefixed stable identities, deterministic early-years role filtering and explicit new-setting/expansion facts.
 - Opportunities and signal links now support conservative v1 correlation using exact postcode plus compatible operator/nursery names, with explainable provenance and independent evidence scoring. Recruitment alone remains a weak clue and cannot create a high-confidence opening opportunity.
 - The recruitment Lambda, private evidence flow and disabled daily `rate(1 day)` schedule are deployed through Terraform. The schedule remains disabled until the GOV.UK API key is configured and a bounded live sample is manually reviewed.
+- GOV.UK provider requests use a stable identifying User-Agent, trim secret-key whitespace, and expose only bounded/redacted provider error diagnostics for safe operational troubleshooting.
 
 Validation gate:
 - configure the Display Advert API subscription key in the recruitment-provider secret;
