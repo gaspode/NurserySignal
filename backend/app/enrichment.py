@@ -31,6 +31,7 @@ def fixture_enrichment(
             planning_candidate = None
 
     planning_excluded = planning_candidate is not None and not planning_candidate.matched
+    school_nursery = planning_candidate is not None and planning_candidate.school_nursery
     if classification_result.likely_false_positive or planning_excluded:
         event_type, lifecycle_stage, confidence = "other", "DISCOVERED", 0.2
         classification = (
@@ -41,8 +42,9 @@ def fixture_enrichment(
     elif "planning" in source_type or any(
         word in text for word in ("planning", "application", "proposed")
     ):
-        event_type, lifecycle_stage, confidence = "opening", "PLANNING", 0.86
-        classification = "planning-opening"
+        confidence = 0.72 if school_nursery else 0.86
+        event_type, lifecycle_stage = "opening", "PLANNING"
+        classification = "school-nursery" if school_nursery else "planning-opening"
     elif any(word in text for word in ("recruit", "vacancy", "room leader", "staff")):
         event_type, lifecycle_stage, confidence = "opening", "RECRUITING", 0.76
         classification = "recruitment-opening"
@@ -90,6 +92,7 @@ def fixture_enrichment(
             "planning_exclusions": (
                 list(planning_candidate.exclusions) if planning_candidate is not None else []
             ),
+            "school_nursery": school_nursery,
             "source_type": raw["source_type"],
         },
         "evidence": {

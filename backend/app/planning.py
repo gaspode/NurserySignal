@@ -47,17 +47,38 @@ EXCLUSION_PATTERNS = (
     r"\bseedlings?\b",
     r"\bsaplings?\b",
     r"\bforest\s+nurser(?:y|ies)\b",
-    r"\bprimary\s+and\s+nurser(?:y|ies)\b",
-    r"\b(?:primary|secondary|infant|junior)\s+school\s+and\s+nurser(?:y|ies)\b",
-    r"\b(?:primary|secondary|infant|junior)\s+school\s+nurser(?:y|ies)\b",
     r"\bnursery\s+(?:bedroom|room)\b",
     r"\bbedroom\s+(?:nursery|for\s+a\s+nursery)\b",
-    r"\bschool\s+nursery\s+class(?:es)?\b",
-    r"\bnursery\s+class(?:es)?\b",
-    r"\bnursery\s+school\b",
     r"\bnon[- ]material\s+amendment\b",
     r"\bdetails\s+pursuant\s+to\s+condition\b",
     r"\bdischarge\s+of\s+(?:a\s+)?condition(?:s)?\b",
+)
+SCHOOL_NURSERY_PATTERNS = (
+    ("school nursery", r"\b(?:primary|secondary|infant|junior)\s+school\s+nurser(?:y|ies)\b"),
+    (
+        "school and nursery",
+        r"\b(?:primary|secondary|infant|junior)\s+school\s+and\s+nurser(?:y|ies)\b",
+    ),
+    ("school and nursery", r"\b(?:primary|secondary|infant|junior)\s+and\s+nurser(?:y|ies)\b"),
+    ("nursery class", r"\bnursery\s+class(?:es)?\b"),
+    ("nursery school", r"\bnursery\s+school\b"),
+)
+SCHOOL_INCIDENTAL_PATTERNS = (
+    r"\b(?:near|nearby|adjacent\s+to|next\s+to|close\s+to|opposite)\b[^.]{0,100}\b(?:school|nurser(?:y|ies))\b",
+    r"\b(?:existing|proposed)\s+(?:primary|secondary|infant|junior)\s+school\s+and\s+nurser(?:y|ies)\b",
+)
+SCHOOL_MATERIAL_PATTERNS = (
+    r"\bnew\b",
+    r"\bpropos(?:e|ed|al)\b",
+    r"\bcreat(?:e|ion|ing)\b",
+    r"\bprovid(?:e|ed|ing|es)\b",
+    r"\b(?:construct|construction|develop|development)\b",
+    r"\b(?:extend|extension|expand|expansion)\b",
+    r"\badditional\b",
+    r"\baccommodation\b",
+    r"\bcapacity\b",
+    r"\bplaces\b",
+    r"\btwo[- ]form\s+entry\b",
 )
 
 
@@ -300,6 +321,7 @@ class CandidateDecision:
     childcare_terms: tuple[str, ...] = ()
     horticultural_terms: tuple[str, ...] = ()
     likely_false_positive: bool = False
+    school_nursery: bool = False
 
 
 def candidate_decision(record: PlanningRecord) -> CandidateDecision:
@@ -336,8 +358,28 @@ def candidate_decision(record: PlanningRecord) -> CandidateDecision:
         pattern for pattern in EXCLUSION_PATTERNS if re.search(pattern, text, re.IGNORECASE)
     )
     strong_childcare_context = bool(classification.childcare_terms)
-    matched = bool(positive) and not classification.likely_false_positive and (
-        not exclusions or strong_childcare_context
+    school_nursery = any(
+        re.search(pattern, text, re.IGNORECASE) for _, pattern in SCHOOL_NURSERY_PATTERNS
+    )
+    school_incidental = any(
+        re.search(pattern, text, re.IGNORECASE) for pattern in SCHOOL_INCIDENTAL_PATTERNS
+    )
+    school_material = any(
+        re.search(pattern, proposal_text, re.IGNORECASE) for pattern in SCHOOL_MATERIAL_PATTERNS
+    )
+    school_excluded = school_nursery and (
+        school_incidental or (not school_material and not strong_childcare_context)
+    )
+    if school_incidental:
+        exclusions = (*exclusions, "incidental-school-nursery-reference")
+    elif school_excluded:
+        exclusions = (*exclusions, "school-nursery-without-material-change")
+    likely_false_positive = classification.likely_false_positive or school_excluded
+    matched = (
+        bool(positive)
+        and not classification.likely_false_positive
+        and not school_excluded
+        and (not exclusions or strong_childcare_context)
     )
     return CandidateDecision(
         matched,
@@ -345,7 +387,8 @@ def candidate_decision(record: PlanningRecord) -> CandidateDecision:
         exclusions,
         classification.childcare_terms,
         classification.horticultural_terms,
-        classification.likely_false_positive,
+        likely_false_positive,
+        school_nursery,
     )
 
 
@@ -378,6 +421,7 @@ def planning_signal(record: PlanningRecord, decision: CandidateDecision) -> dict
         "agent": record.agent,
         "candidate_positive_terms": list(decision.positive_terms),
         "candidate_exclusions": list(decision.exclusions),
+        "school_nursery": decision.school_nursery,
         "candidate_childcare_terms": list(decision.childcare_terms),
         "candidate_horticultural_terms": list(decision.horticultural_terms),
         "provider_record": record.raw,

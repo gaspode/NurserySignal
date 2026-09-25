@@ -43,7 +43,7 @@ Avoid bypassing existing layers just because a direct implementation is quicker.
 
 - Horticultural, garden, tree, plant and nursery-stock usage is not childcare.
 - A nursery term appearing only in an address, property name or unrelated organisation name is insufficient.
-- School-context nursery references are not automatically commercially useful childcare signals.
+- School-based nursery provision can be commercially useful; require evidence of new, expanded or newly accommodated provision, while excluding only incidental or stale school references.
 - Incidental references to proposed/nearby childcare provision in a wider development are weak evidence.
 - Non-material amendments, condition discharges and similar follow-up applications may describe genuine nursery projects but can be commercially stale; do not promote them merely because the underlying project is relevant.
 - Explicit early-years/day-nursery/pre-school opening, conversion, expansion or capacity-change evidence should remain detectable.

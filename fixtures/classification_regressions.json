@@ -1,5 +1,29 @@
 [
   {
+    "case": "school-primary-and-nursery-development",
+    "expected": "childcare",
+    "source_type": "planning",
+    "title": "New primary and nursery provision",
+    "raw_text": "A new two-form entry primary and nursery will be created as part of the development.",
+    "organisation_hint": "Education Development Partnership"
+  },
+  {
+    "case": "school-nursery-extension",
+    "expected": "childcare",
+    "source_type": "planning",
+    "title": "Primary school nursery extension",
+    "raw_text": "Extension to existing primary school nursery provision to create additional places.",
+    "organisation_hint": "Local Education Authority"
+  },
+  {
+    "case": "school-nursery-incidental-reference",
+    "expected": "false_positive",
+    "source_type": "planning",
+    "title": "Residential development near school",
+    "raw_text": "Residential development near an existing primary school and nursery.",
+    "organisation_hint": "Housing Developer"
+  },
+  {
     "case": "observed-community-garden-award",
     "expected": "false_positive",
     "source_type": "local_news",

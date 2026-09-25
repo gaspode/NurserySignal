@@ -96,6 +96,10 @@ tree nurseries, garden centres, nursery stock, propagation, seedlings, saplings,
 RHS or gardening is treated as a likely false positive unless meaningful
 childcare evidence is also present. Such candidates remain `OTHER` at
 `DISCOVERED` with low confidence and are never promoted by the fixture rules.
+School-based nursery provision is retained as a lower-confidence candidate when
+the application explicitly proposes new, expanded or newly accommodated early-
+years provision. Incidental references to an existing or nearby school nursery
+remain excluded.
 The regression corpus is in `fixtures/classification_regressions.json` and is
 not automatically reprocessed against historical records.
 
@@ -116,8 +120,9 @@ version, never raw payloads or secrets.
 The React/Vite app lives in `frontend/`. It uses the existing Cognito user pool
 with invited users only; self-registration is disabled. Tokens are kept in
 browser session storage, refreshed through the Cognito session, and attached
-only to API requests. Expired sessions return the operator to the sign-in
-screen.
+only to API requests. A same-tab refresh restores the Cognito user from the
+session without changing the sessionStorage persistence policy; expired
+sessions return the operator to the sign-in screen.
 
 Frontend configuration is supplied at build time with:
 

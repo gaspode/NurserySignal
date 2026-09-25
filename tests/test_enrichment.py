@@ -76,6 +76,19 @@ def test_observed_community_garden_variants_are_consistently_false_positive(text
     assert candidate["extracted_facts"]["classification"] == "horticultural-nursery"
 
 
+def test_fixture_enrichment_keeps_school_nursery_as_lower_confidence_candidate() -> None:
+    candidate = fixture_enrichment(
+        raw_signal(
+            "Outline application for 302 dwellings, a community hub and a new two-form "
+            "entry primary and nursery."
+        )
+    )
+    assert candidate["event_type"] == "opening"
+    assert candidate["confidence"] == 0.72
+    assert candidate["extracted_facts"]["school_nursery"] is True
+    assert candidate["extracted_facts"]["likely_false_positive"] is False
+
+
 def test_horticultural_guardrail_runs_before_planning_promotion() -> None:
     candidate = fixture_enrichment(
         raw_signal(

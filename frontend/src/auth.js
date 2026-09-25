@@ -8,6 +8,19 @@ import { appConfig, hasAuthConfig } from "./config";
 
 const AuthContext = createContext(null);
 
+function rememberedUserKey(config) {
+  return `NurserySignal.${config.clientId}.LastAuthUser`;
+}
+
+function rememberUser(config, user) {
+  const username = user?.getUsername?.();
+  if (username) window.sessionStorage.setItem(rememberedUserKey(config), username);
+}
+
+function forgetRememberedUser(config) {
+  if (hasAuthConfig(config)) window.sessionStorage.removeItem(rememberedUserKey(config));
+}
+
 export function createUserPool(config = appConfig) {
   if (!hasAuthConfig(config)) return null;
   return new CognitoUserPool({
@@ -40,6 +53,17 @@ function sessionFor(user) {
   });
 }
 
+export function currentUserFor(pool, config = appConfig) {
+  if (!pool) return null;
+  const current = pool.getCurrentUser();
+  if (current) return current;
+  // Cognito normally restores this from its LastAuthUser key.  Keep a small
+  // app-owned username marker as a fallback in the same sessionStorage so a
+  // missing SDK marker cannot discard an otherwise restorable session.
+  const username = window.sessionStorage.getItem(rememberedUserKey(config));
+  return username ? new CognitoUser({ Username: username, Pool: pool, Storage: window.sessionStorage }) : null;
+}
+
 export function AuthProvider({ children, config = appConfig }) {
   const pool = useMemo(() => createUserPool(config), [config]);
   const [user, setUser] = useState(null);
@@ -53,14 +77,24 @@ export function AuthProvider({ children, config = appConfig }) {
       setLoading(false);
       return undefined;
     }
-    const current = pool.getCurrentUser();
+    const current = currentUserFor(pool, config);
     if (!current) {
       setLoading(false);
       return undefined;
     }
     sessionFor(current)
-      .then(() => active && setUser(current))
-      .catch(() => active && setUser(null))
+      .then(() => {
+        if (active) {
+          rememberUser(config, current);
+          setUser(current);
+        }
+      })
+      .catch(() => {
+        if (active) {
+          forgetRememberedUser(config);
+          setUser(null);
+        }
+      })
       .finally(() => active && setLoading(false));
     return () => {
       active = false;
@@ -80,6 +114,7 @@ export function AuthProvider({ children, config = appConfig }) {
         setPasswordChallenge(null);
         cognitoUser.authenticateUser(details, {
           onSuccess: (session) => {
+            rememberUser(config, cognitoUser);
             setUser(cognitoUser);
             resolve(session);
           },
@@ -107,6 +142,7 @@ export function AuthProvider({ children, config = appConfig }) {
         setAuthError("");
         passwordChallenge.cognitoUser.completeNewPasswordChallenge(newPassword, requiredAttributeData, {
           onSuccess: (session) => {
+            rememberUser(config, passwordChallenge.cognitoUser);
             setUser(passwordChallenge.cognitoUser);
             setPasswordChallenge(null);
             resolve(session);
@@ -129,10 +165,11 @@ export function AuthProvider({ children, config = appConfig }) {
 
   const logout = useCallback(() => {
     pool?.getCurrentUser()?.signOut();
+    forgetRememberedUser(config);
     setUser(null);
     setPasswordChallenge(null);
     setAuthError("");
-  }, [pool]);
+  }, [config, pool]);
 
   const getToken = useCallback(async () => {
     if (!user) throw new Error("Authentication required.");

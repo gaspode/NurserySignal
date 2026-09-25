@@ -34,6 +34,7 @@ Completed:
 - False-positive handling for horticultural nursery usage.
 - False-positive handling for nursery terms present only in addresses/property names.
 - School-context exclusions refined without suppressing explicit early-years proposals.
+- School-based nursery provision is retained as a lower-confidence commercial signal when new or expanded accommodation is explicit; incidental school references remain excluded.
 - Persistence-level idempotency verified on repeated live collection.
 - Bounded administrator reprocessing of stored planning evidence implemented with audit records, review-state preservation and no new ingestion artefacts.
 - Production Cognito authorization verified: API Gateway supplies `cognito:groups` as a bracketed string and the exact-group check now handles it safely.

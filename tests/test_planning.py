@@ -75,6 +75,31 @@ def test_positive_and_exclusion_matching() -> None:
 
 
 @pytest.mark.parametrize(
+    "description",
+    [
+        (
+            "Outline application for 302 dwellings, a community hub and a new two-form "
+            "entry primary and nursery."
+        ),
+        "Extension to existing primary school nursery provision to increase capacity.",
+        "New nursery and pre-school accommodation at the primary school.",
+    ],
+)
+def test_material_school_nursery_provision_is_a_candidate(description: str) -> None:
+    decision = candidate_decision(record(description))
+    assert decision.matched is True
+    assert decision.school_nursery is True or "pre-school" in description
+
+
+def test_incidental_school_nursery_reference_is_excluded() -> None:
+    decision = candidate_decision(
+        record("Residential development near an existing primary school and nursery.")
+    )
+    assert decision.matched is False
+    assert "incidental-school-nursery-reference" in decision.exclusions
+
+
+@pytest.mark.parametrize(
     "description,address",
     [
         (
@@ -84,11 +109,6 @@ def test_positive_and_exclusion_matching() -> None:
         (
             "Prior notification of change of use of agricultural building to 4 dwellings.",
             "Barn at Springwell Nursery, Walden Road, CB10 1UE",
-        ),
-        (
-            "Outline application for 302 dwellings, a community hub and a new two-form "
-            "entry primary and nursery.",
-            "The Basildon Centre, SS14 1DL",
         ),
         (
             "Details pursuant to condition 56 on permission for 1,400 dwellings including "

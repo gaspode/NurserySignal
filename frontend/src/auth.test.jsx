@@ -9,6 +9,7 @@ const state = vi.hoisted(() => ({
   latestUser: null,
   authenticationCallbacks: null,
   completionCallbacks: null,
+  sessionError: null,
 }));
 
 vi.mock("amazon-cognito-identity-js", () => ({
@@ -44,6 +45,10 @@ vi.mock("amazon-cognito-identity-js", () => ({
       return this.username;
     }
 
+    getSession(callback) {
+      callback(state.sessionError, state.sessionError ? null : session);
+    }
+
     signOut() {}
   },
 }));
@@ -62,7 +67,17 @@ const session = {
 function AuthHarness() {
   const auth = useAuth();
   if (auth.loading) return <p>Loading</p>;
-  if (auth.user) return <p>Authenticated</p>;
+  if (auth.user) {
+    return (
+      <>
+        <p>Authenticated</p>
+        <button type="button" onClick={() => auth.getToken().then((token) => document.body.setAttribute("data-token", token))}>
+          Get token
+        </button>
+        <button type="button" onClick={auth.logout}>Log out</button>
+      </>
+    );
+  }
   return (
     <LoginPage
       onLogin={auth.login}
@@ -93,16 +108,63 @@ describe("Cognito authentication", () => {
   afterEach(() => cleanup());
 
   beforeEach(() => {
+    window.sessionStorage.clear();
     state.currentUser = null;
     state.latestUser = null;
     state.authenticationCallbacks = null;
     state.completionCallbacks = null;
+    state.sessionError = null;
   });
 
   it("allows a user with a permanent password to sign in normally", async () => {
     renderAuth();
     await submitCredentials();
     await act(async () => state.authenticationCallbacks.onSuccess(session));
+    expect(await screen.findByText("Authenticated")).toBeInTheDocument();
+  });
+
+  it("restores a valid Cognito user from sessionStorage after a refresh", async () => {
+    state.currentUser = {
+      getUsername: () => "staff@example.com",
+      getSession: (callback) => callback(null, session),
+    };
+    renderAuth();
+    expect(await screen.findByText("Authenticated")).toBeInTheDocument();
+  });
+
+  it("reconstructs the current user from its same-tab marker when the SDK marker is missing", async () => {
+    window.sessionStorage.setItem("NurserySignal.client-example.LastAuthUser", "staff@example.com");
+    renderAuth();
+    expect(await screen.findByText("Authenticated")).toBeInTheDocument();
+  });
+
+  it("returns to login when the restored Cognito session is invalid", async () => {
+    state.currentUser = {
+      getUsername: () => "staff@example.com",
+      getSession: (callback) => callback(new Error("expired"), null),
+    };
+    renderAuth();
+    expect(await screen.findByLabelText("Email")).toBeInTheDocument();
+  });
+
+  it("can obtain a token after restoring a user", async () => {
+    state.currentUser = {
+      getUsername: () => "staff@example.com",
+      getSession: (callback) => callback(null, session),
+    };
+    renderAuth();
+    await screen.findByText("Authenticated");
+    await userEvent.click(screen.getByRole("button", { name: "Get token" }));
+    expect(document.body.getAttribute("data-token")).toBe("test-token");
+  });
+
+  it("does not lose the session marker across an ordinary same-tab remount", async () => {
+    const view = renderAuth();
+    await submitCredentials();
+    await act(async () => state.authenticationCallbacks.onSuccess(session));
+    expect(await screen.findByText("Authenticated")).toBeInTheDocument();
+    view.unmount();
+    renderAuth();
     expect(await screen.findByText("Authenticated")).toBeInTheDocument();
   });
 
@@ -167,8 +229,7 @@ describe("Cognito authentication", () => {
     await act(async () => state.completionCallbacks.callbacks.onSuccess(session));
     expect(await screen.findByText("Authenticated")).toBeInTheDocument();
 
-    const logoutButton = screen.queryByRole("button", { name: "Use a different account" });
-    expect(logoutButton).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Log out" }));
     view.unmount();
     renderAuth();
     await submitCredentials("staff@example.com", "NewSecurePassword1!");
