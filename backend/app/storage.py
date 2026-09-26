@@ -20,11 +20,12 @@ def evidence_sha256(payload: bytes) -> str:
 
 
 def evidence_key(signal: NormalizedSignal, payload: bytes) -> str:
-    identity = f"{signal.source_type}\x00{signal.external_id}".encode()
+    identity = f"{signal.vertical}\x00{signal.source_type}\x00{signal.external_id}".encode()
     identity_hash = hashlib.sha256(identity).hexdigest()
     source = re.sub(r"[^a-z0-9-]+", "-", signal.source_type.lower()).strip("-") or "unknown"
+    vertical = re.sub(r"[^a-z0-9-]+", "-", signal.vertical.lower()).strip("-")
     discovered = signal.discovered_at.astimezone(UTC).date().isoformat()
-    return f"signals/{source}/{discovered}/{identity_hash}/raw.json"
+    return f"signals/{vertical}/{source}/{discovered}/{identity_hash}/raw.json"
 
 
 def evidence_revision_key(signal: NormalizedSignal, payload: bytes) -> str:

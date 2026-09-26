@@ -63,7 +63,7 @@ def ingest_signal(
             evidence_key=revision_key,
             enrichment_queued=False,
         )
-    if existing is None:
+    if existing is None or not existing.evidence_key:
         put_raw_evidence(settings, settings.evidence_bucket, key, original_payload)
 
     stored = store_signal(settings, signal, settings.evidence_bucket, key, content_hash)

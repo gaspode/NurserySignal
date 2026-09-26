@@ -192,6 +192,7 @@ Run the bounded opportunity-creation recalculation against production data, revi
 - CareSignal planning requires explicit children's-home context and material opening/expansion evidence; adult/nursing care, generic C2, day nursery and unrelated residential uses remain excluded.
 - CareSignal recruitment distinguishes routine supporting vacancies from explicit opening/pre-registration change evidence. Routine support-worker or manager recruitment cannot create an opportunity by itself.
 - Exact residential locations are marked internal-only for future subscriber projections, while source provenance remains available to authenticated administrators.
+- Evidence object identity is vertical-scoped, so one provider record can support independent NurserySignal and CareSignal records without sharing or losing document links.
 - Added source-specific advisory Bedrock prompt versions and a bounded stored-evidence backfill operation. AI remains advisory and cannot alter deterministic decisions or review state.
 
 Validation gate:
