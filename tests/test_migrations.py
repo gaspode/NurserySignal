@@ -19,8 +19,9 @@ def test_initial_migration_exists_and_contains_provenance_tables() -> None:
         "0011_opportunity_creation_policy.sql",
         "0012_opportunity_reason_separation.sql",
         "0013_canonical_match_review_cleanup.sql",
-        "0014_signalhub_verticals.sql",
-    ]
+            "0014_signalhub_verticals.sql",
+            "0015_caresignal_activation.sql",
+        ]
     sql = "\n".join(path.read_text(encoding="utf-8") for path in files)
     tables = (
         "operators",

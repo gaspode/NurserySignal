@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from app.care import care_recruitment_signal, classify_care_recruitment
 from app.collector_events import collector_payload
 from app.config import Settings
 from app.logging import configure_logging
@@ -48,6 +49,8 @@ def collect_recruitment(
         "duplicates": 0,
         "excluded": 0,
         "errors": 0,
+        "nursery_matched": 0,
+        "care_matched": 0,
     }
     status = "SUCCESS"
     failure_category = failure_message = None
@@ -63,27 +66,41 @@ def collect_recruitment(
             raise RuntimeError("INGESTION_QUEUE_URL is not configured")
         for record in provider.vacancies(query):
             counts["records_fetched"] += 1
-            decision = classify_recruitment(record)
-            if not decision["matched"]:
+            nursery_decision = classify_recruitment(record)
+            care_decision = classify_care_recruitment(record)
+            signals = []
+            if nursery_decision["matched"]:
+                signals.append(recruitment_signal(record, nursery_decision))
+                counts["nursery_matched"] += 1
+            if care_decision["matched"]:
+                signals.append(care_recruitment_signal(record, care_decision))
+                counts["care_matched"] += 1
+            if not signals:
                 counts["excluded"] += 1
                 continue
-            counts["candidates_matched"] += 1
-            try:
-                signal = recruitment_signal(record, decision)
-                body = json.dumps(
-                    {"message_version": "1.0", "signal": signal, "raw_provider_record": record.raw},
-                    separators=(",", ":"),
-                    sort_keys=True,
-                ).encode()
-                if len(body) > 240_000:
-                    raise ValueError("recruitment record is too large for SQS")
-                send_ingestion_message(settings, SignalIngestionMessage.from_json(body))
-                counts["signals_queued"] += 1
-            except Exception:
-                counts["errors"] += 1
-                logger.exception(
-                    "recruitment_record_queue_failed external_id=%s", record.external_id
-                )
+            counts["candidates_matched"] += len(signals)
+            for signal in signals:
+                try:
+                    body = json.dumps(
+                        {
+                            "message_version": "1.0",
+                            "signal": signal,
+                            "raw_provider_record": record.raw,
+                        },
+                        separators=(",", ":"),
+                        sort_keys=True,
+                    ).encode()
+                    if len(body) > 240_000:
+                        raise ValueError("recruitment record is too large for SQS")
+                    send_ingestion_message(settings, SignalIngestionMessage.from_json(body))
+                    counts["signals_queued"] += 1
+                except Exception:
+                    counts["errors"] += 1
+                    logger.exception(
+                        "recruitment_record_queue_failed external_id=%s vertical=%s",
+                        record.external_id,
+                        signal.get("vertical", "NURSERY"),
+                    )
     except Exception as exc:
         status = "FAILED"
         failure_category, failure_message = safe_failure(exc)
@@ -99,7 +116,7 @@ def collect_recruitment(
             "recruitment_collection_summary "
             "provider=govuk-apprenticeships fetched=%d matched=%d queued=%d "
             "duplicates=%d excluded=%d errors=%d posted_since_days=%d "
-            "max_records=%d page_size=%d source=%s",
+            "nursery_matched=%d care_matched=%d max_records=%d page_size=%d source=%s",
             counts["records_fetched"],
             counts["candidates_matched"],
             counts["signals_queued"],
@@ -107,6 +124,8 @@ def collect_recruitment(
             counts["excluded"],
             counts["errors"],
             query.posted_since_days,
+            counts["nursery_matched"],
+            counts["care_matched"],
             query.max_records,
             query.page_size,
             event.get("source", "manual")[:32],

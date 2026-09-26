@@ -81,3 +81,15 @@ variable "ai_recruitment_prompt_version" {
   default     = "recruitment-shadow-v3"
   description = "Source-specific version of the recruitment shadow-review prompt."
 }
+
+variable "ai_care_planning_prompt_version" {
+  type        = string
+  default     = "care-planning-shadow-v1"
+  description = "CareSignal planning shadow-review prompt version."
+}
+
+variable "ai_care_recruitment_prompt_version" {
+  type        = string
+  default     = "care-recruitment-shadow-v1"
+  description = "CareSignal recruitment shadow-review prompt version."
+}

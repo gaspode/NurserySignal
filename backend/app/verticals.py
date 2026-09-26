@@ -19,7 +19,7 @@ class VerticalDefinition:
 
 VERTICAL_REGISTRY = {
     NURSERY: VerticalDefinition(NURSERY, "NurserySignal", True, "nursery"),
-    CHILDRENS_HOME: VerticalDefinition(CHILDRENS_HOME, "CareSignal", False, "children-home"),
+    CHILDRENS_HOME: VerticalDefinition(CHILDRENS_HOME, "CareSignal", True, "children-home"),
     DENTAL: VerticalDefinition(DENTAL, "DentalSignal", False, "dental"),
 }
 
@@ -59,11 +59,52 @@ class NurseryVerticalPolicy:
 
         return opportunity_creation_decision(candidate)
 
+    @staticmethod
+    def build_opportunity_title(candidate: dict[str, Any], decision: Any) -> str:
+        from app.opportunity_policy import opportunity_title
 
-VERTICAL_POLICIES = {NURSERY: NurseryVerticalPolicy()}
+        return opportunity_title(candidate, decision)
+
+    @staticmethod
+    def initial_lifecycle(source_type: str) -> str:
+        return "PLANNING" if source_type == "planning" else "DISCOVERED"
 
 
-def policy_for(vertical: str) -> NurseryVerticalPolicy:
+class ChildrenHomeVerticalPolicy:
+    """CareSignal interpretation behind the shared SignalHub boundary."""
+
+    key = CHILDRENS_HOME
+
+    @staticmethod
+    def classify_signal(raw: dict[str, Any]) -> dict[str, Any]:
+        from app.care import enrich_care_signal
+
+        return enrich_care_signal(raw)
+
+    @staticmethod
+    def determine_opportunity_action(candidate: dict[str, Any]) -> Any:
+        from app.care import care_opportunity_decision
+
+        return care_opportunity_decision(candidate)
+
+    @staticmethod
+    def build_opportunity_title(candidate: dict[str, Any], decision: Any) -> str:
+        from app.care import care_opportunity_title
+
+        return care_opportunity_title(candidate, decision)
+
+    @staticmethod
+    def initial_lifecycle(source_type: str) -> str:
+        return "PLANNING" if source_type == "planning" else "RECRUITING"
+
+
+VERTICAL_POLICIES = {
+    NURSERY: NurseryVerticalPolicy(),
+    CHILDRENS_HOME: ChildrenHomeVerticalPolicy(),
+}
+
+
+def policy_for(vertical: str) -> NurseryVerticalPolicy | ChildrenHomeVerticalPolicy:
     validated = validate_vertical(vertical)
     try:
         return VERTICAL_POLICIES[validated]

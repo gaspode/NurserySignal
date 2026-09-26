@@ -23,7 +23,19 @@ def normalize_identity(value: Any) -> str:
 
 
 def compatible_names(left: Any, right: Any) -> bool:
-    ignored = {"nursery", "day", "the", "ltd", "limited", "childcare"}
+    ignored = {
+        "nursery",
+        "day",
+        "the",
+        "ltd",
+        "limited",
+        "childcare",
+        "care",
+        "home",
+        "children",
+        "childrens",
+        "residential",
+    }
     a = set(normalize_identity(left).split()) - ignored
     b = set(normalize_identity(right).split()) - ignored
     return bool(a and b and a & b)
@@ -37,8 +49,10 @@ def deterministic_match(
     if normalize_identity(postcode) != normalize_identity(other_postcode):
         return CorrelationMatch(False, "postcode differs")
     if not compatible_names(name, other_name):
-        return CorrelationMatch(False, "postcode matches but operator/nursery name is incompatible")
-    return CorrelationMatch(True, "same postcode and compatible operator/nursery name")
+        return CorrelationMatch(
+            False, "postcode matches but operator/site identity is incompatible"
+        )
+    return CorrelationMatch(True, "same postcode and compatible operator/site identity")
 
 
 def classify_match(postcode: Any, name: Any, other_postcode: Any, other_name: Any) -> MatchDecision:
@@ -50,10 +64,10 @@ def classify_match(postcode: Any, name: Any, other_postcode: Any, other_name: An
     ):
         if compatible_names(name, other_name):
             return MatchDecision(
-                "EXACT", 0.98, "same postcode and compatible operator/nursery name"
+                "EXACT", 0.98, "same postcode and compatible operator/site identity"
             )
         return MatchDecision(
-            "UNCERTAIN", 0.55, "same postcode but operator/nursery name is incompatible"
+            "UNCERTAIN", 0.55, "same postcode but operator/site identity is incompatible"
         )
     if not postcode or not other_postcode:
         return MatchDecision("NO_MATCH", 0.0, "postcode missing")

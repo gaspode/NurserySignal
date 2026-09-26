@@ -215,6 +215,38 @@ def test_opportunity_recalculate_requires_admin_and_is_bounded(monkeypatch) -> N
     assert denied["statusCode"] == 403
 
 
+def test_care_backfill_is_admin_only_and_bounded(monkeypatch) -> None:
+    captured = {}
+
+    def fake_backfill(settings, **kwargs):
+        captured.update(kwargs)
+        return {"evaluated": 0, "relevant": 0}
+
+    monkeypatch.setattr("app.handler.backfill_care_from_stored_evidence", fake_backfill)
+    response = handler(
+        event(
+            "/admin/verticals/CHILDRENS_HOME/backfill",
+            "POST",
+            body=json.dumps({"days": 999, "limit": 999}),
+            claims={"sub": "staff", "cognito:groups": ["NurserySignalAdmins"]},
+        ),
+        None,
+    )
+    assert response["statusCode"] == 200
+    assert captured == {"actor": "staff", "days": 90, "limit": 50}
+
+    denied = handler(
+        event(
+            "/admin/verticals/CHILDRENS_HOME/backfill",
+            "POST",
+            body=json.dumps({}),
+            claims={"sub": "staff", "cognito:groups": ["Other"]},
+        ),
+        None,
+    )
+    assert denied["statusCode"] == 403
+
+
 def test_sources_status_is_admin_only_and_includes_recent_runs(monkeypatch) -> None:
     monkeypatch.setattr(
         "app.handler.list_runs",
@@ -275,8 +307,9 @@ def test_source_manual_run_uses_fixed_bounds_and_exact_lambda(monkeypatch) -> No
     assert payload == {
         "source": "manual",
         "lookback_days": 2,
-        "max_records": 100,
-        "page_size": 25,
+            "max_records": 100,
+            "care_max_records": 50,
+            "page_size": 25,
         "run_id": "run-1",
         "run_started_at": "2026-09-26T19:00:00Z",
     }

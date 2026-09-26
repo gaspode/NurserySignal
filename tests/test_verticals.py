@@ -10,10 +10,10 @@ from app.verticals import (
 )
 
 
-def test_registry_contains_enabled_nursery_and_disabled_future_verticals():
+def test_registry_contains_enabled_nursery_and_care_verticals():
     registry = {item["key"]: item for item in registry_payload()}
     assert registry[NURSERY]["enabled"] is True
-    assert registry[CHILDRENS_HOME]["enabled"] is False
+    assert registry[CHILDRENS_HOME]["enabled"] is True
     assert registry[DENTAL]["enabled"] is False
 
 
@@ -37,11 +37,26 @@ def test_normalized_signal_defaults_to_nursery_vertical():
     assert signal.vertical == NURSERY
 
 
-def test_disabled_vertical_cannot_be_ingested_as_active():
+def test_care_vertical_can_be_ingested_as_active():
+    signal = NormalizedSignal.from_dict(
+        {
+            "vertical": CHILDRENS_HOME,
+            "source_type": "planning",
+            "source_url": "https://example.test/application/1",
+            "external_id": "1",
+            "discovered_at": "2026-09-26T00:00:00Z",
+            "title": "Children's home",
+            "raw_text": "Children's home",
+        }
+    )
+    assert signal.vertical == CHILDRENS_HOME
+
+
+def test_disabled_dental_vertical_cannot_be_ingested_as_active():
     with pytest.raises(ValueError, match="not enabled"):
         NormalizedSignal.from_dict(
             {
-                "vertical": CHILDRENS_HOME,
+                "vertical": DENTAL,
                 "source_type": "planning",
                 "source_url": "https://example.test/application/1",
                 "external_id": "1",

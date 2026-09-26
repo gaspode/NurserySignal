@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.ai_shadow import evaluate_shadow
+from app.ai_shadow import evaluate_shadow, prompt_version_for
 from app.config import Settings
 from app.repository import (
     get_ai_review,
@@ -40,11 +40,7 @@ def reevaluate_ai_shadow(settings: Settings, signal_id: str) -> dict[str, Any] |
     if raw is None:
         return None
     source_type = str(raw.get("source_type") or "").lower()
-    prompt_version = (
-        settings.ai_planning_prompt_version
-        if source_type == "planning"
-        else settings.ai_recruitment_prompt_version
-    )
+    prompt_version = prompt_version_for(source_type, settings, raw.get("vertical"))
     existing = get_ai_review(settings, signal_id, settings.ai_model_id, prompt_version)
     review_status = get_signal_review_status(settings, signal_id)
     if existing is not None:

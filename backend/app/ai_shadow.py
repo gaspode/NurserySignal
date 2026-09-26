@@ -22,6 +22,8 @@ logger = configure_logging()
 ALLOWED_RECOMMENDATIONS = {"APPROVE", "REJECT", "NEEDS_HUMAN"}
 RECRUITMENT_PROMPT_VERSION = "recruitment-shadow-v3"
 PLANNING_PROMPT_VERSION = "planning-shadow-v2"
+CARE_PLANNING_PROMPT_VERSION = "care-planning-shadow-v1"
+CARE_RECRUITMENT_PROMPT_VERSION = "care-recruitment-shadow-v1"
 RECRUITMENT_SYSTEM_PROMPT = """NurserySignal recruitment shadow review,
 prompt version recruitment-shadow-v3.
 Answer ONLY: is this a genuine and commercially relevant recruitment signal associated
@@ -52,10 +54,37 @@ WEAK or STRONG. Do not emit recruitment_relevance. Return strict JSON only:
 {"recommendation":"APPROVE|REJECT|NEEDS_HUMAN","confidence":0.0,"reason":"brief reason",
 "planning_relevance":"RELEVANT_CHANGE|RELEVANT_FOLLOWUP|RELEVANT_ROUTINE|UNCERTAIN|IRRELEVANT",
 "commercial_change_evidence":"NONE|WEAK|STRONG"}."""
+CARE_PLANNING_SYSTEM_PROMPT = """CareSignal planning shadow review, prompt version
+care-planning-shadow-v1. Decide whether this is genuinely about a UK children's
+residential care home and whether it indicates a commercially material opening,
+conversion, relocation, expansion or occupancy increase. APPROVE explicit children's
+home proposals and material changes. REJECT adult/elderly/nursing care, generic C2
+without children context, day nurseries, hospitals, boarding schools and incidental
+references. Use NEEDS_HUMAN only for genuinely ambiguous evidence. Never include or
+infer resident identities or safeguarding details. Return strict JSON only:
+{"recommendation":"APPROVE|REJECT|NEEDS_HUMAN","confidence":0.0,"reason":"brief reason",
+"planning_relevance":"RELEVANT_CHANGE|RELEVANT_FOLLOWUP|RELEVANT_ROUTINE|UNCERTAIN|IRRELEVANT",
+"commercial_change_evidence":"NONE|WEAK|STRONG"}."""
+CARE_RECRUITMENT_SYSTEM_PROMPT = """CareSignal recruitment shadow review, prompt
+version care-recruitment-shadow-v1. Decide whether this is genuine recruitment for a
+UK children's residential care home. APPROVE relevant routine roles as well as opening
+roles, but separately distinguish RELEVANT_ROUTINE from RELEVANT_CHANGE. REJECT adult
+care, nursing homes, generic support work and education roles without children's-home
+context. Lack of opening evidence must not by itself cause rejection. Never include or
+infer resident identities or safeguarding details. Return strict JSON only:
+{"recommendation":"APPROVE|REJECT|NEEDS_HUMAN","confidence":0.0,"reason":"brief reason",
+"recruitment_relevance":"RELEVANT_ROUTINE|RELEVANT_CHANGE|UNCERTAIN|IRRELEVANT",
+"commercial_change_evidence":"NONE|WEAK|STRONG"}."""
 
 
-def prompt_version_for(source_type: str | None, settings: Settings) -> str:
+def prompt_version_for(
+    source_type: str | None, settings: Settings, vertical: str | None = None
+) -> str:
     """Select a source-specific version, retaining compatibility for old callers."""
+    if vertical == "CHILDRENS_HOME" and source_type == "planning":
+        return settings.ai_care_planning_prompt_version
+    if vertical == "CHILDRENS_HOME" and source_type == "recruitment":
+        return settings.ai_care_recruitment_prompt_version
     if source_type == "planning" and settings.ai_planning_prompt_version:
         return settings.ai_planning_prompt_version
     if source_type == "recruitment" and settings.ai_recruitment_prompt_version:
@@ -63,7 +92,13 @@ def prompt_version_for(source_type: str | None, settings: Settings) -> str:
     return settings.ai_prompt_version
 
 
-def system_prompt_for(source_type: str | None) -> str:
+def system_prompt_for(source_type: str | None, vertical: str | None = None) -> str:
+    if vertical == "CHILDRENS_HOME":
+        return (
+            CARE_PLANNING_SYSTEM_PROMPT
+            if source_type == "planning"
+            else CARE_RECRUITMENT_SYSTEM_PROMPT
+        )
     return PLANNING_SYSTEM_PROMPT if source_type == "planning" else RECRUITMENT_SYSTEM_PROMPT
 
 
@@ -87,6 +122,7 @@ def _input_for_model(raw: dict[str, Any]) -> dict[str, Any]:
         recruitment_context = None
     return {
         "source_type": raw.get("source_type"),
+        "vertical": raw.get("vertical"),
         "title": str(raw.get("title") or "")[:2000],
         "raw_text": str(raw.get("raw_text") or "")[:12000],
         "location_hint": str(raw.get("location_hint") or "")[:1000],
@@ -97,12 +133,16 @@ def _input_for_model(raw: dict[str, Any]) -> dict[str, Any]:
 
 
 def _failure(
-    settings: Settings, category: str, started: float, source_type: str | None
+    settings: Settings,
+    category: str,
+    started: float,
+    source_type: str | None,
+    vertical: str | None = None,
 ) -> dict[str, Any]:
     return {
         "provider": "BEDROCK",
         "model_id": settings.ai_model_id,
-        "prompt_version": prompt_version_for(source_type, settings),
+        "prompt_version": prompt_version_for(source_type, settings, vertical),
         "status": "FAILED",
         "recommendation": None,
         "confidence": None,
@@ -125,6 +165,7 @@ def _parse(
     started: float,
     source_type: str | None,
     deterministic_relevance: str | None,
+    vertical: str | None = None,
 ) -> dict[str, Any]:
     content = response.get("output", {}).get("message", {}).get("content", [])
     text = next(
@@ -184,7 +225,7 @@ def _parse(
     return {
         "provider": "BEDROCK",
         "model_id": settings.ai_model_id,
-        "prompt_version": prompt_version_for(source_type, settings),
+        "prompt_version": prompt_version_for(source_type, settings, vertical),
         "status": "SUCCEEDED",
         "recommendation": recommendation,
         "confidence": float(confidence),
@@ -204,6 +245,7 @@ def _parse(
 def evaluate_shadow(raw: dict[str, Any], settings: Settings) -> dict[str, Any]:
     started = time.perf_counter()
     source_type = str(raw.get("source_type") or "").lower()
+    vertical = str(raw.get("vertical") or "NURSERY").upper()
     try:
         client = boto3.client(
             "bedrock-runtime",
@@ -213,12 +255,16 @@ def evaluate_shadow(raw: dict[str, Any], settings: Settings) -> dict[str, Any]:
         )
         metadata = raw.get("metadata") if isinstance(raw.get("metadata"), dict) else {}
         deterministic_relevance = None
-        classification = metadata.get("recruitment_classification")
+        classification = (
+            metadata.get("care_recruitment_classification")
+            if vertical == "CHILDRENS_HOME"
+            else metadata.get("recruitment_classification")
+        )
         if isinstance(classification, dict):
             deterministic_relevance = classification.get("relevance")
         response = client.converse(
             modelId=settings.ai_model_id,
-            system=[{"text": system_prompt_for(source_type)}],
+            system=[{"text": system_prompt_for(source_type, vertical)}],
             messages=[
                 {
                     "role": "user",
@@ -227,9 +273,11 @@ def evaluate_shadow(raw: dict[str, Any], settings: Settings) -> dict[str, Any]:
             ],
             inferenceConfig={"temperature": 0.0, "maxTokens": 256},
         )
-        result = _parse(response, settings, started, source_type, deterministic_relevance)
+        result = _parse(
+            response, settings, started, source_type, deterministic_relevance, vertical
+        )
     except (ReadTimeoutError, ConnectTimeoutError, EndpointConnectionError):
-        result = _failure(settings, "TIMEOUT", started, source_type)
+        result = _failure(settings, "TIMEOUT", started, source_type, vertical)
     except ClientError as exc:
         code = str(exc.response.get("Error", {}).get("Code", ""))
         http_status = exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
@@ -245,11 +293,11 @@ def evaluate_shadow(raw: dict[str, Any], settings: Settings) -> dict[str, Any]:
             http_status or "UNKNOWN",
             category,
         )
-        result = _failure(settings, category, started, source_type)
+        result = _failure(settings, category, started, source_type, vertical)
     except (ValueError, json.JSONDecodeError):
-        result = _failure(settings, "MALFORMED_RESPONSE", started, source_type)
+        result = _failure(settings, "MALFORMED_RESPONSE", started, source_type, vertical)
     except (BotoCoreError, Exception):
-        result = _failure(settings, "UNKNOWN", started, source_type)
+        result = _failure(settings, "UNKNOWN", started, source_type, vertical)
     logger.info(
         "ai_shadow status=%s category=%s model_id=%s latency_ms=%s",
         result["status"],

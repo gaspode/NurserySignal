@@ -34,6 +34,24 @@ The existing single-AZ Secrets Manager interface endpoint lets them retrieve
 runtime credentials without a NAT gateway. Future collector Lambdas should use
 an explicitly chosen endpoint strategy or remain outside the database VPC.
 
+### SignalHub verticals
+
+SignalHub is the shared internal administration and opportunity engine. NurserySignal
+(`NURSERY`) and CareSignal (`CHILDRENS_HOME`) are active verticals; DentalSignal is
+registered but inactive. Planning and Recruitment are collected once and each provider
+record is evaluated independently by every supported vertical policy. Canonical signal
+identity includes the vertical, and database/service guards prohibit cross-vertical
+opportunity links, merges and Match Review candidates.
+
+CareSignal detects material changes to children's residential care homes. Its policy
+requires explicit children/young-people and residential-home context, rejects adult,
+elderly and nursing care, and treats routine recruitment as supporting evidence only.
+Exact publicly sourced residential addresses are retained only in authenticated
+SignalHub evidence and marked `INTERNAL_EXACT` for future public/subscriber projections.
+The bounded admin endpoint `POST /admin/verticals/CHILDRENS_HOME/backfill` evaluates at
+most 50 preserved Planning/Recruitment records from no more than the last 90 days and
+does not call either provider.
+
 ### Recruitment and opportunities
 
 The first recruitment provider is the documented GOV.UK Find an Apprenticeship

@@ -10,6 +10,7 @@ from uuid import UUID
 import boto3
 
 from app.authorization import normalized_groups
+from app.care_backfill import backfill_care_from_stored_evidence
 from app.config import Settings
 from app.db import check_connection
 from app.ingestion import NormalizedSignal
@@ -53,10 +54,11 @@ SOURCE_DEFINITIONS = {
             "source": "manual",
             "lookback_days": 2,
             "max_records": 100,
+            "care_max_records": 50,
             "page_size": 25,
         },
         "queue_setting": "planning_manual_run_queue_url",
-        "supported_verticals": ["NURSERY"],
+        "supported_verticals": ["NURSERY", "CHILDRENS_HOME"],
     },
     "recruitment": {
         "display_name": "Recruitment vacancies",
@@ -70,7 +72,7 @@ SOURCE_DEFINITIONS = {
             "page_size": 25,
         },
         "queue_setting": "recruitment_manual_run_queue_url",
-        "supported_verticals": ["NURSERY"],
+        "supported_verticals": ["NURSERY", "CHILDRENS_HOME"],
     },
 }
 
@@ -147,6 +149,8 @@ def _admin_path(path: str) -> tuple[str, str | None]:
         return "reprocess", None
     if path == "/admin/recruitment/reprocess":
         return "recruitment-reprocess", None
+    if path == "/admin/verticals/CHILDRENS_HOME/backfill":
+        return "care-backfill", None
     if path == "/admin/opportunities":
         return "opportunity-list", None
     if path == "/admin/opportunities/recalculate":
@@ -427,6 +431,20 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                     200,
                     reprocess_recruitment_signals(
                         settings, actor=actor, limit=limit, signal_ids=signal_ids
+                    ),
+                )
+            if action == "care-backfill" and method == "POST":
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                payload = parse_json_payload(_raw_body(event))
+                days = min(max(int(payload.get("days", 60)), 1), 90)
+                limit = min(max(int(payload.get("limit", 25)), 1), 50)
+                actor = str(claims.get("sub") or claims.get("username") or "unknown")
+                return _response(
+                    200,
+                    backfill_care_from_stored_evidence(
+                        settings, actor=actor, days=days, limit=limit
                     ),
                 )
             if action == "ai-review" and method == "POST" and signal_id:

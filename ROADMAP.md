@@ -184,3 +184,19 @@ Run the bounded opportunity-creation recalculation against production data, revi
 - Refactored existing NurserySignal classification through the Nursery vertical policy boundary while preserving its current collectors and review semantics.
 - Added the shared SignalHub admin shell/selector and an initial cross-vertical Organisations view; customer-facing CareSignal/DentalSignal products and collectors remain deferred.
 - Routed bounded admin collector runs through private SQS command queues so the VPC-attached admin API can trigger collectors reliably without NAT or a fixed-cost Lambda interface endpoint.
+
+## Phase 9 — CareSignal planning and recruitment — ACTIVE
+
+- Activated `CHILDRENS_HOME` as SignalHub's second live vertical behind a dedicated CareSignal policy; DentalSignal remains registered and inactive.
+- Shared Plota and GOV.UK collectors now classify each provider record independently for NurserySignal and CareSignal without cloning collector infrastructure or allowing cross-vertical matching.
+- CareSignal planning requires explicit children's-home context and material opening/expansion evidence; adult/nursing care, generic C2, day nursery and unrelated residential uses remain excluded.
+- CareSignal recruitment distinguishes routine supporting vacancies from explicit opening/pre-registration change evidence. Routine support-worker or manager recruitment cannot create an opportunity by itself.
+- Exact residential locations are marked internal-only for future subscriber projections, while source provenance remains available to authenticated administrators.
+- Added source-specific advisory Bedrock prompt versions and a bounded stored-evidence backfill operation. AI remains advisory and cannot alter deterministic decisions or review state.
+
+Validation gate:
+- inspect a bounded recent Planning and Recruitment sample;
+- manually review every CareSignal candidate and automatic correlation;
+- confirm no NurserySignal/CareSignal cross-links;
+- confirm queues, DLQs and existing NurserySignal schedules remain healthy;
+- tune only from observed false positives or false negatives before adding Ofsted registration data.

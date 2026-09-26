@@ -1,0 +1,324 @@
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+from typing import Any
+
+from app.opportunity_policy import OpportunityCreationDecision
+from app.planning import PlanningRecord, planning_record_from_signal
+from app.recruitment import RecruitmentRecord, recruitment_record_from_signal
+
+CARE_PLANNING_DIRECT = (
+    r"\bchildren(?:['’]s|s)?\s+(?:residential\s+)?(?:care\s+)?home\b",
+    r"\bresidential\s+(?:care\s+)?home\s+for\s+(?:children|young\s+people)\b",
+    r"\bresidential\s+(?:care|accommodation)\s+for\s+(?:children|young\s+people)\b",
+    r"\bhome\s+for\s+(?:up\s+to\s+\d+\s+)?(?:children|young\s+people)\b",
+)
+CARE_CHILD_CONTEXT = (
+    r"\bchildren(?:['’]s|s)?\b",
+    r"\byoung\s+people\b",
+    r"\blooked[- ]after\s+children\b",
+    r"\bchildren\s+in\s+care\b",
+)
+CARE_RESIDENTIAL_CONTEXT = (
+    r"\bcare\s+home\b",
+    r"\bresidential\s+(?:care|home|institution|accommodation)\b",
+    r"\bclass\s+c2\b|\bc2\s+(?:use|residential)\b",
+)
+CARE_ADULT_EXCLUSIONS = (
+    r"\b(?:elderly|older\s+people|older\s+persons|nursing)\s+(?:care\s+)?home\b",
+    r"\badult(?:s|'s)?\s+(?:care|supported\s+living)\b",
+    r"\bdementia\b",
+    r"\bstudent\s+accommodation\b",
+    r"\bhospital\b",
+    r"\bboarding\s+school\b",
+)
+CARE_CHANGE_PATTERNS = {
+    "EXPANSION": (
+        r"\b(?:increase|increasing|increased)\b.{0,50}\b(?:occupancy|capacity|beds?|places?)\b",
+        r"\b(?:extension|expand|expansion|additional)\b",
+    ),
+    "RELOCATION": (r"\b(?:relocat|new\s+premises|move\s+to|new\s+site)\w*\b",),
+    "OPENING": (
+        r"\b(?:change\s+of\s+use|conversion|convert|new\s+build|new\s+children|create|proposed)\w*\b",
+        r"\bcertificate\s+of\s+lawfulness\b",
+    ),
+}
+CARE_ROLE_PATTERNS = (
+    ("registered_manager", r"\bregistered\s+manager\b"),
+    ("responsible_individual", r"\bresponsible\s+individual\b"),
+    ("deputy_manager", r"\bdeputy\s+manager\b"),
+    ("senior_residential_support_worker", r"\bsenior\s+residential\s+support\s+worker\b"),
+    ("residential_support_worker", r"\bresidential\s+(?:childcare\s+)?support\s+worker\b"),
+    ("childrens_home_manager", r"\bchildren(?:['’]s|s)?\s+home\s+manager\b"),
+)
+CARE_RECRUITMENT_CHANGE = {
+    "brand_new_home": r"\bbrand[- ]new\s+(?:children(?:['’]s|s)?\s+)?home\b",
+    "new_childrens_home": r"\bnew\s+children(?:['’]s|s)?\s+home\b",
+    "opening_soon": r"\bopening\s+soon\b",
+    "pre_registration": r"\bpre[- ]registration\b|\bthrough\s+(?:ofsted\s+)?registration\b",
+    "launch_home": r"\b(?:launch|open|opening)\s+(?:our\s+|the\s+)?(?:new\s+)?home\b",
+    "new_service": r"\bnew\s+service\b",
+    "additional_home": (
+        r"\b(?:first|second|third|additional|another)\s+"
+        r"(?:children(?:['’]s|s)?\s+)?home\b"
+    ),
+    "new_property": r"\bnewly\s+acquired\s+property\b",
+}
+
+
+@dataclass(frozen=True)
+class CarePlanningDecision:
+    matched: bool
+    confidence: float
+    change_type: str
+    reasons: tuple[str, ...]
+    exclusions: tuple[str, ...]
+
+
+def _joined(*values: Any) -> str:
+    return " ".join(str(value or "") for value in values).lower()
+
+
+def classify_care_planning(record: PlanningRecord) -> CarePlanningDecision:
+    proposal = _joined(
+        record.description,
+        record.status,
+        record.decision,
+        (record.raw or {}).get("description"),
+        (record.raw or {}).get("category"),
+        (record.raw or {}).get("planning_route"),
+    )
+    direct = [pattern for pattern in CARE_PLANNING_DIRECT if re.search(pattern, proposal)]
+    child = [pattern for pattern in CARE_CHILD_CONTEXT if re.search(pattern, proposal)]
+    residential = [pattern for pattern in CARE_RESIDENTIAL_CONTEXT if re.search(pattern, proposal)]
+    exclusions = [pattern for pattern in CARE_ADULT_EXCLUSIONS if re.search(pattern, proposal)]
+    matched = bool(direct or (child and residential)) and not exclusions
+    change_type = "OTHER_CHANGE"
+    if matched:
+        for candidate, patterns in CARE_CHANGE_PATTERNS.items():
+            if any(re.search(pattern, proposal) for pattern in patterns):
+                change_type = candidate
+                break
+    confidence = 0.15
+    if matched:
+        confidence = 0.9 if direct else 0.78
+        if change_type == "EXPANSION":
+            confidence = max(confidence, 0.88)
+    reasons = tuple(
+        item
+        for item, present in (
+            ("explicit children-home wording", bool(direct)),
+            ("children/young-people context", bool(child)),
+            ("residential-care context", bool(residential)),
+        )
+        if present
+    )
+    return CarePlanningDecision(matched, confidence, change_type, reasons, tuple(exclusions))
+
+
+def classify_care_recruitment(record: RecruitmentRecord) -> dict[str, Any]:
+    title = record.title.lower()
+    setting_text = _joined(record.employer_name, record.workplace_name, record.description)
+    full_text = _joined(title, setting_text)
+    roles = [name for name, pattern in CARE_ROLE_PATTERNS if re.search(pattern, title)]
+    child_context = any(re.search(pattern, full_text) for pattern in CARE_CHILD_CONTEXT)
+    home_context = bool(
+        re.search(r"\b(?:residential\s+)?children(?:['’]s|s)?\s+home\b", full_text)
+        or (child_context and re.search(r"\bresidential\s+(?:care|home)\b", full_text))
+    )
+    adult_exclusions = [
+        pattern for pattern in CARE_ADULT_EXCLUSIONS if re.search(pattern, full_text)
+    ]
+    changes = [
+        name for name, pattern in CARE_RECRUITMENT_CHANGE.items() if re.search(pattern, full_text)
+    ]
+    matched = bool(roles and home_context and not adult_exclusions)
+    relevance = (
+        "RELEVANT_CHANGE"
+        if matched and changes
+        else "RELEVANT_ROUTINE"
+        if matched
+        else "IRRELEVANT"
+    )
+    confidence = 0.18
+    if matched:
+        confidence = 0.82
+        if roles[0] in {"registered_manager", "childrens_home_manager", "responsible_individual"}:
+            confidence += 0.06
+        if changes:
+            confidence += 0.06
+        confidence = min(confidence, 0.96)
+    return {
+        "matched": matched,
+        "role_category": roles[0] if roles else "other",
+        "role_categories": roles,
+        "setting_category": "childrens_home" if home_context else "unknown",
+        "setting_categories": ["childrens_home"] if home_context else [],
+        "relevance": relevance,
+        "commercial_change_evidence": "STRONG" if changes else "NONE",
+        "explicit_change_terms": changes,
+        "exclusions": adult_exclusions,
+        "confidence": confidence,
+        "likely_false_positive": bool(adult_exclusions),
+        "matched_role_terms": roles,
+        "matched_setting_terms": ["childrens_home"] if home_context else [],
+        "ambiguity_flags": [],
+    }
+
+
+def care_planning_signal(record: PlanningRecord, decision: CarePlanningDecision) -> dict[str, Any]:
+    from app.planning import planning_signal
+
+    class CompatibleDecision:
+        positive_terms = decision.reasons
+        exclusions = decision.exclusions
+        school_nursery = False
+        childcare_terms: tuple[str, ...] = ()
+        horticultural_terms: tuple[str, ...] = ()
+
+    signal = planning_signal(record, CompatibleDecision())  # type: ignore[arg-type]
+    signal["vertical"] = "CHILDRENS_HOME"
+    signal["metadata"]["care_classification"] = {
+        "matched": decision.matched,
+        "confidence": decision.confidence,
+        "change_type": decision.change_type,
+        "reasons": list(decision.reasons),
+        "exclusions": list(decision.exclusions),
+    }
+    signal["metadata"]["location_sensitivity"] = "INTERNAL_EXACT"
+    return signal
+
+
+def care_recruitment_signal(record: RecruitmentRecord, decision: dict[str, Any]) -> dict[str, Any]:
+    from app.recruitment import recruitment_signal
+
+    signal = recruitment_signal(record, decision)
+    signal["vertical"] = "CHILDRENS_HOME"
+    signal["metadata"]["care_recruitment_classification"] = decision
+    signal["metadata"]["location_sensitivity"] = "INTERNAL_EXACT"
+    return signal
+
+
+def enrich_care_signal(raw: dict[str, Any]) -> dict[str, Any]:
+    source_type = str(raw.get("source_type") or "").lower()
+    metadata = raw.get("metadata") or {}
+    if source_type == "planning":
+        decision = classify_care_planning(planning_record_from_signal(raw))
+        matched = decision.matched
+        change_type = decision.change_type
+        relevance = (
+            "RELEVANT_CHANGE"
+            if matched and change_type != "OTHER_CHANGE"
+            else "RELEVANT_ROUTINE"
+            if matched
+            else "IRRELEVANT"
+        )
+        confidence = decision.confidence
+        role = None
+        setting = "childrens_home" if matched else "unknown"
+        changes: list[str] = []
+    elif source_type == "recruitment":
+        decision = classify_care_recruitment(recruitment_record_from_signal(raw))
+        matched = decision["matched"]
+        relevance = decision["relevance"]
+        change_type = (
+            "OPENING" if decision["commercial_change_evidence"] == "STRONG" else "OTHER_CHANGE"
+        )
+        confidence = decision["confidence"]
+        role = decision["role_category"]
+        setting = decision["setting_category"]
+        changes = decision["explicit_change_terms"]
+    else:
+        raise ValueError("unsupported CareSignal source type")
+    material_planning_change = source_type == "planning" and change_type != "OTHER_CHANGE"
+    commercial_change = "STRONG" if material_planning_change or changes else "NONE"
+    action = (
+        "CREATE_OPPORTUNITY"
+        if matched
+        and (
+            material_planning_change
+            or (source_type == "recruitment" and relevance == "RELEVANT_CHANGE")
+        )
+        else "SUPPORT_EXISTING_ONLY"
+        if matched
+        else "IGNORE_FOR_OPPORTUNITY"
+    )
+    creation_reason = (
+        "Planning evidence indicates expansion of an existing children's home"
+        if source_type == "planning" and change_type == "EXPANSION"
+        else "Planning evidence indicates a new children's home"
+        if material_planning_change
+        else "Recruitment explicitly indicates a new or opening children's home"
+        if action == "CREATE_OPPORTUNITY"
+        else "Relevant evidence supports an existing CareSignal opportunity only"
+    )
+    facts = {
+        "method": "care-deterministic-v1",
+        "classification": "care-planning" if source_type == "planning" else "care-recruitment",
+        "source_type": source_type,
+        "children_home_relevance": relevance,
+        "recruitment_relevance": relevance if source_type == "recruitment" else "unknown",
+        "commercial_change_evidence": commercial_change,
+        "opportunity_creation_decision": action,
+        "opportunity_change_type": change_type,
+        "opportunity_creation_reason": creation_reason,
+        "care_role_category": role,
+        "care_setting_category": setting,
+        "care_explicit_change_terms": changes,
+        "likely_false_positive": not matched,
+        "location_sensitivity": "INTERNAL_EXACT",
+    }
+    title = str(raw.get("title") or "Children's home signal")
+    operator = raw.get("organisation_hint")
+    return {
+        "raw_signal_id": raw["id"],
+        "schema_version": "1.0",
+        "source_type": source_type,
+        "raw_text": raw.get("raw_text"),
+        "metadata": metadata,
+        "event_type": (
+            "expansion"
+            if change_type == "EXPANSION"
+            else "opening"
+            if action == "CREATE_OPPORTUNITY"
+            else "other"
+        ),
+        "nursery_name": operator or title,
+        "operator_name": operator,
+        "address": raw.get("location_hint"),
+        "expected_opening_date": None,
+        "capacity": None,
+        "lifecycle_stage": "PLANNING" if source_type == "planning" else "RECRUITING",
+        "confidence": confidence,
+        "extracted_facts": facts,
+        "evidence": {
+            "source_url": raw.get("source_url"),
+            "title": title,
+            "location_hint": raw.get("location_hint"),
+        },
+    }
+
+
+def care_opportunity_decision(candidate: dict[str, Any]) -> OpportunityCreationDecision:
+    facts = candidate.get("extracted_facts") or {}
+    return OpportunityCreationDecision(
+        str(facts.get("opportunity_creation_decision") or "REVIEW"),
+        str(facts.get("opportunity_change_type") or "OTHER_CHANGE"),
+        str(facts.get("opportunity_creation_reason") or "CareSignal evidence requires review"),
+    )
+
+
+def care_opportunity_title(candidate: dict[str, Any], decision: OpportunityCreationDecision) -> str:
+    operator = str(candidate.get("operator_name") or "").strip()
+    address = str(candidate.get("address") or "").strip()
+    postcode = str((candidate.get("metadata") or {}).get("postcode") or "").strip()
+    subject = operator if operator and len(operator) <= 100 else address[:100] or "Children's home"
+    label = {
+        "OPENING": "New children's home",
+        "EXPANSION": "Children's home expansion",
+        "RELOCATION": "Children's home relocation",
+    }.get(decision.change_type, "Children's home change")
+    return f"{label} — {subject}" + (
+        f" ({postcode})" if postcode and postcode.lower() not in subject.lower() else ""
+    )

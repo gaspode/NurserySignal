@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from uuid import uuid4
 
-from app.ai_shadow import evaluate_shadow
+from app.ai_shadow import evaluate_shadow, prompt_version_for, system_prompt_for
 from app.config import Settings
 from app.worker import handler
 
@@ -89,6 +89,22 @@ def recruitment_response(recommendation="APPROVE", relevance="RELEVANT_ROUTINE")
     payload["commercial_change_evidence"] = "NONE"
     value["output"]["message"]["content"][0]["text"] = json.dumps(payload)
     return value
+
+
+def test_care_prompts_are_vertical_and_source_specific():
+    config = Settings()
+    assert (
+        prompt_version_for("planning", config, "CHILDRENS_HOME")
+        == "care-planning-shadow-v1"
+    )
+    assert (
+        prompt_version_for("recruitment", config, "CHILDRENS_HOME")
+        == "care-recruitment-shadow-v1"
+    )
+    assert "children's" in system_prompt_for("planning", "CHILDRENS_HOME")
+    assert "residential care home" in system_prompt_for("planning", "CHILDRENS_HOME")
+    assert "RELEVANT_ROUTINE" in system_prompt_for("recruitment", "CHILDRENS_HOME")
+    assert "nursery/early-years" in system_prompt_for("planning", "NURSERY")
 
 
 def test_shadow_accepts_each_allowed_recommendation(monkeypatch):

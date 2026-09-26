@@ -17,7 +17,6 @@ from app.correlation import (
 )
 from app.db import connection
 from app.ingestion import NormalizedSignal
-from app.opportunity_policy import opportunity_creation_decision, opportunity_title
 from app.queueing import EnrichmentMessage, send_enrichment_message
 from app.recruitment import recruitment_record_from_signal
 from app.verticals import NURSERY, policy_for, validate_vertical
@@ -42,6 +41,36 @@ def record_admin_audit(
             (action, actor, target_type, Jsonb(details)),
         ).fetchone()
     return str(row[0])
+
+
+def _resolve_operator_id(conn: Any, name: Any, metadata: dict[str, Any]) -> Any | None:
+    """Resolve a shared organisation without weakening vertical isolation."""
+    display_name = str(name or "").strip()
+    if not display_name:
+        return None
+    company_number = str(
+        metadata.get("companies_house_number") or metadata.get("company_number") or ""
+    ).strip() or None
+    website = str(metadata.get("website") or metadata.get("website_url") or "").strip() or None
+    identity = normalize_identity(display_name)
+    conn.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (f"operator:{identity}",))
+    if company_number:
+        row = conn.execute(
+            "SELECT id FROM operators WHERE companies_house_number = %s", (company_number,)
+        ).fetchone()
+        if row:
+            return row[0]
+    rows = conn.execute(
+        "SELECT id, name, legal_name FROM operators ORDER BY created_at LIMIT 1000"
+    ).fetchall()
+    for row in rows:
+        if identity in {normalize_identity(row[1]), normalize_identity(row[2])}:
+            return row[0]
+    return conn.execute(
+        """INSERT INTO operators (name, legal_name, companies_house_number, website_url)
+           VALUES (%s, %s, %s, %s) RETURNING id""",
+        (display_name, display_name, company_number, website),
+    ).fetchone()[0]
 
 
 @dataclass(frozen=True)
@@ -99,8 +128,9 @@ def store_signal(
             """
             INSERT INTO raw_signals (
                 schema_version, vertical, source_type, source_url, external_id, discovered_at,
-                title, raw_text, location_hint, organisation_hint, metadata, content_sha256
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                title, raw_text, location_hint, organisation_hint, metadata, content_sha256,
+                location_sensitivity
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (vertical, source_type, external_id) DO NOTHING
             RETURNING id, enrichment_queued_at, content_sha256
             """,
@@ -117,6 +147,7 @@ def store_signal(
                 signal.organisation_hint,
                 Jsonb(signal.metadata),
                 content_sha256,
+                signal.metadata.get("location_sensitivity", "STANDARD"),
             ),
         ).fetchone()
         created = row is not None
@@ -276,7 +307,8 @@ def get_raw_signal(settings: Settings, signal_id: str) -> dict[str, Any] | None:
         row = conn.execute(
             """
             SELECT id, schema_version, source_type, source_url, external_id, discovered_at,
-                   title, raw_text, location_hint, organisation_hint, metadata, vertical
+                   title, raw_text, location_hint, organisation_hint, metadata, vertical,
+                   location_sensitivity
             FROM raw_signals WHERE id = %s
             """,
             (signal_id,),
@@ -296,8 +328,45 @@ def get_raw_signal(settings: Settings, signal_id: str) -> dict[str, Any] | None:
         "organisation_hint",
         "metadata",
         "vertical",
+        "location_sensitivity",
     )
     return dict(zip(keys, row))
+
+
+def list_vertical_backfill_candidates(
+    settings: Settings, *, from_vertical: str, days: int, limit: int
+) -> list[dict[str, Any]]:
+    """Return a bounded stored-evidence corpus without contacting a provider."""
+    from_vertical = validate_vertical(from_vertical)
+    days = min(max(days, 1), 90)
+    limit = min(max(limit, 1), 50)
+    with connection(settings) as conn:
+        rows = conn.execute(
+            """SELECT id, schema_version, source_type, source_url, external_id, discovered_at,
+                      title, raw_text, location_hint, organisation_hint, metadata, vertical
+               FROM raw_signals
+               WHERE vertical = %s
+                 AND source_type IN ('planning', 'recruitment')
+                 AND discovered_at >= now() - (%s * interval '1 day')
+               ORDER BY discovered_at DESC, id DESC
+               LIMIT %s""",
+            (from_vertical, days, limit),
+        ).fetchall()
+    fields = (
+        "id",
+        "schema_version",
+        "source_type",
+        "source_url",
+        "external_id",
+        "discovered_at",
+        "title",
+        "raw_text",
+        "location_hint",
+        "organisation_hint",
+        "metadata",
+        "vertical",
+    )
+    return [dict(zip(fields, row)) for row in rows]
 
 
 def list_signals(
@@ -380,7 +449,8 @@ def list_signals(
             f"""
             SELECT rs.id, rs.schema_version, rs.source_type, rs.source_url, rs.external_id,
                    rs.discovered_at, rs.title, rs.location_hint, rs.organisation_hint,
-                   rs.metadata, rs.vertical, rs.created_at, rs.enrichment_queued_at,
+                   rs.metadata, rs.vertical, rs.location_sensitivity, rs.created_at,
+                   rs.enrichment_queued_at,
                    se.review_status,
                    se.event_type, se.nursery_name, se.operator_name, se.lifecycle_stage,
                    se.confidence, se.extracted_facts, ai.recommendation,
@@ -412,6 +482,7 @@ def list_signals(
         "organisation_hint",
         "metadata",
         "vertical",
+        "location_sensitivity",
         "created_at",
         "enrichment_queued_at",
         "review_status",
@@ -1029,7 +1100,7 @@ def correlate_signal(
         candidate.get("nursery_name")
         or candidate.get("operator_name")
         or candidate.get("address")
-        or "Unmatched nursery signal"
+        or "Unmatched signal"
     )
     operator = candidate.get("operator_name")
     base_confidence = float(candidate.get("confidence") or 0.2)
@@ -1168,18 +1239,21 @@ def correlate_signal(
                 ),
             )
         elif creation.decision == "CREATE_OPPORTUNITY":
-            display_name = opportunity_title(candidate, creation)
+            vertical_policy = policy_for(signal_vertical)
+            display_name = vertical_policy.build_opportunity_title(candidate, creation)
+            operator_id = _resolve_operator_id(conn, operator, metadata)
             opportunity_id = conn.execute(
                 """INSERT INTO opportunities
-                   (name, event_type, lifecycle_stage, confidence, confidence_breakdown,
-                    stage_reason, creation_reason, vertical, operator_name, address, postcode,
-                   town, change_type)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                   (name, operator_id, event_type, lifecycle_stage, confidence,
+                    confidence_breakdown, stage_reason, creation_reason, vertical,
+                    operator_name, address, postcode, town, change_type, location_sensitivity)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                    RETURNING id""",
                 (
                     display_name,
+                    operator_id,
                     candidate.get("event_type") or "other",
-                    "PLANNING" if source_type == "planning" else "DISCOVERED",
+                    vertical_policy.initial_lifecycle(source_type),
                     base_confidence,
                     Jsonb(
                         {
@@ -1202,6 +1276,7 @@ def correlate_signal(
                     postcode,
                     metadata.get("town") or metadata.get("locality"),
                     creation.change_type,
+                    "INTERNAL_EXACT" if signal_vertical == "CHILDRENS_HOME" else "STANDARD",
                 ),
             ).fetchone()[0]
         else:
@@ -1552,14 +1627,15 @@ def recalculate_opportunity_creation(
                 row,
             )
         )
-        candidate = policy_for(str(raw.get("vertical") or NURSERY)).classify_signal(raw)
+        vertical_policy = policy_for(str(raw.get("vertical") or NURSERY))
+        candidate = vertical_policy.classify_signal(raw)
         candidate["metadata"] = {
             **(raw.get("metadata") or {}),
             "source_type": raw.get("source_type"),
             "vertical": raw.get("vertical", NURSERY),
         }
         facts = candidate["extracted_facts"]
-        creation = opportunity_creation_decision(candidate)
+        creation = vertical_policy.determine_opportunity_action(candidate)
         with connection(settings) as conn:
             conn.execute(
                 """UPDATE signal_enrichments
@@ -1622,7 +1698,11 @@ def recalculate_opportunity_creation(
                              SELECT 1 FROM opportunity_signal_history h
                              WHERE h.opportunity_id = opportunities.id AND h.action LIKE 'ADMIN%%'
                          )""",
-                    (opportunity_title(candidate, creation), creation.change_type, raw["id"]),
+                    (
+                        vertical_policy.build_opportunity_title(candidate, creation),
+                        creation.change_type,
+                        raw["id"],
+                    ),
                 )
             conn.commit()
         result = correlate_signal(settings, str(raw["id"]), candidate)
@@ -1701,7 +1781,7 @@ def list_opportunities(
             f"""SELECT o.id, o.name, o.operator_id, o.operator_name, o.address, o.postcode, o.town,
                        o.vertical, o.change_type, o.event_type, o.lifecycle_stage, o.confidence,
                        o.confidence_breakdown, o.stage_reason, o.creation_reason,
-                       o.first_seen_at, o.latest_update_at,
+                       o.first_seen_at, o.latest_update_at, o.location_sensitivity,
                        count(os.raw_signal_id) FILTER (WHERE os.status = 'ACTIVE')
                 FROM opportunities o LEFT JOIN opportunity_signals os ON os.opportunity_id = o.id
                 WHERE o.review_status NOT IN ('MERGED', 'REJECTED') AND {where}
@@ -1726,6 +1806,7 @@ def list_opportunities(
         "creation_reason",
         "first_seen_at",
         "latest_update_at",
+        "location_sensitivity",
         "signal_count",
     )
     return {
@@ -1786,7 +1867,7 @@ def opportunity_detail(settings: Settings, opportunity_id: str) -> dict[str, Any
             """SELECT id, name, operator_name, address, postcode, town, vertical, change_type,
                       event_type, lifecycle_stage, confidence,
                       confidence_breakdown, stage_reason, creation_reason, first_seen_at,
-                      latest_update_at FROM opportunities WHERE id = %s""",
+                      latest_update_at, location_sensitivity FROM opportunities WHERE id = %s""",
             (opportunity_id,),
         ).fetchone()
         if not opportunity:
@@ -1843,6 +1924,7 @@ def opportunity_detail(settings: Settings, opportunity_id: str) -> dict[str, Any
         "creation_reason": opportunity[13],
         "first_seen_at": opportunity[14],
         "latest_update_at": opportunity[15],
+        "location_sensitivity": opportunity[16],
         "signals": [dict(zip(fields, row)) for row in rows],
     }
 
@@ -2022,34 +2104,29 @@ def create_opportunity_from_signal(
         if existing:
             return {"opportunity_id": str(existing[0]), "created": False}
         facts = facts or {}
-        creation = opportunity_creation_decision(
-            {
-                "source_type": source_type,
-                "raw_text": raw_text,
-                "nursery_name": name,
-                "operator_name": organisation,
-                "address": location,
-                "event_type": event_type,
-                "extracted_facts": facts,
-                "metadata": metadata,
-            }
-        )
+        candidate = {
+            "source_type": source_type,
+            "raw_text": raw_text,
+            "nursery_name": name,
+            "operator_name": organisation,
+            "address": location,
+            "event_type": event_type,
+            "extracted_facts": facts,
+            "metadata": metadata,
+        }
+        vertical_policy = policy_for(str(vertical))
+        creation = vertical_policy.determine_opportunity_action(candidate)
+        operator_id = _resolve_operator_id(conn, organisation, metadata)
         opportunity_id = conn.execute(
             """INSERT INTO opportunities
-               (name, event_type, lifecycle_stage, confidence, vertical, operator_name,
-                address, postcode, town, stage_reason, creation_reason, change_type)
-               VALUES (%s, %s, %s, %s, 'NURSERY', %s, %s, %s, %s, %s, %s, %s)
+               (name, operator_id, event_type, lifecycle_stage, confidence, vertical, operator_name,
+                address, postcode, town, stage_reason, creation_reason, change_type,
+                location_sensitivity)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                RETURNING id""",
             (
-                opportunity_title(
-                    {
-                        "operator_name": organisation,
-                        "address": location,
-                        "metadata": metadata,
-                        "raw_text": raw_text,
-                    },
-                    creation,
-                ),
+                vertical_policy.build_opportunity_title(candidate, creation),
+                operator_id,
                 event_type or "other",
                 lifecycle or "DISCOVERED",
                 confidence or 0,
@@ -2061,6 +2138,7 @@ def create_opportunity_from_signal(
                 "created by admin from signal",
                 "Created manually from preserved signal evidence.",
                 creation.change_type,
+                "INTERNAL_EXACT" if vertical == "CHILDRENS_HOME" else "STANDARD",
             ),
         ).fetchone()[0]
         conn.execute(

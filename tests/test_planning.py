@@ -287,12 +287,15 @@ def test_collector_queues_only_candidates_and_reports_counts(monkeypatch) -> Non
         "duplicates": 0,
         "excluded": 1,
         "errors": 0,
+        "nursery_matched": 1,
+        "care_matched": 0,
     }
     assert queued[0].signal["external_id"] == "plota:abc123"
     assert logged == [
-        "planning_collection_summary fetched=2 matched=1 queued=1 duplicates=0 "
-        "excluded=1 errors=0 lookback_days=2 max_records=100 page_size=50 source=manual"
-    ]
+            "planning_collection_summary fetched=2 matched=1 queued=1 duplicates=0 "
+            "excluded=1 errors=0 nursery_matched=1 care_matched=0 "
+            "lookback_days=2 max_records=100 care_max_records=50 page_size=50 source=manual"
+        ]
 
 
 def test_provider_invalid_shape_is_rejected() -> None:

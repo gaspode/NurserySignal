@@ -242,6 +242,20 @@ describe("admin frontend", () => {
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
   });
 
+  it("runs a bounded CareSignal backfill from stored evidence", async () => {
+    const apiClient = vi.fn()
+      .mockResolvedValueOnce({ items: [] })
+      .mockResolvedValueOnce({ evaluated: 25, relevant: 3, accepted: 3 });
+    render(<SourcesPage apiClient={apiClient} />);
+    await screen.findByRole("heading", { name: "Stored-evidence backfill" });
+    await userEvent.click(screen.getByRole("button", { name: "Run CareSignal backfill" }));
+    expect(apiClient).toHaveBeenCalledWith(
+      "/admin/verticals/CHILDRENS_HOME/backfill",
+      { method: "POST", body: JSON.stringify({ days: 60, limit: 25 }) },
+    );
+    expect(await screen.findByText(/3 relevant and 3 newly accepted/)).toBeInTheDocument();
+  });
+
   it("shows recruitment role, setting, routine relevance and change evidence", async () => {
     const value = detail();
     value.source_type = "recruitment";

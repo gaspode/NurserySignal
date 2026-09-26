@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from typing import Any
 
+from app.care import care_planning_signal, classify_care_planning
 from app.collector_events import collector_payload
 from app.config import Settings
 from app.logging import configure_logging
@@ -30,6 +32,7 @@ def collect_planning(
     query = PlanningQuery.from_event(event)
     source = str(event.get("source", "manual"))[:32]
     lookback_days = min(max(int(event.get("lookback_days", 2)), 1), 31)
+    care_max_records = min(max(int(event.get("care_max_records", 50)), 1), 100)
     run_id, started_at = start_run(
         settings,
         source_key="planning",
@@ -39,6 +42,7 @@ def collect_planning(
             "lookback_days": lookback_days,
             "max_records": query.max_records,
             "page_size": query.page_size,
+            "care_max_records": care_max_records,
         },
         run_id=str(event.get("run_id")) if event.get("run_id") else None,
         started_at=str(event.get("run_started_at")) if event.get("run_started_at") else None,
@@ -50,6 +54,8 @@ def collect_planning(
         "duplicates": 0,
         "excluded": 0,
         "errors": 0,
+        "nursery_matched": 0,
+        "care_matched": 0,
     }
     status = "SUCCESS"
     failure_category = failure_message = None
@@ -61,33 +67,66 @@ def collect_planning(
             provider = PlotaProvider(api_key, base_url=settings.planning_provider_base_url)
         if not settings.ingestion_queue_url:
             raise RuntimeError("INGESTION_QUEUE_URL is not configured")
-        for record in provider.applications(query):
-            counts["records_fetched"] += 1
-            decision: CandidateDecision = candidate_decision(record)
-            if not decision.matched:
-                counts["excluded"] += 1
-                continue
-            counts["candidates_matched"] += 1
-            try:
-                signal = planning_signal(record, decision)
-                body = json.dumps(
-                    {
-                        "message_version": "1.0",
-                        "signal": signal,
-                        "raw_provider_record": record.raw,
-                    },
-                    separators=(",", ":"),
-                    sort_keys=True,
-                ).encode()
-                if len(body) > 240_000:
-                    raise ValueError("planning record is too large for SQS")
-                send_ingestion_message(settings, SignalIngestionMessage.from_json(body))
-                counts["signals_queued"] += 1
-            except Exception:
-                counts["errors"] += 1
-                logger.exception(
-                    "planning_record_queue_failed application_id=%s", record.application_id
-                )
+        queries = (
+            [query]
+            if event.get("search_term")
+            else [
+                query,
+                replace(
+                    query,
+                    search_term="children's home",
+                    max_records=(care_max_records + 1) // 2,
+                ),
+                replace(
+                    query,
+                    search_term="childrens home",
+                    max_records=care_max_records // 2,
+                ),
+            ]
+        )
+        seen_records: set[tuple[str, str]] = set()
+        for provider_query in queries:
+            for record in provider.applications(provider_query):
+                record_key = (record.application_id, record.description)
+                if record_key in seen_records:
+                    continue
+                seen_records.add(record_key)
+                counts["records_fetched"] += 1
+                nursery_decision: CandidateDecision = candidate_decision(record)
+                care_decision = classify_care_planning(record)
+                signals = []
+                if nursery_decision.matched:
+                    signals.append(planning_signal(record, nursery_decision))
+                    counts["nursery_matched"] += 1
+                if care_decision.matched:
+                    signals.append(care_planning_signal(record, care_decision))
+                    counts["care_matched"] += 1
+                if not signals:
+                    counts["excluded"] += 1
+                    continue
+                counts["candidates_matched"] += len(signals)
+                for signal in signals:
+                    try:
+                        body = json.dumps(
+                            {
+                                "message_version": "1.0",
+                                "signal": signal,
+                                "raw_provider_record": record.raw,
+                            },
+                            separators=(",", ":"),
+                            sort_keys=True,
+                        ).encode()
+                        if len(body) > 240_000:
+                            raise ValueError("planning record is too large for SQS")
+                        send_ingestion_message(settings, SignalIngestionMessage.from_json(body))
+                        counts["signals_queued"] += 1
+                    except Exception:
+                        counts["errors"] += 1
+                        logger.exception(
+                            "planning_record_queue_failed application_id=%s vertical=%s",
+                            record.application_id,
+                            signal.get("vertical", "NURSERY"),
+                        )
     except Exception as exc:
         status = "FAILED"
         failure_category, failure_message = safe_failure(exc)
@@ -96,15 +135,19 @@ def collect_planning(
     finally:
         logger.info(
             "planning_collection_summary fetched=%d matched=%d queued=%d duplicates=%d "
-            "excluded=%d errors=%d lookback_days=%d max_records=%d page_size=%d source=%s",
+            "excluded=%d errors=%d nursery_matched=%d care_matched=%d "
+            "lookback_days=%d max_records=%d care_max_records=%d page_size=%d source=%s",
             counts["records_fetched"],
             counts["candidates_matched"],
             counts["signals_queued"],
             counts["duplicates"],
             counts["excluded"],
             counts["errors"],
+            counts["nursery_matched"],
+            counts["care_matched"],
             lookback_days,
             query.max_records,
+            care_max_records,
             query.page_size,
             source,
         )
