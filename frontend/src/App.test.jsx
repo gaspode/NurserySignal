@@ -226,6 +226,22 @@ describe("admin frontend", () => {
     expect(await screen.findByText("Run in progress…")).toBeInTheDocument();
   });
 
+  it("shows source run failures in an alert dialog with an OK button", async () => {
+    const planning = { key: "planning", display_name: "Planning applications", provider: "Plota", schedule_state: "ENABLED", schedule_expression: "rate(1 day)", recent_runs: [] };
+    const apiClient = vi.fn()
+      .mockResolvedValueOnce({ items: [planning] })
+      .mockRejectedValueOnce(new Error("Internal Server Error"));
+    render(<SourcesPage apiClient={apiClient} />);
+    await screen.findByText("Planning applications");
+    await userEvent.click(screen.getByRole("button", { name: "Run now" }));
+    const alert = await screen.findByRole("alertdialog");
+    expect(alert).toHaveTextContent("Source run could not be started");
+    expect(alert).toHaveTextContent("Internal Server Error");
+    expect(screen.queryByRole("button", { name: "Try again" })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "OK" }));
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+  });
+
   it("shows recruitment role, setting, routine relevance and change evidence", async () => {
     const value = detail();
     value.source_type = "recruitment";

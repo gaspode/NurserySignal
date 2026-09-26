@@ -24,8 +24,8 @@ class Settings:
     ai_planning_prompt_version: str = "planning-shadow-v2"
     ai_recruitment_prompt_version: str = "recruitment-shadow-v3"
     source_runs_table_name: str | None = None
-    planning_collector_function_name: str | None = None
-    recruitment_collector_function_name: str | None = None
+    planning_manual_run_queue_url: str | None = None
+    recruitment_manual_run_queue_url: str | None = None
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -58,7 +58,6 @@ class Settings:
                 "AI_RECRUITMENT_PROMPT_VERSION", "recruitment-shadow-v3"
             ),
             source_runs_table_name=os.getenv("SOURCE_RUNS_TABLE_NAME") or None,
-            planning_collector_function_name=os.getenv("PLANNING_COLLECTOR_FUNCTION_NAME") or None,
-            recruitment_collector_function_name=os.getenv("RECRUITMENT_COLLECTOR_FUNCTION_NAME")
-            or None,
+            planning_manual_run_queue_url=os.getenv("PLANNING_MANUAL_RUN_QUEUE_URL") or None,
+            recruitment_manual_run_queue_url=os.getenv("RECRUITMENT_MANUAL_RUN_QUEUE_URL") or None,
         )

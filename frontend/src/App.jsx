@@ -189,6 +189,25 @@ function ConfirmationModal({ title, message, confirmLabel, danger = false, busy 
   );
 }
 
+function AlertModal({ title, message, onClose }) {
+  const okRef = useRef(null);
+  useEffect(() => {
+    okRef.current?.focus();
+    const handleKeyDown = (event) => {
+      if (event.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [onClose]);
+  return <div className="modal-backdrop" role="presentation">
+    <div className="modal" role="alertdialog" aria-modal="true" aria-labelledby="alert-title" aria-describedby="alert-message" onMouseDown={(event) => event.stopPropagation()}>
+      <h2 id="alert-title">{title}</h2>
+      <p id="alert-message" className="muted">{message}</p>
+      <div className="modal-actions"><button ref={okRef} className="button primary" onClick={onClose}>OK</button></div>
+    </div>
+  </div>;
+}
+
 function Shell({ user, onLogout, onNavigate, currentPath, vertical, onVerticalChange, children }) {
   const email = user?.getUsername?.() || "Signed-in staff";
   const route = currentPath.split("?")[0];
@@ -227,13 +246,13 @@ export function SourcesPage({ apiClient }) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [running, setRunning] = useState(null);
-  const [error, setError] = useState("");
+  const [error, setError] = useState(null);
   const [notice, setNotice] = useState("");
   const load = async ({ initial = false } = {}) => {
     if (initial) setLoading(true); else setRefreshing(true);
-    setError("");
+    setError(null);
     try { setSources((await apiClient("/admin/sources")).items || []); }
-    catch (loadError) { setError(loadError.message); }
+    catch (loadError) { setError({ title: "Sources unavailable", message: loadError.message || "The source status could not be loaded." }); }
     finally { setLoading(false); setRefreshing(false); }
   };
   useEffect(() => { load({ initial: true }); }, []);
@@ -248,23 +267,29 @@ export function SourcesPage({ apiClient }) {
           setRunning(null);
           setNotice(`${source.display_name} run ${source.last_run.status.toLowerCase()}.`);
         }
-      } catch (pollError) { setError(pollError.message); }
+      } catch (pollError) { setError({ title: "Run status unavailable", message: pollError.message || "The latest run status could not be loaded." }); }
     }, 2000);
     return () => window.clearInterval(timer);
   }, [running, apiClient]);
   async function run(source) {
     setRunning({ sourceKey: source.key, runId: null });
-    setError(""); setNotice("");
+    setError(null); setNotice("");
     try {
       const result = await apiClient(`/admin/sources/${source.key}/run`, { method: "POST" });
       setRunning({ sourceKey: source.key, runId: result.run_id });
       await load();
-    } catch (runError) { setRunning(null); setError(runError.message); }
+    } catch (runError) {
+      setRunning(null);
+      setError({
+        title: "Source run could not be started",
+        message: `${source.display_name} was not started. ${runError.message || "Please try again later."}`,
+      });
+    }
   }
   if (loading) return <LoadingState label="Loading sources" />;
   return <section>
     <div className="page-heading"><div><p className="eyebrow">Collection operations</p><h1>Sources</h1><p className="muted">Monitor configured collectors and start bounded manual runs.</p></div><RefreshButton busy={refreshing} onClick={load} /></div>
-    {notice && <div className="notice" role="status">{notice}</div>}{error && <ErrorState message={error} onRetry={load} />}
+    {notice && <div className="notice" role="status">{notice}</div>}
     <div className="sources-grid">{sources.map((source) => {
       const active = running?.sourceKey === source.key;
       const summary = source.last_summary || {};
@@ -277,6 +302,7 @@ export function SourcesPage({ apiClient }) {
         {source.recent_runs?.length > 0 && <details className="source-history"><summary>Recent runs ({source.recent_runs.length})</summary>{source.recent_runs.map((item) => <div className="source-history-row" key={item.id}><span>{formatDate(item.started_at, true)} · {titleCase(item.invocation_source)}</span><Badge tone={item.status === "SUCCESS" ? "approved" : item.status === "FAILED" ? "rejected" : "pending"}>{item.status}</Badge></div>)}</details>}
       </article>;
     })}</div>
+    {error && <AlertModal title={error.title} message={error.message} onClose={() => setError(null)} />}
   </section>;
 }
 

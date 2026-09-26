@@ -48,13 +48,13 @@ resource "aws_iam_role_policy" "lambda_application" {
       },
       {
         Effect   = "Allow"
-        Action   = ["dynamodb:Query"]
+        Action   = ["dynamodb:PutItem", "dynamodb:Query", "dynamodb:UpdateItem"]
         Resource = aws_dynamodb_table.source_runs.arn
       },
       {
         Effect   = "Allow"
-        Action   = ["lambda:InvokeFunction"]
-        Resource = [aws_lambda_function.planning_collector.arn, aws_lambda_function.recruitment_collector.arn]
+        Action   = ["sqs:SendMessage"]
+        Resource = [aws_sqs_queue.planning_manual_runs.arn, aws_sqs_queue.recruitment_manual_runs.arn]
       }
     ]
   })

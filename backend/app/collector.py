@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from app.collector_events import collector_payload
 from app.config import Settings
 from app.logging import configure_logging
 from app.planning import (
@@ -121,4 +122,4 @@ def collect_planning(
 
 
 def handler(event: dict[str, Any], context: Any) -> dict[str, int]:
-    return collect_planning(Settings.from_env(), event)
+    return collect_planning(Settings.from_env(), collector_payload(event))

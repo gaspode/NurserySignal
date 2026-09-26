@@ -183,3 +183,4 @@ Run the bounded opportunity-creation recalculation against production data, revi
 - Migrated SignalHub records and evidence metadata to explicit verticals, added database guards against cross-vertical signal/opportunity relationships, and scoped matching/list APIs by vertical.
 - Refactored existing NurserySignal classification through the Nursery vertical policy boundary while preserving its current collectors and review semantics.
 - Added the shared SignalHub admin shell/selector and an initial cross-vertical Organisations view; customer-facing CareSignal/DentalSignal products and collectors remain deferred.
+- Routed bounded admin collector runs through private SQS command queues so the VPC-attached admin API can trigger collectors reliably without NAT or a fixed-cost Lambda interface endpoint.

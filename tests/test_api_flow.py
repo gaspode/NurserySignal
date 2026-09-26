@@ -244,8 +244,8 @@ def test_source_manual_run_uses_fixed_bounds_and_exact_lambda(monkeypatch) -> No
         environment="test",
         admin_group="NurserySignalAdmins",
         source_runs_table_name=None,
-        planning_collector_function_name="nurserysignal-prod-planning-collector",
-        recruitment_collector_function_name="nurserysignal-prod-recruitment-collector",
+        planning_manual_run_queue_url="https://sqs.example/planning-manual-runs",
+        recruitment_manual_run_queue_url="https://sqs.example/recruitment-manual-runs",
     )
     monkeypatch.setattr("app.handler.Settings.from_env", lambda: settings)
     monkeypatch.setattr(
@@ -254,12 +254,12 @@ def test_source_manual_run_uses_fixed_bounds_and_exact_lambda(monkeypatch) -> No
     monkeypatch.setattr("app.handler.record_admin_audit", lambda *args, **kwargs: "audit-1")
     calls = []
 
-    class FakeLambda:
-        def invoke(self, **kwargs):
+    class FakeSqs:
+        def send_message(self, **kwargs):
             calls.append(kwargs)
-            return {"StatusCode": 202}
+            return {"MessageId": "message-1"}
 
-    monkeypatch.setattr("app.handler.boto3.client", lambda name: FakeLambda())
+    monkeypatch.setattr("app.handler.boto3.client", lambda name: FakeSqs())
     response = handler(
         event(
             "/admin/sources/planning/run",
@@ -270,8 +270,8 @@ def test_source_manual_run_uses_fixed_bounds_and_exact_lambda(monkeypatch) -> No
         None,
     )
     assert response["statusCode"] == 202
-    assert calls[0]["FunctionName"] == settings.planning_collector_function_name
-    payload = json.loads(calls[0]["Payload"])
+    assert calls[0]["QueueUrl"] == settings.planning_manual_run_queue_url
+    payload = json.loads(calls[0]["MessageBody"])
     assert payload == {
         "source": "manual",
         "lookback_days": 2,

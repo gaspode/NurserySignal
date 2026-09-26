@@ -31,7 +31,15 @@ resource "aws_iam_role_policy" "recruitment_collector_application" {
     Statement = [
       { Effect = "Allow", Action = ["secretsmanager:GetSecretValue"], Resource = aws_secretsmanager_secret.recruitment_provider.arn },
       { Effect = "Allow", Action = ["sqs:SendMessage"], Resource = aws_sqs_queue.ingestion.arn },
-      { Effect = "Allow", Action = ["dynamodb:PutItem", "dynamodb:UpdateItem"], Resource = aws_dynamodb_table.source_runs.arn }
+      { Effect = "Allow", Action = ["dynamodb:PutItem", "dynamodb:UpdateItem"], Resource = aws_dynamodb_table.source_runs.arn },
+      {
+        Effect = "Allow"
+        Action = [
+          "sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:ChangeMessageVisibility",
+          "sqs:GetQueueAttributes"
+        ]
+        Resource = aws_sqs_queue.recruitment_manual_runs.arn
+      }
     ]
   })
 }
@@ -80,4 +88,12 @@ resource "aws_lambda_permission" "recruitment_collector_schedule" {
   function_name = aws_lambda_function.recruitment_collector.function_name
   principal     = "events.amazonaws.com"
   source_arn    = aws_cloudwatch_event_rule.recruitment_schedule.arn
+}
+
+resource "aws_lambda_event_source_mapping" "recruitment_manual_runs" {
+  event_source_arn = aws_sqs_queue.recruitment_manual_runs.arn
+  function_name    = aws_lambda_function.recruitment_collector.arn
+  batch_size       = 1
+  enabled          = true
+  depends_on       = [aws_iam_role_policy.recruitment_collector_application]
 }

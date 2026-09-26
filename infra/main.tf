@@ -319,6 +319,35 @@ resource "aws_sqs_queue" "enrichment" {
   tags = local.common_tags
 }
 
+resource "aws_sqs_queue" "collector_manual_runs_dlq" {
+  name                      = "${local.name_prefix}-collector-manual-runs-dlq"
+  message_retention_seconds = 1209600
+  sqs_managed_sse_enabled   = true
+  tags                      = local.common_tags
+}
+
+resource "aws_sqs_queue" "planning_manual_runs" {
+  name                       = "${local.name_prefix}-planning-manual-runs"
+  visibility_timeout_seconds = 120
+  sqs_managed_sse_enabled    = true
+  redrive_policy = jsonencode({
+    deadLetterTargetArn = aws_sqs_queue.collector_manual_runs_dlq.arn
+    maxReceiveCount     = 3
+  })
+  tags = local.common_tags
+}
+
+resource "aws_sqs_queue" "recruitment_manual_runs" {
+  name                       = "${local.name_prefix}-recruitment-manual-runs"
+  visibility_timeout_seconds = 120
+  sqs_managed_sse_enabled    = true
+  redrive_policy = jsonencode({
+    deadLetterTargetArn = aws_sqs_queue.collector_manual_runs_dlq.arn
+    maxReceiveCount     = 3
+  })
+  tags = local.common_tags
+}
+
 resource "aws_cloudwatch_event_rule" "collector_schedule" {
   name                = "${local.name_prefix}-collector-schedule"
   description         = "Daily bounded Plota planning collector; uses a two-day overlapping window for safe idempotent collection"

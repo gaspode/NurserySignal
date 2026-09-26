@@ -55,7 +55,7 @@ SOURCE_DEFINITIONS = {
             "max_records": 100,
             "page_size": 25,
         },
-        "function_setting": "planning_collector_function_name",
+        "queue_setting": "planning_manual_run_queue_url",
         "supported_verticals": ["NURSERY"],
     },
     "recruitment": {
@@ -69,7 +69,7 @@ SOURCE_DEFINITIONS = {
             "max_records": 50,
             "page_size": 25,
         },
-        "function_setting": "recruitment_collector_function_name",
+        "queue_setting": "recruitment_manual_run_queue_url",
         "supported_verticals": ["NURSERY"],
     },
 }
@@ -307,8 +307,8 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 if admin_error:
                     return admin_error
                 definition = SOURCE_DEFINITIONS[signal_id]
-                function_name = getattr(settings, definition["function_setting"])
-                if not function_name:
+                queue_url = getattr(settings, definition["queue_setting"])
+                if not queue_url:
                     return _response(503, {"error": "collector_not_configured"})
                 parameters = dict(definition["default_parameters"])
                 run_id, started_at = start_run(
@@ -320,13 +320,12 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 )
                 payload = {**parameters, "run_id": run_id, "run_started_at": started_at}
                 try:
-                    response = boto3.client("lambda").invoke(
-                        FunctionName=function_name,
-                        InvocationType="Event",
-                        Payload=json.dumps(payload, separators=(",", ":")).encode(),
+                    response = boto3.client("sqs").send_message(
+                        QueueUrl=queue_url,
+                        MessageBody=json.dumps(payload, separators=(",", ":")),
                     )
-                    if response.get("StatusCode") not in {200, 202}:
-                        raise RuntimeError("collector invocation was not accepted")
+                    if not response.get("MessageId"):
+                        raise RuntimeError("collector command was not accepted")
                 except Exception as exc:
                     category, message = type(exc).__name__, str(exc)[:240].replace("\n", " ")
                     finish_run(

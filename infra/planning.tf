@@ -44,6 +44,14 @@ resource "aws_iam_role_policy" "planning_collector_application" {
         Effect   = "Allow"
         Action   = ["dynamodb:PutItem", "dynamodb:UpdateItem"]
         Resource = aws_dynamodb_table.source_runs.arn
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:ChangeMessageVisibility",
+          "sqs:GetQueueAttributes"
+        ]
+        Resource = aws_sqs_queue.planning_manual_runs.arn
       }
     ]
   })
@@ -92,6 +100,14 @@ resource "aws_lambda_permission" "planning_collector_schedule" {
   function_name = aws_lambda_function.planning_collector.function_name
   principal     = "events.amazonaws.com"
   source_arn    = aws_cloudwatch_event_rule.collector_schedule.arn
+}
+
+resource "aws_lambda_event_source_mapping" "planning_manual_runs" {
+  event_source_arn = aws_sqs_queue.planning_manual_runs.arn
+  function_name    = aws_lambda_function.planning_collector.arn
+  batch_size       = 1
+  enabled          = true
+  depends_on       = [aws_iam_role_policy.planning_collector_application]
 }
 
 resource "aws_cloudwatch_log_group" "ingestion_worker" {
