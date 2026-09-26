@@ -16,11 +16,11 @@ from app.correlation import (
     recruitment_evidence_strength,
 )
 from app.db import connection
-from app.enrichment import fixture_enrichment
 from app.ingestion import NormalizedSignal
 from app.opportunity_policy import opportunity_creation_decision, opportunity_title
 from app.queueing import EnrichmentMessage, send_enrichment_message
 from app.recruitment import recruitment_record_from_signal
+from app.verticals import NURSERY, policy_for, validate_vertical
 
 
 def record_admin_audit(
@@ -69,18 +69,20 @@ class ReprocessResult:
     excluded: int
 
 
-def find_signal(settings: Settings, source_type: str, external_id: str) -> SignalIdentity | None:
+def find_signal(
+    settings: Settings, vertical: str, source_type: str, external_id: str
+) -> SignalIdentity | None:
     with connection(settings) as conn:
         row = conn.execute(
             """
             SELECT rs.id, sd.s3_key, rs.enrichment_queued_at, rs.content_sha256
             FROM raw_signals rs
             LEFT JOIN source_documents sd ON sd.raw_signal_id = rs.id
-            WHERE rs.source_type = %s AND rs.external_id = %s
+            WHERE rs.vertical = %s AND rs.source_type = %s AND rs.external_id = %s
             ORDER BY sd.captured_at DESC NULLS LAST
             LIMIT 1
             """,
-            (source_type, external_id),
+            (vertical, source_type, external_id),
         ).fetchone()
     return _identity(row) if row else None
 
@@ -96,14 +98,15 @@ def store_signal(
         row = conn.execute(
             """
             INSERT INTO raw_signals (
-                schema_version, source_type, source_url, external_id, discovered_at,
+                schema_version, vertical, source_type, source_url, external_id, discovered_at,
                 title, raw_text, location_hint, organisation_hint, metadata, content_sha256
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (source_type, external_id) DO NOTHING
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (vertical, source_type, external_id) DO NOTHING
             RETURNING id, enrichment_queued_at, content_sha256
             """,
             (
                 signal.schema_version,
+                signal.vertical,
                 signal.source_type,
                 signal.source_url,
                 signal.external_id,
@@ -122,20 +125,22 @@ def store_signal(
                 """
                 SELECT rs.id, rs.enrichment_queued_at, rs.content_sha256
                 FROM raw_signals rs
-                WHERE rs.source_type = %s AND rs.external_id = %s
+                WHERE rs.vertical = %s AND rs.source_type = %s AND rs.external_id = %s
                 """,
-                (signal.source_type, signal.external_id),
+                (signal.vertical, signal.source_type, signal.external_id),
             ).fetchone()
         if row is None:
             raise RuntimeError("signal disappeared during idempotent insert")
         signal_id, queued_at, stored_hash = row
         conn.execute(
             """
-            INSERT INTO source_documents (raw_signal_id, s3_bucket, s3_key, sha256, mime_type)
-            VALUES (%s, %s, %s, %s, 'application/json')
+            INSERT INTO source_documents
+                (raw_signal_id, vertical, s3_bucket, s3_key, sha256, mime_type)
+            VALUES (%s, (SELECT vertical FROM raw_signals WHERE id = %s),
+                    %s, %s, %s, 'application/json')
             ON CONFLICT (s3_bucket, s3_key) DO NOTHING
             """,
-            (signal_id, bucket, key, content_sha256),
+            (signal_id, signal_id, bucket, key, content_sha256),
         )
         conn.commit()
         evidence_row = conn.execute(
@@ -170,13 +175,15 @@ def store_planning_revision(
         row = conn.execute(
             """
             INSERT INTO raw_signal_revisions (
-                raw_signal_id, content_sha256, source_url, observed_at,
+                raw_signal_id, vertical, content_sha256, source_url, observed_at,
                 planning_status, decision, metadata, evidence_bucket, evidence_key
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ) VALUES (%s, (SELECT vertical FROM raw_signals WHERE id = %s),
+                      %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (raw_signal_id, content_sha256) DO NOTHING
             RETURNING id
             """,
             (
+                signal_id,
                 signal_id,
                 content_sha256,
                 signal.source_url,
@@ -213,11 +220,13 @@ def store_planning_revision(
         )
         conn.execute(
             """
-            INSERT INTO source_documents (raw_signal_id, s3_bucket, s3_key, sha256, mime_type)
-            VALUES (%s, %s, %s, %s, 'application/json')
+            INSERT INTO source_documents
+                (raw_signal_id, vertical, s3_bucket, s3_key, sha256, mime_type)
+            VALUES (%s, (SELECT vertical FROM raw_signals WHERE id = %s),
+                    %s, %s, %s, 'application/json')
             ON CONFLICT (s3_bucket, s3_key) DO NOTHING
             """,
-            (signal_id, bucket, key, content_sha256),
+            (signal_id, signal_id, bucket, key, content_sha256),
         )
         conn.commit()
     return True
@@ -247,6 +256,11 @@ def dispatch_enrichment(
             evidence_bucket=bucket,
             evidence_key=key,
             queued_at=datetime.now(UTC).isoformat(),
+            vertical=str(
+                conn.execute(
+                    "SELECT vertical FROM raw_signals WHERE id = %s", (identity.id,)
+                ).fetchone()[0]
+            ),
         )
         send_enrichment_message(settings, message)
         conn.execute(
@@ -262,7 +276,7 @@ def get_raw_signal(settings: Settings, signal_id: str) -> dict[str, Any] | None:
         row = conn.execute(
             """
             SELECT id, schema_version, source_type, source_url, external_id, discovered_at,
-                   title, raw_text, location_hint, organisation_hint, metadata
+                   title, raw_text, location_hint, organisation_hint, metadata, vertical
             FROM raw_signals WHERE id = %s
             """,
             (signal_id,),
@@ -281,6 +295,7 @@ def get_raw_signal(settings: Settings, signal_id: str) -> dict[str, Any] | None:
         "location_hint",
         "organisation_hint",
         "metadata",
+        "vertical",
     )
     return dict(zip(keys, row))
 
@@ -298,9 +313,13 @@ def list_signals(
     unmatched_only: bool = False,
     include_excluded: bool = False,
     opportunity_decision: str | None = None,
+    vertical: str | None = None,
 ) -> dict[str, Any]:
     clauses = ["TRUE"]
     params: list[Any] = []
+    if vertical and vertical.upper() != "ALL":
+        clauses.append("rs.vertical = %s")
+        params.append(validate_vertical(vertical))
     if review_status:
         if review_status == "REVIEWED":
             clauses.append("se.review_status IN ('APPROVED', 'REJECTED')")
@@ -361,7 +380,8 @@ def list_signals(
             f"""
             SELECT rs.id, rs.schema_version, rs.source_type, rs.source_url, rs.external_id,
                    rs.discovered_at, rs.title, rs.location_hint, rs.organisation_hint,
-                   rs.metadata, rs.created_at, rs.enrichment_queued_at, se.review_status,
+                   rs.metadata, rs.vertical, rs.created_at, rs.enrichment_queued_at,
+                   se.review_status,
                    se.event_type, se.nursery_name, se.operator_name, se.lifecycle_stage,
                    se.confidence, se.extracted_facts, ai.recommendation,
                    ai.confidence, ai.status
@@ -391,6 +411,7 @@ def list_signals(
         "location_hint",
         "organisation_hint",
         "metadata",
+        "vertical",
         "created_at",
         "enrichment_queued_at",
         "review_status",
@@ -567,7 +588,7 @@ def reprocess_planning_signals(
             f"""
             SELECT rs.id, rs.schema_version, rs.source_type, rs.source_url,
                    rs.external_id, rs.discovered_at, rs.title, rs.raw_text,
-                   rs.location_hint, rs.organisation_hint, rs.metadata,
+                   rs.location_hint, rs.organisation_hint, rs.metadata, rs.vertical,
                    se.review_status
             FROM raw_signals rs
             LEFT JOIN signal_enrichments se ON se.raw_signal_id = rs.id
@@ -606,6 +627,22 @@ def reprocess_planning_signals(
                         "location_hint",
                         "organisation_hint",
                         "metadata",
+                        "vertical",
+                        "review_status",
+                    )
+                    if len(row) == 13
+                    else (
+                        "id",
+                        "schema_version",
+                        "source_type",
+                        "source_url",
+                        "external_id",
+                        "discovered_at",
+                        "title",
+                        "raw_text",
+                        "location_hint",
+                        "organisation_hint",
+                        "metadata",
                         "review_status",
                     ),
                     row,
@@ -614,7 +651,7 @@ def reprocess_planning_signals(
             if raw["review_status"] is None:
                 without_enrichment += 1
                 continue
-            candidate = fixture_enrichment(raw)
+            candidate = policy_for(str(raw.get("vertical") or NURSERY)).classify_signal(raw)
             candidate_matched = candidate["extracted_facts"].get("planning_candidate_matched")
             if candidate_matched:
                 matched += 1
@@ -722,7 +759,7 @@ def reprocess_recruitment_signals(
             f"""
             SELECT rs.id, rs.schema_version, rs.source_type, rs.source_url,
                    rs.external_id, rs.discovered_at, rs.title, rs.raw_text,
-                   rs.location_hint, rs.organisation_hint, rs.metadata,
+                   rs.location_hint, rs.organisation_hint, rs.metadata, rs.vertical,
                    se.review_status
             FROM raw_signals rs
             LEFT JOIN signal_enrichments se ON se.raw_signal_id = rs.id
@@ -749,6 +786,22 @@ def reprocess_recruitment_signals(
             raw = dict(
                 zip(
                     (
+                        "id",
+                        "schema_version",
+                        "source_type",
+                        "source_url",
+                        "external_id",
+                        "discovered_at",
+                        "title",
+                        "raw_text",
+                        "location_hint",
+                        "organisation_hint",
+                        "metadata",
+                        "vertical",
+                        "review_status",
+                    )
+                    if len(row) == 13
+                    else (
                         "id",
                         "schema_version",
                         "source_type",
@@ -802,7 +855,7 @@ def reprocess_recruitment_signals(
             )
             raw["location_hint"] = normalized_location
             raw["metadata"] = normalized_metadata
-            candidate = fixture_enrichment(raw)
+            candidate = policy_for(str(raw.get("vertical") or NURSERY)).classify_signal(raw)
             candidate_matched = bool(
                 candidate["extracted_facts"].get("recruitment_candidate_matched")
             )
@@ -938,15 +991,17 @@ def save_enrichment(settings: Settings, candidate: dict[str, Any]) -> bool:
         row = conn.execute(
             """
             INSERT INTO signal_enrichments (
-                raw_signal_id, schema_version, event_type, nursery_name, operator_name, address,
+                raw_signal_id, vertical, schema_version, event_type, nursery_name,
+                operator_name, address,
                 expected_opening_date, capacity, lifecycle_stage, confidence,
                 extracted_facts, evidence, review_status
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'PENDING')
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'PENDING')
             ON CONFLICT (raw_signal_id) DO NOTHING
             RETURNING id
             """,
             (
                 candidate["raw_signal_id"],
+                (candidate.get("metadata") or {}).get("vertical", NURSERY),
                 candidate["schema_version"],
                 candidate["event_type"],
                 candidate["nursery_name"],
@@ -968,7 +1023,6 @@ def correlate_signal(
     settings: Settings, signal_id: str, candidate: dict[str, Any]
 ) -> dict[str, Any]:
     """Create/link an opportunity only when the source supports that decision."""
-    creation = opportunity_creation_decision(candidate)
     metadata = candidate.get("metadata") or {}
     postcode = metadata.get("postcode")
     name = (
@@ -989,6 +1043,18 @@ def correlate_signal(
         # Serialise matching for one signal. This protects the check-then-create
         # path when a worker retry and an administrator reprocess overlap.
         conn.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (str(signal_id),))
+        signal_vertical = conn.execute(
+            "SELECT vertical FROM raw_signals WHERE id = %s", (signal_id,)
+        ).fetchone()
+        if signal_vertical is None:
+            raise ValueError("signal_not_found")
+        signal_vertical = validate_vertical(str(signal_vertical[0] or NURSERY))
+        candidate_vertical = validate_vertical(
+            str((candidate.get("metadata") or {}).get("vertical") or signal_vertical)
+        )
+        if candidate_vertical != signal_vertical:
+            raise ValueError("signal and candidate verticals must match")
+        creation = policy_for(signal_vertical).determine_opportunity_action(candidate)
         active = conn.execute(
             """SELECT os.opportunity_id FROM opportunity_signals os
                JOIN opportunities o ON o.id = os.opportunity_id
@@ -1035,8 +1101,9 @@ def correlate_signal(
                  WHERE os.opportunity_id = o.id ORDER BY rs.discovered_at LIMIT 1
                ) linked ON TRUE
                  WHERE o.review_status NOT IN ('MERGED', 'REJECTED')
+                   AND o.vertical = %s
                  ORDER BY o.updated_at DESC"""
-        ).fetchall()
+            , (signal_vertical,)).fetchall()
         match = None
         match_reason = None
         uncertain_matches: list[tuple[Any, float, str]] = []
@@ -1106,8 +1173,8 @@ def correlate_signal(
                 """INSERT INTO opportunities
                    (name, event_type, lifecycle_stage, confidence, confidence_breakdown,
                     stage_reason, creation_reason, vertical, operator_name, address, postcode,
-                    town, change_type)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, 'NURSERY', %s, %s, %s, %s, %s)
+                   town, change_type)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                    RETURNING id""",
                 (
                     display_name,
@@ -1129,6 +1196,7 @@ def correlate_signal(
                     ),
                     "planning evidence" if source_type == "planning" else recruitment_reason,
                     creation.reason,
+                    signal_vertical,
                     operator,
                     candidate.get("address"),
                     postcode,
@@ -1149,14 +1217,15 @@ def correlate_signal(
             }
         conn.execute(
             """INSERT INTO opportunity_signals (
-                   opportunity_id, raw_signal_id, relationship_type,
+                   opportunity_id, raw_signal_id, vertical, relationship_type,
                    extracted_facts, provenance, status, created_by,
                    match_outcome, match_confidence, match_reason)
-               VALUES (%s, %s, 'SUPPORTS', %s, %s, 'ACTIVE', 'SYSTEM', %s, %s, %s)
+               VALUES (%s, %s, %s, 'SUPPORTS', %s, %s, 'ACTIVE', 'SYSTEM', %s, %s, %s)
                ON CONFLICT (opportunity_id, raw_signal_id) DO NOTHING""",
             (
                 opportunity_id,
                 signal_id,
+                signal_vertical,
                 Jsonb(candidate.get("extracted_facts") or {}),
                 Jsonb({"method": "deterministic-v1", "reason": match_reason or "initial signal"}),
                 "STRONG" if match else "NO_MATCH",
@@ -1175,10 +1244,10 @@ def correlate_signal(
                 continue
             conn.execute(
                 """INSERT INTO opportunity_match_reviews
-                   (raw_signal_id, opportunity_id, outcome, confidence, reason)
-                   VALUES (%s, %s, 'UNCERTAIN', %s, %s)
+                   (raw_signal_id, opportunity_id, vertical, outcome, confidence, reason)
+                   VALUES (%s, %s, %s, 'UNCERTAIN', %s, %s)
                    ON CONFLICT (raw_signal_id, opportunity_id) DO NOTHING""",
-                (signal_id, possible_id, possible_confidence, possible_reason),
+                (signal_id, possible_id, signal_vertical, possible_confidence, possible_reason),
             )
         conn.commit()
     return {
@@ -1448,7 +1517,7 @@ def recalculate_opportunity_creation(
         rows = conn.execute(
             f"""SELECT rs.id, rs.schema_version, rs.source_type, rs.source_url, rs.external_id,
                        rs.discovered_at, rs.title, rs.raw_text, rs.location_hint,
-                       rs.organisation_hint, rs.metadata, se.review_status
+                       rs.organisation_hint, rs.metadata, rs.vertical, se.review_status
                 FROM raw_signals rs LEFT JOIN signal_enrichments se ON se.raw_signal_id = rs.id
                 WHERE {where} ORDER BY rs.discovered_at DESC LIMIT %s""",
             [*params, limit],
@@ -1477,12 +1546,18 @@ def recalculate_opportunity_creation(
                     "location_hint",
                     "organisation_hint",
                     "metadata",
+                    "vertical",
                     "review_status",
                 ),
                 row,
             )
         )
-        candidate = fixture_enrichment(raw)
+        candidate = policy_for(str(raw.get("vertical") or NURSERY)).classify_signal(raw)
+        candidate["metadata"] = {
+            **(raw.get("metadata") or {}),
+            "source_type": raw.get("source_type"),
+            "vertical": raw.get("vertical", NURSERY),
+        }
         facts = candidate["extracted_facts"]
         creation = opportunity_creation_decision(candidate)
         with connection(settings) as conn:
@@ -1600,10 +1675,14 @@ def recalculate_opportunity_creation(
 
 
 def list_opportunities(
-    settings: Settings, *, limit: int, offset: int, search: str | None = None
+    settings: Settings, *, limit: int, offset: int, search: str | None = None,
+    vertical: str | None = None,
 ) -> dict[str, Any]:
     clauses = ["TRUE"]
     params: list[Any] = []
+    if vertical and vertical.upper() != "ALL":
+        clauses.append("o.vertical = %s")
+        params.append(validate_vertical(vertical))
     if search:
         clauses.append(
             "(o.name ILIKE %s OR COALESCE(o.creation_reason, '') ILIKE %s "
@@ -1652,6 +1731,50 @@ def list_opportunities(
     return {
         "items": [dict(zip(fields, row)) for row in rows],
         "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+def list_organisations(
+    settings: Settings, *, limit: int, offset: int, vertical: str | None = None
+) -> dict[str, Any]:
+    """Show shared organisation identities with vertical-scoped activity."""
+    clauses = ["TRUE"]
+    params: list[Any] = []
+    if vertical and vertical.upper() != "ALL":
+        clauses.append("activity.vertical = %s")
+        params.append(validate_vertical(vertical))
+    where = " AND ".join(clauses)
+    with connection(settings) as conn:
+        rows = conn.execute(
+            f"""WITH activity AS (
+                    SELECT vertical, organisation_hint AS name, id AS signal_id,
+                           NULL::uuid AS opportunity_id
+                    FROM raw_signals WHERE organisation_hint IS NOT NULL
+                    UNION ALL
+                    SELECT vertical, operator_name AS name, NULL::uuid, id
+                    FROM opportunities WHERE operator_name IS NOT NULL
+                )
+                SELECT min(name) AS name, vertical,
+                       count(DISTINCT signal_id), count(DISTINCT opportunity_id)
+                FROM activity
+                WHERE {where}
+                GROUP BY vertical, lower(trim(name))
+                ORDER BY lower(min(name))
+                LIMIT %s OFFSET %s""",
+            [*params, min(max(limit, 1), 100), max(offset, 0)],
+        ).fetchall()
+    return {
+        "items": [
+            {
+                "name": row[0],
+                "vertical": row[1],
+                "signal_count": row[2],
+                "opportunity_count": row[3],
+            }
+            for row in rows
+        ],
         "limit": limit,
         "offset": offset,
     }
@@ -1778,34 +1901,44 @@ def _cleanup_match_reviews(
     return {"closed_superseded": closed_superseded, "closed_linked": closed_linked}
 
 
-def list_match_reviews(settings: Settings, *, limit: int, offset: int) -> dict[str, Any]:
+def list_match_reviews(
+    settings: Settings, *, limit: int, offset: int, vertical: str | None = None
+) -> dict[str, Any]:
+    vertical_clause = ""
+    params: list[Any] = []
+    if vertical and vertical.upper() != "ALL":
+        vertical_clause = " AND mr.vertical = %s"
+        params.append(validate_vertical(vertical))
     with connection(settings) as conn:
         total = conn.execute(
-            """SELECT count(*)
+            f"""SELECT count(*)
                FROM opportunity_match_reviews mr
                JOIN opportunities o ON o.id = mr.opportunity_id
                WHERE mr.status = 'PENDING'
                  AND o.review_status NOT IN ('MERGED', 'REJECTED')
+                 {vertical_clause}
                  AND NOT EXISTS (
                      SELECT 1 FROM opportunity_signals os
                      WHERE os.raw_signal_id = mr.raw_signal_id AND os.status = 'ACTIVE'
-                 )"""
+                 )""",
+            params,
         ).fetchone()[0]
         rows = conn.execute(
-            """SELECT mr.id, mr.raw_signal_id, mr.opportunity_id, mr.outcome,
+            f"""SELECT mr.id, mr.raw_signal_id, mr.opportunity_id, mr.outcome,
                       mr.confidence, mr.reason, mr.created_at,
-                      rs.title, rs.source_type, o.name
+                      rs.title, rs.source_type, o.name, mr.vertical
                FROM opportunity_match_reviews mr
                JOIN raw_signals rs ON rs.id = mr.raw_signal_id
                JOIN opportunities o ON o.id = mr.opportunity_id
                WHERE mr.status = 'PENDING'
                  AND o.review_status NOT IN ('MERGED', 'REJECTED')
+                 {vertical_clause}
                  AND NOT EXISTS (
                      SELECT 1 FROM opportunity_signals os
                      WHERE os.raw_signal_id = mr.raw_signal_id AND os.status = 'ACTIVE'
                  )
                ORDER BY mr.created_at DESC LIMIT %s OFFSET %s""",
-            (limit, offset),
+            (*params, limit, offset),
         ).fetchall()
     fields = (
         "id",
@@ -1818,6 +1951,7 @@ def list_match_reviews(settings: Settings, *, limit: int, offset: int) -> dict[s
         "signal_title",
         "source_type",
         "opportunity_name",
+        "vertical",
     )
     return {
         "items": [dict(zip(fields, row)) for row in rows],
@@ -1850,7 +1984,8 @@ def _signal_summary(conn: Any, signal_id: str) -> tuple[Any, ...] | None:
     return conn.execute(
         """SELECT rs.title, rs.raw_text, rs.source_type, rs.metadata, rs.organisation_hint,
                   rs.location_hint, COALESCE(se.nursery_name, se.operator_name),
-                  se.event_type, se.lifecycle_stage, se.confidence, se.extracted_facts
+                  se.event_type, se.lifecycle_stage, se.confidence, se.extracted_facts,
+                  rs.vertical
            FROM raw_signals rs LEFT JOIN signal_enrichments se ON se.raw_signal_id = rs.id
            WHERE rs.id = %s""",
         (signal_id,),
@@ -1876,6 +2011,7 @@ def create_opportunity_from_signal(
             lifecycle,
             confidence,
             facts,
+            vertical,
         ) = signal
         metadata = metadata or {}
         existing = conn.execute(
@@ -1917,6 +2053,7 @@ def create_opportunity_from_signal(
                 event_type or "other",
                 lifecycle or "DISCOVERED",
                 confidence or 0,
+                vertical,
                 organisation,
                 location,
                 metadata.get("postcode"),
@@ -1953,13 +2090,18 @@ def link_signal_to_opportunity(
     settings: Settings, opportunity_id: str, signal_id: str, actor: str, reason: str = "admin link"
 ) -> dict[str, Any]:
     with connection(settings) as conn:
-        if not conn.execute(
-            "SELECT 1 FROM opportunities WHERE id = %s", (opportunity_id,)
-        ).fetchone():
+        opportunity = conn.execute(
+            "SELECT vertical, review_status FROM opportunities WHERE id = %s", (opportunity_id,)
+        ).fetchone()
+        if not opportunity:
             raise ValueError("opportunity_not_found")
         signal = _signal_summary(conn, signal_id)
         if signal is None:
             raise ValueError("signal_not_found")
+        if opportunity[0] != signal[-1]:
+            raise ValueError("signal and opportunity verticals must match")
+        if opportunity[1] in {"MERGED", "REJECTED"}:
+            raise ValueError("opportunity_is_not_current")
         confidence = signal[-1] or 0
         row = conn.execute(
             "SELECT status FROM opportunity_signals "
@@ -2044,10 +2186,20 @@ def merge_opportunities(
     if source_id == target_id:
         raise ValueError("cannot_merge_opportunity_into_itself")
     with connection(settings) as conn:
-        if not conn.execute("SELECT 1 FROM opportunities WHERE id = %s", (source_id,)).fetchone():
+        source = conn.execute(
+            "SELECT vertical, review_status FROM opportunities WHERE id = %s", (source_id,)
+        ).fetchone()
+        if not source:
             raise ValueError("source_opportunity_not_found")
-        if not conn.execute("SELECT 1 FROM opportunities WHERE id = %s", (target_id,)).fetchone():
+        target = conn.execute(
+            "SELECT vertical, review_status FROM opportunities WHERE id = %s", (target_id,)
+        ).fetchone()
+        if not target:
             raise ValueError("target_opportunity_not_found")
+        if source[0] != target[0]:
+            raise ValueError("opportunities_must_share_vertical")
+        if source[1] in {"MERGED", "REJECTED"} or target[1] in {"MERGED", "REJECTED"}:
+            raise ValueError("opportunity_is_not_current")
         links = conn.execute(
             "SELECT raw_signal_id FROM opportunity_signals "
             "WHERE opportunity_id = %s AND status = 'ACTIVE'",
@@ -2290,15 +2442,17 @@ def save_ai_review(settings: Settings, signal_id: str, review: dict[str, Any]) -
     with connection(settings) as conn:
         row = conn.execute(
             """INSERT INTO signal_ai_reviews (
-                raw_signal_id, provider, model_id, prompt_version, recommendation,
+                raw_signal_id, vertical, provider, model_id, prompt_version, recommendation,
                 confidence, reason, recruitment_relevance, planning_relevance,
                 commercial_change_evidence, status, failure_category, attempted_at,
                 evaluated_at, input_tokens, output_tokens, latency_ms
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+            ) VALUES (%s, (SELECT vertical FROM raw_signals WHERE id = %s), %s, %s, %s, %s,
+                      %s, %s, %s, %s, %s, %s, %s,
                       to_timestamp(%s), to_timestamp(%s), %s, %s, %s)
             ON CONFLICT (raw_signal_id, provider, model_id, prompt_version) DO NOTHING
             RETURNING id""",
             (
+                signal_id,
                 signal_id,
                 review["provider"],
                 review["model_id"],

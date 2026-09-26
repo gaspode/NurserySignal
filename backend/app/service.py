@@ -35,7 +35,7 @@ def ingest_signal(
     if not settings.evidence_bucket:
         raise RuntimeError("EVIDENCE_BUCKET is not configured")
     content_hash = evidence_sha256(original_payload)
-    existing = find_signal(settings, signal.source_type, signal.external_id)
+    existing = find_signal(settings, signal.vertical, signal.source_type, signal.external_id)
     key = (
         existing.evidence_key
         if existing and existing.evidence_key

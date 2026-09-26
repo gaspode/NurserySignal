@@ -176,3 +176,10 @@ Opportunity matching foundation:
 Current next step:
 
 Run the bounded opportunity-creation recalculation against production data, review demotions/promotions and uncertain matches, then tune only from observed false positives or false negatives.
+
+## Phase 8 — SignalHub shared internal engine — INCREMENTAL FOUNDATION
+
+- Added a first-class vertical registry with active `NURSERY` and registered-but-disabled `CHILDRENS_HOME` and `DENTAL` verticals.
+- Migrated SignalHub records and evidence metadata to explicit verticals, added database guards against cross-vertical signal/opportunity relationships, and scoped matching/list APIs by vertical.
+- Refactored existing NurserySignal classification through the Nursery vertical policy boundary while preserving its current collectors and review semantics.
+- Added the shared SignalHub admin shell/selector and an initial cross-vertical Organisations view; customer-facing CareSignal/DentalSignal products and collectors remain deferred.

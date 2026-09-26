@@ -5,6 +5,8 @@ from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlparse
 
+from app.verticals import NURSERY, validate_vertical
+
 CURRENT_SIGNAL_SCHEMA_VERSION = "1.0"
 SUPPORTED_SIGNAL_SCHEMA_VERSIONS = {CURRENT_SIGNAL_SCHEMA_VERSION}
 
@@ -23,6 +25,7 @@ class NormalizedSignal:
     location_hint: str | None = None
     organisation_hint: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    vertical: str = NURSERY
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> NormalizedSignal:
@@ -71,4 +74,5 @@ class NormalizedSignal:
                 str(payload["organisation_hint"]) if payload.get("organisation_hint") else None
             ),
             metadata=metadata,
+            vertical=validate_vertical(str(payload.get("vertical") or NURSERY)),
         )

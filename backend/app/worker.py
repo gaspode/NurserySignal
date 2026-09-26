@@ -5,7 +5,6 @@ from typing import Any
 
 from app.ai_shadow import evaluate_shadow
 from app.config import Settings
-from app.enrichment import fixture_enrichment
 from app.logging import configure_logging
 from app.queueing import EnrichmentMessage
 from app.repository import (
@@ -15,6 +14,7 @@ from app.repository import (
     save_ai_review,
     save_enrichment,
 )
+from app.verticals import policy_for
 
 logger = configure_logging()
 
@@ -25,9 +25,13 @@ def process_message(settings: Settings, body: str) -> None:
     raw = get_raw_signal(settings, message.signal_id)
     if raw is None:
         raise ValueError("enrichment message references an unknown signal")
-    candidate = fixture_enrichment(raw)
+    candidate = policy_for(str(raw.get("vertical") or "NURSERY")).classify_signal(raw)
+    candidate["metadata"] = {
+        **(raw.get("metadata") or {}),
+        "source_type": raw.get("source_type"),
+        "vertical": raw.get("vertical", "NURSERY"),
+    }
     created = save_enrichment(settings, candidate)
-    candidate["metadata"] = {**(raw.get("metadata") or {}), "source_type": raw.get("source_type")}
     opportunity = {"opportunity_id": "disabled", "linked": False}
     if getattr(settings, "database_url", None) or getattr(settings, "db_secret_arn", None):
         opportunity = correlate_signal(settings, message.signal_id, candidate)

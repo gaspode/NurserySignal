@@ -19,6 +19,7 @@ def test_initial_migration_exists_and_contains_provenance_tables() -> None:
         "0011_opportunity_creation_policy.sql",
         "0012_opportunity_reason_separation.sql",
         "0013_canonical_match_review_cleanup.sql",
+        "0014_signalhub_verticals.sql",
     ]
     sql = "\n".join(path.read_text(encoding="utf-8") for path in files)
     tables = (
@@ -47,9 +48,11 @@ def test_initial_migration_exists_and_contains_provenance_tables() -> None:
     assert "match_outcome" in sql
     assert "creation_reason" in sql
     assert "SUPERSEDED" in sql
+    assert "signalhub_check_opportunity_signal_vertical" in sql
+    assert "supported_verticals" in sql
 
 
 def test_ai_review_insert_has_one_value_placeholder_per_column() -> None:
     repository = Path("backend/app/repository.py").read_text()
     statement = repository.split("def save_ai_review", 1)[1].split("ON CONFLICT", 1)[0]
-    assert statement.count("%s") == 17
+    assert statement.count("%s") == 18

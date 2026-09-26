@@ -119,8 +119,9 @@ def test_admin_list_filters_and_paginates(monkeypatch) -> None:
         "discovered_to": None,
         "search": None,
         "unmatched_only": False,
-        "include_excluded": False,
-        "opportunity_decision": None,
+            "include_excluded": False,
+            "opportunity_decision": None,
+            "vertical": None,
     }
 
 

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useApi } from "./api.js";
 import { displayAttributeName, useAuth } from "./auth.js";
 
@@ -189,13 +189,13 @@ function ConfirmationModal({ title, message, confirmLabel, danger = false, busy 
   );
 }
 
-function Shell({ user, onLogout, onNavigate, currentPath, children }) {
+function Shell({ user, onLogout, onNavigate, currentPath, vertical, onVerticalChange, children }) {
   const email = user?.getUsername?.() || "Signed-in staff";
   const route = currentPath.split("?")[0];
   return (
     <div className="app-shell">
       <aside className="sidebar">
-        <button className="brand" onClick={() => onNavigate("/")}><span className="brand-mark small">NS</span><span>NurserySignal</span></button>
+        <button className="brand" onClick={() => onNavigate("/")}><span className="brand-mark small">SH</span><span>SignalHub<small>NurserySignal</small></span></button>
         <p className="sidebar-label">Workspace</p>
         <nav aria-label="Primary navigation">
           <button className={currentPath === "/" ? "nav-link active" : "nav-link"} onClick={() => onNavigate("/")}>Overview</button>
@@ -205,6 +205,7 @@ function Shell({ user, onLogout, onNavigate, currentPath, children }) {
           <button className={route.startsWith("/unmatched") ? "nav-link active" : "nav-link"} onClick={() => onNavigate("/unmatched")}>Unmatched Signals</button>
           <button className={route.startsWith("/match-review") ? "nav-link active" : "nav-link"} onClick={() => onNavigate("/match-review")}>Match Review</button>
           <button className={route.startsWith("/sources") ? "nav-link active" : "nav-link"} onClick={() => onNavigate("/sources")}>Sources</button>
+          <button className={route.startsWith("/organisations") ? "nav-link active" : "nav-link"} onClick={() => onNavigate("/organisations")}>Organisations</button>
         </nav>
         <div className="sidebar-bottom">
           <span className="connection-dot" /> Production workspace
@@ -212,7 +213,7 @@ function Shell({ user, onLogout, onNavigate, currentPath, children }) {
       </aside>
       <div className="main-column">
         <header className="topbar">
-          <div><span className="mobile-brand">NurserySignal</span></div>
+          <div className="topbar-context"><span className="mobile-brand">SignalHub</span><label className="vertical-selector">Vertical<select value={vertical} onChange={(event) => onVerticalChange(event.target.value)}><option value="ALL">All verticals</option><option value="NURSERY">NurserySignal</option><option value="CHILDRENS_HOME" disabled>CareSignal (coming later)</option><option value="DENTAL" disabled>DentalSignal (coming later)</option></select></label></div>
           <div className="user-menu"><span className="user-email">{email}</span><button className="button ghost" onClick={onLogout}>Log out</button></div>
         </header>
         <main className="content">{children}</main>
@@ -277,6 +278,16 @@ export function SourcesPage({ apiClient }) {
       </article>;
     })}</div>
   </section>;
+}
+
+export function OrganisationsPage({ apiClient }) {
+  const [items, setItems] = useState(null);
+  const [error, setError] = useState("");
+  const load = async () => { try { setItems((await apiClient("/admin/organisations?limit=100")).items || []); } catch (loadError) { setError(loadError.message); } };
+  useEffect(() => { load(); }, []);
+  if (error) return <ErrorState message={error} onRetry={load} />;
+  if (!items) return <LoadingState label="Loading organisations" />;
+  return <section><div className="page-heading"><div><p className="eyebrow">Shared identity</p><h1>Organisations</h1><p className="muted">Organisations may operate across verticals; signals and opportunities remain isolated by vertical.</p></div><RefreshButton onClick={load} /></div>{items.length === 0 ? <div className="state-card"><strong>No organisations found.</strong></div> : <div className="table-wrap"><table><thead><tr><th>Organisation</th><th>Vertical</th><th>Signals</th><th>Opportunities</th></tr></thead><tbody>{items.map((item) => <tr key={`${item.vertical}-${item.name}`}><td><strong>{item.name}</strong></td><td><Badge>{titleCase(item.vertical)}</Badge></td><td>{item.signal_count}</td><td>{item.opportunity_count}</td></tr>)}</tbody></table></div>}</section>;
 }
 
 export function Dashboard({ apiClient, onNavigate }) {
@@ -496,7 +507,7 @@ export function MatchReviewPage({ apiClient, onNavigate }) {
   useEffect(() => { load(); }, []);
   async function resolve(id, action) { setBusy(id); try { await apiClient(`/admin/match-review/${id}/${action}`, { method: "POST" }); await load(); } catch (e) { setError(e.message); } finally { setBusy(""); } }
   if (error) return <ErrorState message={error} onRetry={load} />;
-  return <section><div className="page-heading"><div><p className="eyebrow">Grouping decisions</p><h1>Match Review</h1><p className="muted">Review uncertain system suggestions before they join an opportunity.</p></div><RefreshButton onClick={load} /></div>{!result && <LoadingState label="Loading match review" />}{result?.items?.length === 0 && <div className="state-card"><strong>No uncertain matches.</strong><p className="muted">Conservative automatic matching has no suggestions waiting.</p></div>}{result?.items?.map((item) => <article className="panel match-review-card" key={item.id}><div><Badge>{titleCase(item.outcome)}</Badge><h2>{item.signal_title}</h2><p className="muted">Possible match: {item.opportunity_name}</p><p>{item.reason}</p><span className="cell-subtitle">{Math.round((item.confidence || 0) * 100)}% confidence · {formatDate(item.created_at)}</span></div><div className="review-actions"><button className="button approve" disabled={busy === item.id} onClick={() => resolve(item.id, "link")}>Link</button><button className="button reject" disabled={busy === item.id} onClick={() => resolve(item.id, "reject")}>Reject</button><button className="button ghost" onClick={() => onNavigate(`/history/${item.signal_id}`)}>View signal</button><button className="button ghost" onClick={() => onNavigate(`/opportunities/${item.opportunity_id}`)}>View opportunity</button></div></article>)}</section>;
+  return <section><div className="page-heading"><div><p className="eyebrow">Grouping decisions</p><h1>Match Review</h1><p className="muted">Review uncertain system suggestions before they join an opportunity.</p></div><RefreshButton onClick={load} /></div>{!result && <LoadingState label="Loading match review" />}{result?.items?.length === 0 && <div className="state-card"><strong>No uncertain matches.</strong><p className="muted">Conservative automatic matching has no suggestions waiting.</p></div>}{result?.items?.map((item) => <article className="panel match-review-card" key={item.id}><div><Badge>{titleCase(item.vertical)}</Badge> <Badge>{titleCase(item.outcome)}</Badge><h2>{item.signal_title}</h2><p className="muted">Possible match: {item.opportunity_name}</p><p>{item.reason}</p><span className="cell-subtitle">{Math.round((item.confidence || 0) * 100)}% confidence · {formatDate(item.created_at)}</span></div><div className="review-actions"><button className="button approve" disabled={busy === item.id} onClick={() => resolve(item.id, "link")}>Link</button><button className="button reject" disabled={busy === item.id} onClick={() => resolve(item.id, "reject")}>Reject</button><button className="button ghost" onClick={() => onNavigate(`/history/${item.signal_id}`)}>View signal</button><button className="button ghost" onClick={() => onNavigate(`/opportunities/${item.opportunity_id}`)}>View opportunity</button></div></article>)}</section>;
 }
 
 export function OpportunitiesPage({ apiClient, onNavigate }) {
@@ -507,7 +518,7 @@ export function OpportunitiesPage({ apiClient, onNavigate }) {
   const [error, setError] = useState("");
   const load = async () => { setLoading(true); setError(""); try { const params = new URLSearchParams({ limit: PAGE_SIZE, offset: page * PAGE_SIZE }); if (search) params.set("q", search); setResult(await apiClient(`/admin/opportunities?${params}`)); } catch (e) { setError(e.message); } finally { setLoading(false); } };
   useEffect(() => { load(); }, [page]);
-  return <section><div className="page-heading"><div><p className="eyebrow">Commercial evidence</p><h1>Opportunities</h1><p className="muted">Facilities supported by one or more independent signals.</p></div><div className="page-actions"><RefreshButton busy={loading} onClick={load} /><OpportunityRecalculateTool apiClient={apiClient} onComplete={async (message) => { setNotice(message); await load(); }} /></div></div>{notice && <div className="notice" role="status">{notice}</div>}<div className="filter-bar"><label>Search<input aria-label="Search opportunities" type="search" value={search} onChange={(event) => setSearch(event.target.value)} onKeyDown={(event) => event.key === "Enter" && (setPage(0), load())} placeholder="Name or explanation…" /></label><button className="button secondary" onClick={() => { setSearch(""); setPage(0); }}>Reset</button></div>{error && <ErrorState message={error} onRetry={load} />}{loading && !result && <LoadingState label="Loading opportunities" />}{result?.items?.length === 0 && <div className="state-card"><strong>No opportunities yet.</strong><p className="muted">Opportunities appear after signals are enriched.</p></div>}{result?.items?.length > 0 && <><div className="table-wrap"><table><thead><tr><th>Opportunity</th><th>Change type</th><th>Lifecycle</th><th>Confidence</th><th>Linked signals</th><th>Why created</th></tr></thead><tbody>{result.items.map((item) => <tr className="clickable-row" key={item.id} onClick={() => onNavigate(`/opportunities/${item.id}`)}><td><strong>{item.name}</strong><span className="cell-subtitle">{titleCase(item.event_type)}</span></td><td><Badge>{titleCase(item.change_type || "OTHER_CHANGE")}</Badge></td><td><Badge>{titleCase(item.lifecycle_stage)}</Badge></td><td>{Math.round((item.confidence || 0) * 100)}%</td><td>{item.signal_count}</td><td>{item.creation_reason || item.stage_reason || "—"}</td></tr>)}</tbody></table></div><div className="pagination"><span>Page {page + 1} of {Math.max(1, Math.ceil(result.total / PAGE_SIZE))}</span><div><button className="button secondary" disabled={page === 0} onClick={() => setPage((value) => value - 1)}>Previous</button><button className="button secondary" disabled={(page + 1) * PAGE_SIZE >= result.total} onClick={() => setPage((value) => value + 1)}>Next</button></div></div></>}</section>;
+  return <section><div className="page-heading"><div><p className="eyebrow">Commercial evidence</p><h1>Opportunities</h1><p className="muted">Facilities supported by one or more independent signals.</p></div><div className="page-actions"><RefreshButton busy={loading} onClick={load} /><OpportunityRecalculateTool apiClient={apiClient} onComplete={async (message) => { setNotice(message); await load(); }} /></div></div>{notice && <div className="notice" role="status">{notice}</div>}<div className="filter-bar"><label>Search<input aria-label="Search opportunities" type="search" value={search} onChange={(event) => setSearch(event.target.value)} onKeyDown={(event) => event.key === "Enter" && (setPage(0), load())} placeholder="Name or explanation…" /></label><button className="button secondary" onClick={() => { setSearch(""); setPage(0); }}>Reset</button></div>{error && <ErrorState message={error} onRetry={load} />}{loading && !result && <LoadingState label="Loading opportunities" />}{result?.items?.length === 0 && <div className="state-card"><strong>No opportunities yet.</strong><p className="muted">Opportunities appear after signals are enriched.</p></div>}{result?.items?.length > 0 && <><div className="table-wrap"><table><thead><tr><th>Vertical</th><th>Opportunity</th><th>Change type</th><th>Lifecycle</th><th>Confidence</th><th>Linked signals</th><th>Why created</th></tr></thead><tbody>{result.items.map((item) => <tr className="clickable-row" key={item.id} onClick={() => onNavigate(`/opportunities/${item.id}`)}><td><Badge>{titleCase(item.vertical)}</Badge></td><td><strong>{item.name}</strong><span className="cell-subtitle">{titleCase(item.event_type)}</span></td><td><Badge>{titleCase(item.change_type || "OTHER_CHANGE")}</Badge></td><td><Badge>{titleCase(item.lifecycle_stage)}</Badge></td><td>{Math.round((item.confidence || 0) * 100)}%</td><td>{item.signal_count}</td><td>{item.creation_reason || item.stage_reason || "—"}</td></tr>)}</tbody></table></div><div className="pagination"><span>Page {page + 1} of {Math.max(1, Math.ceil(result.total / PAGE_SIZE))}</span><div><button className="button secondary" disabled={page === 0} onClick={() => setPage((value) => value - 1)}>Previous</button><button className="button secondary" disabled={(page + 1) * PAGE_SIZE >= result.total} onClick={() => setPage((value) => value + 1)}>Next</button></div></div></>}</section>;
 }
 
 export function OpportunityDetail({ opportunityId, apiClient, onBack }) {
@@ -637,6 +648,22 @@ export default function App() {
   const auth = useAuth();
   const path = useHashLocation();
   const apiClient = useMemo(() => useApi(auth.getToken, auth.logout), [auth.getToken, auth.logout]);
+  const [vertical, setVertical] = useState(() => window.sessionStorage.getItem("signalhub.vertical") || "NURSERY");
+  const onVerticalChange = useCallback((value) => {
+    setVertical(value);
+    window.sessionStorage.setItem("signalhub.vertical", value);
+  }, []);
+  const scopedApiClient = useMemo(() => async (requestPath, options = {}) => {
+    const method = String(options.method || "GET").toUpperCase();
+    if (method !== "GET" || vertical === "ALL") return apiClient(requestPath, options);
+    const [pathname, queryString] = requestPath.split("?", 2);
+    if (!["/admin/signals", "/admin/opportunities", "/admin/match-review"].includes(pathname)) {
+      return apiClient(requestPath, options);
+    }
+    const params = new URLSearchParams(queryString || "");
+    params.set("vertical", vertical);
+    return apiClient(`${pathname}?${params.toString()}`, options);
+  }, [apiClient, vertical]);
   if (auth.loading) return <div className="app-loading"><span className="spinner" /> Checking session…</div>;
   if (!auth.user) return <LoginPage onLogin={auth.login} authError={auth.authError} configured={auth.configured} passwordChallenge={auth.passwordChallenge} onCompleteNewPassword={auth.completeNewPassword} onCancelPasswordChallenge={auth.cancelPasswordChallenge} />;
   const route = path.split("?")[0];
@@ -645,7 +672,7 @@ export default function App() {
   const opportunityMatch = route.match(/^\/opportunities\/([^/?#]+)/);
   const detailMode = detailMatch?.[1] === "inbox" ? "inbox" : detailMatch?.[1] === "unmatched" ? "unmatched" : "history";
   const detailNotice = new URLSearchParams(listQuery).get("notice") || "";
-  return <Shell user={auth.user} onLogout={auth.logout} onNavigate={navigate} currentPath={path}>
-    {detailMatch ? <SignalDetail signalId={detailMatch[2]} apiClient={apiClient} queueMode={detailMode === "inbox"} unmatchedMode={detailMode === "unmatched"} initialNotice={detailNotice} onBack={() => navigate(detailMode === "inbox" ? "/inbox" : detailMode === "unmatched" ? "/unmatched" : "/history")} onReviewed={({ message, nextId }) => navigate(nextId ? `/inbox/${nextId}?notice=${encodeURIComponent(message)}` : `/inbox?notice=${encodeURIComponent(message)}`)} /> : opportunityMatch ? <OpportunityDetail opportunityId={opportunityMatch[1]} apiClient={apiClient} onBack={() => navigate("/opportunities")} /> : route === "/inbox" ? <ReviewInboxPage apiClient={apiClient} onNavigate={navigate} initialQuery={listQuery} /> : route === "/history" ? <ReviewedSignalsPage apiClient={apiClient} onNavigate={navigate} initialQuery={listQuery} /> : route === "/unmatched" ? <UnmatchedSignalsPage apiClient={apiClient} onNavigate={navigate} initialQuery={listQuery} /> : route === "/match-review" ? <MatchReviewPage apiClient={apiClient} onNavigate={navigate} /> : route === "/opportunities" ? <OpportunitiesPage apiClient={apiClient} onNavigate={navigate} /> : route === "/sources" ? <SourcesPage apiClient={apiClient} /> : <Dashboard apiClient={apiClient} onNavigate={navigate} />}
+  return <Shell user={auth.user} onLogout={auth.logout} onNavigate={navigate} currentPath={path} vertical={vertical} onVerticalChange={onVerticalChange}>
+    {detailMatch ? <SignalDetail signalId={detailMatch[2]} apiClient={scopedApiClient} queueMode={detailMode === "inbox"} unmatchedMode={detailMode === "unmatched"} initialNotice={detailNotice} onBack={() => navigate(detailMode === "inbox" ? "/inbox" : detailMode === "unmatched" ? "/unmatched" : "/history")} onReviewed={({ message, nextId }) => navigate(nextId ? `/inbox/${nextId}?notice=${encodeURIComponent(message)}` : `/inbox?notice=${encodeURIComponent(message)}`)} /> : opportunityMatch ? <OpportunityDetail opportunityId={opportunityMatch[1]} apiClient={scopedApiClient} onBack={() => navigate("/opportunities")} /> : route === "/inbox" ? <ReviewInboxPage apiClient={scopedApiClient} onNavigate={navigate} initialQuery={listQuery} /> : route === "/history" ? <ReviewedSignalsPage apiClient={scopedApiClient} onNavigate={navigate} initialQuery={listQuery} /> : route === "/unmatched" ? <UnmatchedSignalsPage apiClient={scopedApiClient} onNavigate={navigate} initialQuery={listQuery} /> : route === "/match-review" ? <MatchReviewPage apiClient={scopedApiClient} onNavigate={navigate} /> : route === "/opportunities" ? <OpportunitiesPage apiClient={scopedApiClient} onNavigate={navigate} /> : route === "/sources" ? <SourcesPage apiClient={scopedApiClient} /> : route === "/organisations" ? <OrganisationsPage apiClient={scopedApiClient} /> : <Dashboard apiClient={scopedApiClient} onNavigate={navigate} />}
   </Shell>;
 }

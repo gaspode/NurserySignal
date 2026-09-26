@@ -8,6 +8,7 @@ from typing import Any
 import boto3
 
 from app.config import Settings
+from app.verticals import NURSERY, validate_vertical
 
 
 @dataclass(frozen=True)
@@ -18,6 +19,7 @@ class EnrichmentMessage:
     evidence_bucket: str
     evidence_key: str
     queued_at: str
+    vertical: str = NURSERY
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), separators=(",", ":"), sort_keys=True)
@@ -38,7 +40,9 @@ class EnrichmentMessage:
         if str(payload["message_version"]) != "1.0":
             raise ValueError("unsupported enrichment message version")
         datetime.fromisoformat(str(payload["queued_at"]).replace("Z", "+00:00"))
-        return cls(**{key: str(payload[key]) for key in required})
+        values = {key: str(payload[key]) for key in required}
+        values["vertical"] = validate_vertical(str(payload.get("vertical") or NURSERY))
+        return cls(**values)
 
 
 @dataclass(frozen=True)

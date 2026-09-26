@@ -19,6 +19,7 @@ from app.repository import (
     link_signal_to_opportunity,
     list_match_reviews,
     list_opportunities,
+    list_organisations,
     list_signals,
     merge_opportunities,
     opportunity_detail,
@@ -37,6 +38,7 @@ from app.service import EnrichmentQueueError, SignalConflictError, ingest_signal
 from app.shadow_review import reevaluate_ai_shadow
 from app.source_runs import finish_run, list_runs, start_run
 from app.storage import EvidencePersistenceError, presigned_evidence_url
+from app.verticals import registry_payload
 
 logger = configure_logging()
 
@@ -54,6 +56,7 @@ SOURCE_DEFINITIONS = {
             "page_size": 25,
         },
         "function_setting": "planning_collector_function_name",
+        "supported_verticals": ["NURSERY"],
     },
     "recruitment": {
         "display_name": "Recruitment vacancies",
@@ -67,6 +70,7 @@ SOURCE_DEFINITIONS = {
             "page_size": 25,
         },
         "function_setting": "recruitment_collector_function_name",
+        "supported_verticals": ["NURSERY"],
     },
 }
 
@@ -131,6 +135,10 @@ def _query(event: dict[str, Any], name: str) -> str | None:
 
 
 def _admin_path(path: str) -> tuple[str, str | None]:
+    if path == "/admin/verticals":
+        return "vertical-list", None
+    if path == "/admin/organisations":
+        return "organisation-list", None
     if path == "/admin/sources":
         return "source-list", None
     if path in {"/admin/sources/planning/run", "/admin/sources/recruitment/run"}:
@@ -236,6 +244,26 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             return auth_error
         action, signal_id = _admin_path(path)
         try:
+            if action == "vertical-list" and method == "GET":
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                return _response(200, {"items": registry_payload()})
+            if action == "organisation-list" and method == "GET":
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                limit = min(max(int(_query(event, "limit") or "50"), 1), 100)
+                offset = max(int(_query(event, "offset") or "0"), 0)
+                return _response(
+                    200,
+                    list_organisations(
+                        settings,
+                        limit=limit,
+                        offset=offset,
+                        vertical=_query(event, "vertical"),
+                    ),
+                )
             if action == "source-list" and method == "GET":
                 admin_error = _require_admin(claims, settings)
                 if admin_error:
@@ -250,6 +278,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                             "key": source_key,
                             "display_name": definition["display_name"],
                             "provider": definition["provider"],
+                            "supported_verticals": definition["supported_verticals"],
                             "schedule_state": definition["schedule_state"],
                             "schedule_expression": definition["schedule_expression"],
                             "last_attempt_at": latest.get("started_at") if latest else None,
@@ -431,7 +460,15 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                     return admin_error
                 limit = min(max(int(_query(event, "limit") or "25"), 1), 100)
                 offset = max(int(_query(event, "offset") or "0"), 0)
-                return _response(200, list_match_reviews(settings, limit=limit, offset=offset))
+                return _response(
+                    200,
+                    list_match_reviews(
+                        settings,
+                        limit=limit,
+                        offset=offset,
+                        vertical=_query(event, "vertical"),
+                    ),
+                )
             if (
                 action in {"match-review-link", "match-review-reject"}
                 and method == "POST"
@@ -541,6 +578,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                         unmatched_only=_query(event, "unmatched") == "true",
                         include_excluded=_query(event, "include_excluded") == "true",
                         opportunity_decision=_query(event, "opportunity_decision"),
+                        vertical=_query(event, "vertical"),
                     ),
                 )
             if action == "opportunity-list" and method == "GET":
@@ -552,7 +590,11 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 return _response(
                     200,
                     list_opportunities(
-                        settings, limit=limit, offset=offset, search=_query(event, "q")
+                        settings,
+                        limit=limit,
+                        offset=offset,
+                        search=_query(event, "q"),
+                        vertical=_query(event, "vertical"),
                     ),
                 )
             if action == "opportunity-recalculate" and method == "POST":
