@@ -171,6 +171,7 @@ Opportunity matching foundation:
 - bounded administrator recalculation can demote routine-only system opportunities, promote strong unmatched planning evidence and preserve source/review history; concise change-type titles are shown in the admin UI.
 - opportunity basis/creation reasons are now stored separately from per-signal match reasons, so single-signal opportunities do not present relational matching text as their reason for existence.
 - bounded recalculation now performs conservative historical duplicate consolidation using stable vertical/postcode/operator or stored site identity, plus exact shared-signal identity, while preserving admin intent and relationship history.
+- Match Review now resolves consolidation chains, excludes superseded opportunities and already-linked signals, and closes stale suggestions with bounded audited cleanup.
 
 Current next step:
 

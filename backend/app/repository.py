@@ -990,16 +990,18 @@ def correlate_signal(
         # path when a worker retry and an administrator reprocess overlap.
         conn.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (str(signal_id),))
         active = conn.execute(
-            """SELECT opportunity_id FROM opportunity_signals
-               WHERE raw_signal_id = %s AND status = 'ACTIVE'
-               ORDER BY created_at, opportunity_id
+            """SELECT os.opportunity_id FROM opportunity_signals os
+               JOIN opportunities o ON o.id = os.opportunity_id
+               WHERE os.raw_signal_id = %s AND os.status = 'ACTIVE'
+               ORDER BY os.created_at, os.opportunity_id
                LIMIT 1""",
             (signal_id,),
         ).fetchone()
         if active:
+            canonical = _canonical_opportunity_id(conn, active[0])
             conn.commit()
             return {
-                "opportunity_id": str(active[0]),
+                "opportunity_id": str(canonical or active[0]),
                 "linked": True,
                 "reused": True,
                 "relationship_created": False,
@@ -1163,6 +1165,14 @@ def correlate_signal(
             ),
         )
         for possible_id, possible_confidence, possible_reason in uncertain_matches[:3]:
+            if _canonical_opportunity_id(conn, possible_id) != possible_id:
+                continue
+            if conn.execute(
+                """SELECT 1 FROM opportunity_signals
+                   WHERE raw_signal_id = %s AND opportunity_id = %s AND status = 'ACTIVE'""",
+                (signal_id, possible_id),
+            ).fetchone():
+                continue
             conn.execute(
                 """INSERT INTO opportunity_match_reviews
                    (raw_signal_id, opportunity_id, outcome, confidence, reason)
@@ -1180,6 +1190,32 @@ def correlate_signal(
         "creation_decision": creation.decision,
         "reason": match_reason or "initial signal",
     }
+
+
+def _canonical_opportunity_id(conn: Any, opportunity_id: Any) -> Any | None:
+    """Resolve a merged opportunity to its current canonical record.
+
+    A bounded loop protects matching from malformed consolidation chains. A
+    cycle is treated as unresolved rather than granting a stale record current
+    status.
+    """
+    current = opportunity_id
+    seen: set[str] = set()
+    for _ in range(20):
+        if current is None or str(current) in seen:
+            return None
+        seen.add(str(current))
+        row = conn.execute(
+            """SELECT id, review_status, merged_into_opportunity_id
+               FROM opportunities WHERE id = %s""",
+            (current,),
+        ).fetchone()
+        if not row:
+            return None
+        if row[1] != "MERGED" or row[2] is None:
+            return row[0]
+        current = row[2]
+    return None
 
 
 def _safe_system_duplicate_key(row: tuple[Any, ...]) -> tuple[str, str, str, str, str] | None:
@@ -1402,6 +1438,7 @@ def recalculate_opportunity_creation(
     """Boundedly recalculate opportunity creation from stored signal evidence."""
     limit = min(max(limit, 1), 100)
     merged = _consolidate_system_duplicates(settings, actor=actor)
+    review_cleanup = _cleanup_match_reviews(settings, limit=limit, actor=actor)
     with connection(settings) as conn:
         params: list[Any] = []
         where = "rs.source_type IN ('planning', 'recruitment')"
@@ -1541,6 +1578,8 @@ def recalculate_opportunity_creation(
             "routine_only_demoted": routine_only_demoted,
             "review_required": review_required,
             "unchanged": unchanged,
+            "match_reviews_closed_superseded": review_cleanup["closed_superseded"],
+            "match_reviews_closed_linked": review_cleanup["closed_linked"],
             "bounded": True,
         },
     )
@@ -1555,6 +1594,8 @@ def recalculate_opportunity_creation(
         "routine_only_demoted": routine_only_demoted,
         "review_required": review_required,
         "unchanged": unchanged,
+        "match_reviews_closed_superseded": review_cleanup["closed_superseded"],
+        "match_reviews_closed_linked": review_cleanup["closed_linked"],
     }
 
 
@@ -1683,10 +1724,72 @@ def opportunity_detail(settings: Settings, opportunity_id: str) -> dict[str, Any
     }
 
 
+def _cleanup_match_reviews(
+    settings: Settings, *, limit: int, actor: str
+) -> dict[str, int]:
+    """Close bounded review suggestions invalidated by consolidation or linking."""
+    closed_superseded = 0
+    closed_linked = 0
+    with connection(settings) as conn:
+        rows = conn.execute(
+            """SELECT id, raw_signal_id, opportunity_id
+               FROM opportunity_match_reviews
+               WHERE status = 'PENDING'
+               ORDER BY created_at, id
+               LIMIT %s
+               FOR UPDATE""",
+            (min(max(limit, 1), 100),),
+        ).fetchall()
+        for review_id, signal_id, opportunity_id in rows:
+            canonical = _canonical_opportunity_id(conn, opportunity_id)
+            if canonical is None or canonical != opportunity_id:
+                reason = "candidate opportunity superseded by consolidation"
+                status = "SUPERSEDED"
+                closed_superseded += 1
+            elif conn.execute(
+                """SELECT 1 FROM opportunity_signals
+                   WHERE raw_signal_id = %s AND status = 'ACTIVE'""",
+                (signal_id,),
+            ).fetchone():
+                reason = "signal already linked to canonical opportunity"
+                status = "SUPERSEDED"
+                closed_linked += 1
+            else:
+                continue
+            conn.execute(
+                """UPDATE opportunity_match_reviews
+                   SET status = %s, reason = %s, reviewed_by = %s, reviewed_at = now()
+                   WHERE id = %s AND status = 'PENDING'""",
+                (status, reason, actor, review_id),
+            )
+        conn.commit()
+    if closed_superseded or closed_linked:
+        record_admin_audit(
+            settings,
+            action="match_review_cleanup",
+            actor=actor,
+            target_type="opportunity_match_review",
+            details={
+                "bounded": True,
+                "closed_superseded": closed_superseded,
+                "closed_linked": closed_linked,
+            },
+        )
+    return {"closed_superseded": closed_superseded, "closed_linked": closed_linked}
+
+
 def list_match_reviews(settings: Settings, *, limit: int, offset: int) -> dict[str, Any]:
     with connection(settings) as conn:
         total = conn.execute(
-            "SELECT count(*) FROM opportunity_match_reviews WHERE status = 'PENDING'"
+            """SELECT count(*)
+               FROM opportunity_match_reviews mr
+               JOIN opportunities o ON o.id = mr.opportunity_id
+               WHERE mr.status = 'PENDING'
+                 AND o.review_status NOT IN ('MERGED', 'REJECTED')
+                 AND NOT EXISTS (
+                     SELECT 1 FROM opportunity_signals os
+                     WHERE os.raw_signal_id = mr.raw_signal_id AND os.status = 'ACTIVE'
+                 )"""
         ).fetchone()[0]
         rows = conn.execute(
             """SELECT mr.id, mr.raw_signal_id, mr.opportunity_id, mr.outcome,
@@ -1696,6 +1799,11 @@ def list_match_reviews(settings: Settings, *, limit: int, offset: int) -> dict[s
                JOIN raw_signals rs ON rs.id = mr.raw_signal_id
                JOIN opportunities o ON o.id = mr.opportunity_id
                WHERE mr.status = 'PENDING'
+                 AND o.review_status NOT IN ('MERGED', 'REJECTED')
+                 AND NOT EXISTS (
+                     SELECT 1 FROM opportunity_signals os
+                     WHERE os.raw_signal_id = mr.raw_signal_id AND os.status = 'ACTIVE'
+                 )
                ORDER BY mr.created_at DESC LIMIT %s OFFSET %s""",
             (limit, offset),
         ).fetchall()

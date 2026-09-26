@@ -1,5 +1,9 @@
 from app.correlation import classify_match, preferred_match_reason
-from app.repository import _duplicate_group_keys, _safe_system_duplicate_key
+from app.repository import (
+    _canonical_opportunity_id,
+    _duplicate_group_keys,
+    _safe_system_duplicate_key,
+)
 
 
 def test_preferred_match_reason_uses_match_decision_outcome():
@@ -73,3 +77,42 @@ def test_duplicate_group_keys_include_exact_shared_signal_identity():
     )
 
     assert ("NURSERY", "shared_signal", "signal-1", "EXPANSION", "") in _duplicate_group_keys(row)
+
+
+class _OpportunityChain:
+    def __init__(self, rows):
+        self.rows = rows
+
+    def execute(self, _query, params):
+        class Result:
+            def __init__(self, row):
+                self.row = row
+
+            def fetchone(self):
+                return self.row
+
+        row = self.rows.get(str(params[0]))
+        return Result(row)
+
+
+def test_canonical_opportunity_id_resolves_multi_hop_consolidation():
+    conn = _OpportunityChain(
+        {
+            "a": ("a", "MERGED", "b"),
+            "b": ("b", "MERGED", "c"),
+            "c": ("c", "UNREVIEWED", None),
+        }
+    )
+
+    assert _canonical_opportunity_id(conn, "a") == "c"
+
+
+def test_canonical_opportunity_id_rejects_cycles():
+    conn = _OpportunityChain(
+        {
+            "a": ("a", "MERGED", "b"),
+            "b": ("b", "MERGED", "a"),
+        }
+    )
+
+    assert _canonical_opportunity_id(conn, "a") is None
