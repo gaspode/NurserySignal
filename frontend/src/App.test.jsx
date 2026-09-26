@@ -395,6 +395,7 @@ describe("admin frontend", () => {
         title: "Capacity increase at nursery",
         discovered_at: "2026-09-20T00:00:00Z",
         rule_confidence: 0.86,
+        relationship_status: "ACTIVE",
         relationship_created_by: "SYSTEM",
         match_reason: "same postcode and compatible operator/nursery name",
       }],
