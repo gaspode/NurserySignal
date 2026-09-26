@@ -9,7 +9,11 @@ from psycopg.types.json import Jsonb
 
 from app.classification import CLASSIFICATION_RULE_VERSION
 from app.config import Settings
-from app.correlation import classify_match, recruitment_evidence_strength
+from app.correlation import (
+    classify_match,
+    preferred_match_reason,
+    recruitment_evidence_strength,
+)
 from app.db import connection
 from app.enrichment import fixture_enrichment
 from app.ingestion import NormalizedSignal
@@ -1024,9 +1028,7 @@ def correlate_signal(
                 if blocked:
                     continue
                 match = row
-                match_reason = (
-                    comparison.reason if comparison.matched else operator_comparison.reason
-                )
+                match_reason = preferred_match_reason(comparison, operator_comparison)
                 break
         if match:
             opportunity_id = match[0]

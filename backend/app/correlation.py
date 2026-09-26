@@ -60,6 +60,11 @@ def classify_match(postcode: Any, name: Any, other_postcode: Any, other_name: An
     return MatchDecision("NO_MATCH", 0.0, "postcode differs")
 
 
+def preferred_match_reason(primary: MatchDecision, secondary: MatchDecision) -> str:
+    """Choose the explanation for the deterministic match that won."""
+    return primary.reason if primary.outcome == "EXACT" else secondary.reason
+
+
 def recruitment_evidence_strength(candidate: dict[str, Any]) -> tuple[float, str]:
     """Return a bounded confidence contribution for recruitment evidence."""
     facts = candidate.get("extracted_facts") or {}
