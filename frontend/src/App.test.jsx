@@ -77,6 +77,40 @@ describe("admin frontend", () => {
     expect(apiClient).toHaveBeenCalledWith(expect.stringContaining("review_status=PENDING"));
   });
 
+  it("offers immediate row actions without a confirmation dialog", async () => {
+    const nativeConfirm = vi.spyOn(window, "confirm");
+    const apiClient = vi.fn()
+      .mockResolvedValueOnce(listResult())
+      .mockResolvedValueOnce({ signal_id: "signal-1", review_status: "APPROVED" })
+      .mockResolvedValueOnce(listResult([], 0));
+    render(<ReviewInboxPage apiClient={apiClient} onNavigate={vi.fn()} />);
+    await screen.findByText(pendingItem.title);
+    await userEvent.click(screen.getByRole("button", { name: `Actions for ${pendingItem.title}` }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Approve" }));
+    expect(nativeConfirm).not.toHaveBeenCalled();
+    await waitFor(() => expect(apiClient).toHaveBeenCalledWith("/admin/signals/signal-1/approve", { method: "POST" }));
+    expect(await screen.findByText("Inbox clear")).toBeInTheDocument();
+  });
+
+  it("supports bounded bulk decisions with confirmation", async () => {
+    const second = { ...pendingItem, id: "signal-2", title: "Second pending signal" };
+    const apiClient = vi.fn()
+      .mockResolvedValueOnce(listResult([pendingItem, second], 2))
+      .mockResolvedValueOnce({ updated: 2 })
+      .mockResolvedValueOnce(listResult([], 0));
+    render(<ReviewInboxPage apiClient={apiClient} onNavigate={vi.fn()} />);
+    await screen.findByText(second.title);
+    await userEvent.click(screen.getByRole("checkbox", { name: `Select ${pendingItem.title}` }));
+    await userEvent.click(screen.getByRole("checkbox", { name: `Select ${second.title}` }));
+    await userEvent.click(screen.getByRole("button", { name: "Reject selected" }));
+    expect(screen.getByRole("dialog")).toHaveTextContent("Reject selected signals?");
+    await userEvent.click(screen.getByRole("dialog").querySelector(".button.reject"));
+    await waitFor(() => expect(apiClient).toHaveBeenCalledWith("/admin/signals/bulk-review", {
+      method: "POST",
+      body: JSON.stringify({ action: "reject", signal_ids: ["signal-1", "signal-2"] }),
+    }));
+  });
+
   it("supports reviewed history search, filtering and pagination", async () => {
     const apiClient = vi.fn().mockResolvedValue(listResult([approvedItem], 11));
     render(<ReviewedSignalsPage apiClient={apiClient} onNavigate={vi.fn()} />);

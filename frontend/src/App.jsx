@@ -380,6 +380,9 @@ function SignalListPage({ apiClient, onNavigate, initialQuery = "", mode }) {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState(() => new URLSearchParams(initialQuery).get("notice") || "");
+  const [selectedIds, setSelectedIds] = useState(() => new Set());
+  const [bulkAction, setBulkAction] = useState(null);
+  const [bulkBusy, setBulkBusy] = useState(false);
   const query = useMemo(() => {
     const params = new URLSearchParams({ limit: PAGE_SIZE, offset: page * PAGE_SIZE });
     Object.entries(filters).forEach(([key, value]) => value && params.set(key, value));
@@ -395,13 +398,53 @@ function SignalListPage({ apiClient, onNavigate, initialQuery = "", mode }) {
     }
   };
   useEffect(() => { load({ initial: true }); }, [query]);
+  useEffect(() => { setSelectedIds(new Set()); }, [query]);
   function updateFilter(name, value) { setPage(0); setFilters((current) => ({ ...current, [name]: value })); }
+  function toggleSelected(signalId) {
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      if (next.has(signalId)) next.delete(signalId); else next.add(signalId);
+      return next;
+    });
+  }
+  function toggleAll(items) {
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      const allSelected = items.every((item) => next.has(item.id));
+      items.forEach((item) => (allSelected ? next.delete(item.id) : next.add(item.id)));
+      return next;
+    });
+  }
+  async function reviewOne(signalId, action) {
+    setError(""); setNotice("");
+    try {
+      await apiClient(`/admin/signals/${signalId}/${action}`, { method: "POST" });
+      setSelectedIds((current) => { const next = new Set(current); next.delete(signalId); return next; });
+      setNotice(`Signal ${action === "approve" ? "approved" : "rejected"} successfully.`);
+      await load();
+    } catch (reviewError) { setError(reviewError.message); }
+  }
+  async function reviewBulk() {
+    setBulkBusy(true); setError(""); setNotice("");
+    try {
+      const action = bulkAction;
+      const result = await apiClient("/admin/signals/bulk-review", {
+        method: "POST",
+        body: JSON.stringify({ action, signal_ids: [...selectedIds] }),
+      });
+      setBulkAction(null); setSelectedIds(new Set());
+      setNotice(`${result.updated} signal${result.updated === 1 ? "" : "s"} ${action === "approve" ? "approved" : "rejected"}.`);
+      await load();
+    } catch (reviewError) { setError(reviewError.message); }
+    finally { setBulkBusy(false); }
+  }
   const totalPages = result ? Math.max(1, Math.ceil(result.total / PAGE_SIZE)) : 1;
   const inbox = mode === "inbox";
   return (
     <section>
       <div className="page-heading"><div><p className="eyebrow">{inbox ? "Active queue" : "Decision history"}</p><h1>{inbox ? "Review Inbox" : "Reviewed Signals"}</h1><p className="muted">{inbox ? "Work through pending signals one at a time." : "Search and correct previous review decisions without changing evidence."}</p></div><div className="page-actions"><RefreshButton busy={refreshing} onClick={() => load()} />{inbox ? <button className="button secondary" onClick={() => onNavigate("/history")}>View reviewed signals</button> : <ReprocessTool apiClient={apiClient} onComplete={setNotice} />}<span className="result-count">{result?.total ?? "—"} total</span></div></div>
       {notice && <div className="notice" role="status">{notice}</div>}
+      {inbox && selectedIds.size > 0 && <div className="bulk-toolbar" role="toolbar" aria-label="Bulk review actions"><strong>{selectedIds.size} selected</strong><button className="button approve" onClick={() => setBulkAction("approve")}>Approve selected</button><button className="button reject" onClick={() => setBulkAction("reject")}>Reject selected</button><button className="button ghost" onClick={() => setSelectedIds(new Set())}>Clear</button></div>}
       <div className="filter-bar" aria-label="Signal filters">
         {!inbox && <label>Status<select aria-label="Review status" value={filters.review_status} onChange={(event) => updateFilter("review_status", event.target.value)}><option value="REVIEWED">All reviewed</option><option value="APPROVED">Approved</option><option value="REJECTED">Rejected</option></select></label>}
         {!inbox && <label>Search<input aria-label="Search reviewed signals" type="search" placeholder="Proposal, reference, council…" value={filters.q} onChange={(event) => updateFilter("q", event.target.value)} /></label>}
@@ -414,9 +457,10 @@ function SignalListPage({ apiClient, onNavigate, initialQuery = "", mode }) {
       {error && <ErrorState message={error} onRetry={load} />}
       {!loading && !error && result?.items.length === 0 && <div className="state-card"><strong>{inbox ? "Inbox clear" : "No reviewed signals match these filters."}</strong><p className="muted">{inbox ? "There are no pending signals waiting for review." : "Try changing the search or filters."}</p></div>}
       {!loading && !error && result?.items.length > 0 && <>
-        <div className="table-wrap"><table><thead><tr><th>Discovered</th><th>Signal</th><th>Source</th><th>Location / operator</th><th>Candidate</th><th>Rule confidence</th><th>AI shadow</th><th>Review</th></tr></thead><tbody>{result.items.map((item) => <SignalRow key={item.id} item={item} onClick={() => onNavigate(`/${inbox ? "inbox" : "history"}/${item.id}`)} />)}</tbody></table></div>
+        <div className="table-wrap"><table><thead><tr>{inbox && <th><input type="checkbox" aria-label="Select all signals" checked={result.items.every((item) => selectedIds.has(item.id))} onChange={() => toggleAll(result.items)} /></th>}<th>Discovered</th><th>Signal</th><th>Source</th><th>Location / operator</th><th>Candidate</th><th>Rule confidence</th><th>AI shadow</th><th>Review</th>{inbox && <th>⋯</th>}</tr></thead><tbody>{result.items.map((item) => <SignalRow key={item.id} item={item} inbox={inbox} selected={selectedIds.has(item.id)} onSelect={() => toggleSelected(item.id)} onReview={reviewOne} onClick={() => onNavigate(`/${inbox ? "inbox" : "history"}/${item.id}`)} />)}</tbody></table></div>
         <div className="pagination"><span>Page {page + 1} of {totalPages}</span><div><button className="button secondary" disabled={page === 0} onClick={() => setPage((current) => current - 1)}>Previous</button><button className="button secondary" disabled={page + 1 >= totalPages} onClick={() => setPage((current) => current + 1)}>Next</button></div></div>
       </>}
+      {bulkAction && <ConfirmationModal title={`${bulkAction === "approve" ? "Approve" : "Reject"} selected signals?`} message={`This will ${bulkAction} ${selectedIds.size} pending signal${selectedIds.size === 1 ? "" : "s"}.`} confirmLabel={bulkAction === "approve" ? "Approve selected" : "Reject selected"} danger={bulkAction === "reject"} busy={bulkBusy} onCancel={() => setBulkAction(null)} onConfirm={reviewBulk} />}
     </section>
   );
 }
@@ -443,15 +487,20 @@ export function OpportunityDetail({ opportunityId, apiClient, onBack }) {
   return <section><button className="back-link" onClick={onBack}>← Back to Opportunities</button><div className="page-heading"><div><p className="eyebrow">Opportunity evidence</p><h1>{opportunity.name}</h1><p className="muted">{titleCase(opportunity.lifecycle_stage)} · {Math.round((opportunity.confidence || 0) * 100)}% opportunity confidence</p></div><Badge>{titleCase(opportunity.lifecycle_stage)}</Badge></div><div className="panel"><h2>Evidence timeline</h2>{opportunity.signals.map((signal) => <article className="timeline-item" key={signal.id}><div><Badge>{titleCase(signal.source_type)}</Badge><strong>{signal.title}</strong><span className="cell-subtitle">{formatDate(signal.discovered_at)} · Rule confidence {signal.rule_confidence == null ? "—" : `${Math.round(signal.rule_confidence * 100)}%`}</span></div><p className="muted">{signal.provenance?.reason || "Linked by deterministic v1 correlation."}</p><button className="button ghost" onClick={() => window.location.hash = `/history/${signal.id}`}>Open signal</button>{signal.ai_status === "SUCCEEDED" && <span className="cell-subtitle">AI shadow: {titleCase(signal.ai_recommendation)} · {Math.round(signal.ai_confidence * 100)}%</span>}</article>)}</div><div className="panel"><h2>Correlation explanation</h2><p>{opportunity.stage_reason || "Evidence collected from the signal pipeline."}</p><pre>{JSON.stringify(opportunity.confidence_breakdown || {}, null, 2)}</pre></div></section>;
 }
 
-function SignalRow({ item, onClick }) {
+function SignalRow({ item, onClick, inbox, selected, onSelect, onReview }) {
   const council = item.metadata?.council;
   const recruitmentFacts = item.extracted_facts || {};
   const aiLabel = item.ai_status === "SUCCEEDED" && item.ai_recommendation
     ? `${titleCase(item.ai_recommendation)} · ${Math.round(item.ai_confidence * 100)}%`
     : item.ai_status === "FAILED" ? "Unavailable" : "—";
   return <tr className={isFalsePositive(item) ? "false-positive-row" : "clickable-row"} onClick={onClick} tabIndex="0" onKeyDown={(event) => event.key === "Enter" && onClick()}>
-    <td className="nowrap">{formatDate(item.discovered_at)}</td><td><strong>{item.title}</strong><span className="cell-subtitle">{item.external_id}</span></td><td><Badge>{titleCase(item.source_type)}</Badge>{item.source_type === "recruitment" && <span className="cell-subtitle">{titleCase(recruitmentFacts.recruitment_relevance || "—")}</span>}</td><td>{council || item.organisation_hint || "—"}<span className="cell-subtitle">{item.location_hint || "—"}</span></td><td><strong>{titleCase(item.event_type)}</strong><span className="cell-subtitle">{item.source_type === "recruitment" ? `${titleCase(recruitmentFacts.recruitment_role_category)} · Change ${titleCase(recruitmentFacts.commercial_change_evidence)}` : titleCase(item.lifecycle_stage)}</span>{isFalsePositive(item) && <span className="false-label">Likely false positive</span>}</td><td>{item.confidence == null ? "—" : `${Math.round(item.confidence * 100)}%`}</td><td><span className="cell-subtitle">AI shadow</span>{aiLabel}</td><td><Badge tone={reviewTone(item.review_status)}>{item.review_status || "PROCESSING"}</Badge></td>
+    {inbox && <td onClick={(event) => event.stopPropagation()}><input type="checkbox" aria-label={`Select ${item.title}`} checked={selected} onChange={onSelect} /></td>}<td className="nowrap">{formatDate(item.discovered_at)}</td><td><strong>{item.title}</strong><span className="cell-subtitle">{item.external_id}</span></td><td><Badge>{titleCase(item.source_type)}</Badge>{item.source_type === "recruitment" && <span className="cell-subtitle">{titleCase(recruitmentFacts.recruitment_relevance || "—")}</span>}</td><td>{council || item.organisation_hint || "—"}<span className="cell-subtitle">{item.location_hint || "—"}</span></td><td><strong>{titleCase(item.event_type)}</strong><span className="cell-subtitle">{item.source_type === "recruitment" ? `${titleCase(recruitmentFacts.recruitment_role_category)} · Change ${titleCase(recruitmentFacts.commercial_change_evidence)}` : titleCase(item.lifecycle_stage)}</span>{isFalsePositive(item) && <span className="false-label">Likely false positive</span>}</td><td>{item.confidence == null ? "—" : `${Math.round(item.confidence * 100)}%`}</td><td><span className="cell-subtitle">AI shadow</span>{aiLabel}</td><td><Badge tone={reviewTone(item.review_status)}>{item.review_status || "PROCESSING"}</Badge></td>{inbox && <td className="row-actions" onClick={(event) => event.stopPropagation()}><RowActions item={item} onClick={onClick} onReview={onReview} /></td>}
   </tr>;
+}
+
+function RowActions({ item, onClick, onReview }) {
+  const [open, setOpen] = useState(false);
+  return <div className="row-actions-wrap"><button type="button" className="icon-button" aria-label={`Actions for ${item.title}`} aria-expanded={open} onClick={() => setOpen((value) => !value)}>⋯</button>{open && <div className="row-menu" role="menu"><button type="button" role="menuitem" onClick={() => onReview(item.id, "approve")}>Approve</button><button type="button" role="menuitem" onClick={() => onReview(item.id, "reject")}>Reject</button><button type="button" role="menuitem" onClick={onClick}>View</button></div>}</div>;
 }
 
 export function SignalDetail({ signalId, apiClient, onBack, queueMode = false, initialNotice = "", onReviewed }) {

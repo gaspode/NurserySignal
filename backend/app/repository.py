@@ -850,6 +850,51 @@ def review_signal(settings: Settings, signal_id: str, status: str, reviewer: str
     return row is not None
 
 
+def review_signals_bulk(
+    settings: Settings,
+    signal_ids: list[str],
+    status: str,
+    reviewer: str | None,
+) -> dict[str, Any]:
+    """Apply one review decision to a bounded pending set and audit the action."""
+    with connection(settings) as conn:
+        rows = conn.execute(
+            """
+            UPDATE signal_enrichments
+            SET review_status = %s, reviewed_by = %s, reviewed_at = now(), updated_at = now()
+            WHERE raw_signal_id = ANY(%s::uuid[]) AND review_status = 'PENDING'
+            RETURNING raw_signal_id
+            """,
+            (status, reviewer, signal_ids),
+        ).fetchall()
+        updated_ids = [str(row[0]) for row in rows]
+        conn.execute(
+            """
+            INSERT INTO admin_audit_events (action, actor, target_type, target_count, details)
+            VALUES ('BULK_REVIEW', %s, 'signal', %s, %s)
+            """,
+            (
+                reviewer or "unknown",
+                len(updated_ids),
+                Jsonb(
+                    {
+                        "status": status,
+                        "requested_count": len(signal_ids),
+                        "updated_count": len(updated_ids),
+                    }
+                ),
+            ),
+        )
+        conn.commit()
+    return {
+        "status": status,
+        "requested": len(signal_ids),
+        "updated": len(updated_ids),
+        "skipped": len(signal_ids) - len(updated_ids),
+        "signal_ids": updated_ids,
+    }
+
+
 def save_enrichment(settings: Settings, candidate: dict[str, Any]) -> bool:
     with connection(settings) as conn:
         row = conn.execute(

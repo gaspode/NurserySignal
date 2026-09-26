@@ -22,6 +22,7 @@ from app.repository import (
     reprocess_planning_signals,
     reprocess_recruitment_signals,
     review_signal,
+    review_signals_bulk,
     signal_detail,
 )
 from app.service import EnrichmentQueueError, SignalConflictError, ingest_signal, parse_json_payload
@@ -128,6 +129,8 @@ def _admin_path(path: str) -> tuple[str, str | None]:
         return "opportunity-list", None
     if path.startswith("/admin/opportunities/"):
         return "opportunity-detail", path[len("/admin/opportunities/") :]
+    if path == "/admin/signals/bulk-review":
+        return "bulk-review", None
     prefix = "/admin/signals"
     if path == prefix:
         return "list", None
@@ -370,6 +373,24 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                     return admin_error
                 result = reevaluate_ai_shadow(settings, signal_id)
                 return _response(200, result) if result else _response(404, {"error": "not_found"})
+            if action == "bulk-review" and method == "POST":
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                payload = parse_json_payload(_raw_body(event))
+                action_name = payload.get("action")
+                if action_name not in {"approve", "reject"}:
+                    raise ValueError("action must be approve or reject")
+                values = payload.get("signal_ids")
+                if not isinstance(values, list) or not 1 <= len(values) <= 100:
+                    raise ValueError("signal_ids must contain between 1 and 100 IDs")
+                signal_ids = [str(UUID(str(value))) for value in values]
+                reviewer = str(claims.get("sub") or claims.get("username") or "unknown")
+                status = "APPROVED" if action_name == "approve" else "REJECTED"
+                return _response(
+                    200,
+                    review_signals_bulk(settings, signal_ids, status, reviewer),
+                )
             if action == "list" and method == "GET":
                 limit = min(max(int(_query(event, "limit") or "25"), 1), 100)
                 offset = max(int(_query(event, "offset") or "0"), 0)

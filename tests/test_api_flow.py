@@ -106,8 +106,7 @@ def test_admin_list_filters_and_paginates(monkeypatch) -> None:
                 "review_status": "PENDING",
                 "source_type": "planning",
             },
-        ),
-        None,
+        ), None
     )
     assert response["statusCode"] == 200
     assert captured == {
@@ -119,6 +118,48 @@ def test_admin_list_filters_and_paginates(monkeypatch) -> None:
         "discovered_to": None,
         "search": None,
     }
+
+
+def test_bulk_review_requires_admin_and_enforces_bounded_ids(monkeypatch) -> None:
+    signal_ids = [str(uuid4()), str(uuid4())]
+    captured = {}
+
+    def fake_bulk(settings, values, status, reviewer):
+        captured.update(values=values, status=status, reviewer=reviewer)
+        return {"updated": 2, "skipped": 0}
+
+    monkeypatch.setattr("app.handler.review_signals_bulk", fake_bulk)
+    response = handler(
+        event(
+            "/admin/signals/bulk-review",
+            "POST",
+            body=json.dumps({"action": "approve", "signal_ids": signal_ids}),
+            claims={"sub": "staff", "cognito:groups": ["NurserySignalAdmins"]},
+        ), None
+    )
+    assert response["statusCode"] == 200
+    assert captured == {"values": signal_ids, "status": "APPROVED", "reviewer": "staff"}
+
+    denied = handler(
+        event(
+            "/admin/signals/bulk-review",
+            "POST",
+            body=json.dumps({"action": "approve", "signal_ids": signal_ids}),
+            claims={"sub": "staff", "cognito:groups": ["Other"]},
+        ), None
+    )
+    assert denied["statusCode"] == 403
+
+    too_many = handler(
+        event(
+            "/admin/signals/bulk-review",
+            "POST",
+            body=json.dumps({"action": "reject", "signal_ids": [str(uuid4())] * 101}),
+            claims={"sub": "staff", "cognito:groups": ["NurserySignalAdmins"]},
+        ),
+        None,
+    )
+    assert too_many["statusCode"] == 400
 
 
 def test_admin_list_passes_bounded_text_search(monkeypatch) -> None:
