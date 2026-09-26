@@ -14,6 +14,7 @@ from app.db import connection
 from app.enrichment import fixture_enrichment
 from app.ingestion import NormalizedSignal
 from app.queueing import EnrichmentMessage, send_enrichment_message
+from app.recruitment import recruitment_record_from_signal
 
 
 @dataclass(frozen=True)
@@ -708,6 +709,37 @@ def reprocess_recruitment_signals(
             if raw["review_status"] is None:
                 without_enrichment += 1
                 continue
+            recruitment_record = recruitment_record_from_signal(raw)
+            normalized_metadata = dict(raw["metadata"] or {})
+            normalized_metadata.update(
+                {
+                    "postcode": recruitment_record.postcode,
+                    "latitude": recruitment_record.latitude,
+                    "longitude": recruitment_record.longitude,
+                    "locality": recruitment_record.locality,
+                    "region": recruitment_record.region,
+                }
+            )
+            normalized_location = ", ".join(
+                value
+                for value in (
+                    recruitment_record.address,
+                    recruitment_record.postcode,
+                    recruitment_record.locality,
+                    recruitment_record.region,
+                )
+                if value
+            ) or raw["location_hint"]
+            conn.execute(
+                """
+                UPDATE raw_signals
+                SET location_hint = %s, metadata = %s
+                WHERE id = %s AND source_type = 'recruitment'
+                """,
+                (normalized_location, Jsonb(normalized_metadata), raw["id"]),
+            )
+            raw["location_hint"] = normalized_location
+            raw["metadata"] = normalized_metadata
             candidate = fixture_enrichment(raw)
             candidate_matched = bool(
                 candidate["extracted_facts"].get("recruitment_candidate_matched")

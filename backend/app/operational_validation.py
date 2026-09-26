@@ -4,6 +4,7 @@ from typing import Any
 
 from app.ai_shadow import evaluate_shadow
 from app.config import Settings
+from app.recruitment import recruitment_record_from_signal
 from app.repository import (
     connection,
     get_ai_review,
@@ -11,7 +12,6 @@ from app.repository import (
     save_ai_review,
     signal_detail,
 )
-from app.recruitment import recruitment_record_from_signal
 
 
 def run_bounded_recruitment_validation(
