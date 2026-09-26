@@ -379,6 +379,19 @@ describe("admin frontend", () => {
     expect(screen.queryByText("admin_request_failed")).not.toBeInTheDocument();
   });
 
+  it("refreshes opportunity data after recalculation succeeds", async () => {
+    const apiClient = vi.fn()
+      .mockResolvedValueOnce({ items: [], total: 0 })
+      .mockResolvedValueOnce({ selected: 26, created: 5, routine_only_demoted: 15 })
+      .mockResolvedValueOnce({ items: [{ id: "opp-2", name: "New nursery", lifecycle_stage: "PLANNING", change_type: "OPENING", confidence: 0.86, signal_count: 1 }], total: 1 });
+    render(<OpportunitiesPage apiClient={apiClient} onNavigate={vi.fn()} />);
+    await screen.findByRole("heading", { name: "Opportunities" });
+    await userEvent.click(screen.getByRole("button", { name: "Recalculate opportunities" }));
+    await userEvent.click(screen.getByRole("dialog").querySelector(".button.approve"));
+    expect(await screen.findByText("New nursery")).toBeInTheDocument();
+    expect(apiClient).toHaveBeenLastCalledWith("/admin/opportunities?limit=10&offset=0");
+  });
+
   it("shows unmatched signals and can create an opportunity from preserved evidence", async () => {
     const apiClient = vi.fn()
       .mockResolvedValueOnce(listResult([pendingItem]))
