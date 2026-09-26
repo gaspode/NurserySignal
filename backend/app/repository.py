@@ -1219,7 +1219,7 @@ def recalculate_opportunity_creation(
                      AND (SELECT count(*) FROM opportunity_signals active_os
                           WHERE active_os.opportunity_id = o.id AND active_os.status = 'ACTIVE') = 1
                      AND NOT EXISTS (SELECT 1 FROM opportunity_signal_history h
-                                     WHERE h.opportunity_id = o.id AND h.action LIKE 'ADMIN%')""",
+                                     WHERE h.opportunity_id = o.id AND h.action LIKE 'ADMIN%%')""",
                 (raw["id"],),
             ).fetchall()
             for (opportunity_id,) in demoted:
@@ -1258,7 +1258,7 @@ def recalculate_opportunity_creation(
                        )
                          AND NOT EXISTS (
                              SELECT 1 FROM opportunity_signal_history h
-                             WHERE h.opportunity_id = opportunities.id AND h.action LIKE 'ADMIN%'
+                             WHERE h.opportunity_id = opportunities.id AND h.action LIKE 'ADMIN%%'
                          )""",
                     (opportunity_title(candidate, creation), creation.change_type, raw["id"]),
                 )
