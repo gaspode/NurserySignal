@@ -1182,16 +1182,36 @@ def correlate_signal(
     }
 
 
-def _safe_system_duplicate_key(row: tuple[Any, ...]) -> tuple[str, str, str, str] | None:
-    vertical, postcode, operator, change_type = row[1], row[2], row[3], row[4]
+def _safe_system_duplicate_key(row: tuple[Any, ...]) -> tuple[str, str, str, str, str] | None:
+    """Build a conservative identity from opportunity and linked-signal data.
+
+    Row positions are: id, vertical, postcode, effective operator,
+    change_type, created_at, effective site. Operator identity wins; when it
+    is absent, a strong site identity may be used only alongside postcode.
+    """
+    vertical, postcode, operator, change_type, site = row[1], row[2], row[3], row[4], row[6]
     normalized_postcode = normalize_identity(postcode)
     normalized_operator = normalize_identity(operator)
-    if not normalized_postcode or not normalized_operator:
+    normalized_site = normalize_identity(site)
+    generic_sites = {
+        "new nursery",
+        "nursery setting",
+        "nursery commercial change",
+        "nursery capacity expansion",
+    }
+    if not normalized_postcode:
+        return None
+    if normalized_operator:
+        identity_type, identity = "operator", normalized_operator
+    elif normalized_site and normalized_site not in generic_sites:
+        identity_type, identity = "site", normalized_site
+    else:
         return None
     return (
         str(vertical or "NURSERY"),
         normalized_postcode,
-        normalized_operator,
+        identity_type,
+        identity,
         str(change_type or "OTHER_CHANGE"),
     )
 
@@ -1199,20 +1219,34 @@ def _safe_system_duplicate_key(row: tuple[Any, ...]) -> tuple[str, str, str, str
 def _consolidate_system_duplicates(settings: Settings, *, actor: str) -> int:
     """Merge only exact, system-created duplicate opportunity groups.
 
-    Display names are deliberately not used as identity. Groups require the
-    same vertical, postcode, operator identity and change type, and every
-    active relationship must remain system-owned with no admin history.
+    Display names alone are deliberately not used as identity. Groups require
+    the same vertical, postcode, stable operator identity (or a strong stored
+    site identity when operator data is absent) and change type. Every active
+    relationship must remain system-owned with no admin history.
     """
     merged = 0
     with connection(settings) as conn:
         conn.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", ("opportunity-dedupe",))
         rows = conn.execute(
-            """SELECT id, vertical, postcode, operator_name, change_type, created_at
-               FROM opportunities
-               WHERE review_status NOT IN ('MERGED', 'REJECTED')
-               ORDER BY created_at, id"""
+            """SELECT o.id, o.vertical, o.postcode,
+                      COALESCE(o.operator_name, linked.operator_name),
+                      o.change_type, o.created_at,
+                      COALESCE(o.address, linked.site_identity, o.name)
+               FROM opportunities o
+               LEFT JOIN LATERAL (
+                   SELECT COALESCE(se.operator_name, rs.organisation_hint) AS operator_name,
+                          COALESCE(rs.location_hint, rs.metadata->>'address') AS site_identity
+                   FROM opportunity_signals os
+                   JOIN raw_signals rs ON rs.id = os.raw_signal_id
+                   LEFT JOIN signal_enrichments se ON se.raw_signal_id = rs.id
+                   WHERE os.opportunity_id = o.id AND os.status = 'ACTIVE'
+                   ORDER BY rs.discovered_at, rs.id
+                   LIMIT 1
+               ) linked ON TRUE
+               WHERE o.review_status NOT IN ('MERGED', 'REJECTED')
+               ORDER BY o.created_at, o.id"""
         ).fetchall()
-        groups: dict[tuple[str, str, str, str], list[tuple[Any, ...]]] = {}
+        groups: dict[tuple[str, str, str, str, str], list[tuple[Any, ...]]] = {}
         for row in rows:
             key = _safe_system_duplicate_key(row)
             if key:
@@ -1232,6 +1266,13 @@ def _consolidate_system_duplicates(settings: Settings, *, actor: str) -> int:
             if conn.execute(
                 """SELECT 1 FROM opportunity_signal_history
                    WHERE opportunity_id = ANY(%s::uuid[]) AND action LIKE 'ADMIN%%'
+                   LIMIT 1""",
+                (opportunity_ids,),
+            ).fetchone():
+                continue
+            if conn.execute(
+                """SELECT 1 FROM opportunity_match_reviews
+                   WHERE opportunity_id = ANY(%s::uuid[]) AND status = 'REJECTED'
                    LIMIT 1""",
                 (opportunity_ids,),
             ).fetchone():
@@ -1313,6 +1354,22 @@ def _consolidate_system_duplicates(settings: Settings, *, actor: str) -> int:
                     (target[0], source_id),
                 )
                 merged += 1
+            conn.execute(
+                """UPDATE opportunities target
+                   SET first_seen_at = bounds.first_seen_at,
+                       latest_update_at = bounds.latest_update_at,
+                       confidence = GREATEST(target.confidence, bounds.max_confidence),
+                       updated_at = now()
+                   FROM (
+                       SELECT min(first_seen_at) AS first_seen_at,
+                              max(latest_update_at) AS latest_update_at,
+                              max(confidence) AS max_confidence
+                       FROM opportunities
+                       WHERE id = ANY(%s::uuid[])
+                   ) bounds
+                   WHERE target.id = %s""",
+                (opportunity_ids, target[0]),
+            )
         conn.commit()
     return merged
 
