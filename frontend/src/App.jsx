@@ -379,7 +379,7 @@ function OpportunityRecalculateTool({ apiClient, onComplete }) {
   const [open, setOpen] = useState(false); const [busy, setBusy] = useState(false); const [error, setError] = useState("");
   async function recalculate() {
     setBusy(true); setError("");
-    try { const result = await apiClient("/admin/opportunities/recalculate", { method: "POST", body: JSON.stringify({ limit: 100 }) }); setOpen(false); onComplete(`Recalculated ${result.selected} signals; ${result.created} opportunities created and ${result.routine_only_demoted} routine-only opportunities demoted.`); } catch (e) { setError(e.message); } finally { setBusy(false); }
+    try { const result = await apiClient("/admin/opportunities/recalculate", { method: "POST", body: JSON.stringify({ limit: 100 }) }); setOpen(false); onComplete(`Recalculated ${result.selected} signals; ${result.created} opportunities created, ${result.reused || 0} opportunities reused, ${result.merged || 0} merged, and ${result.routine_only_demoted} routine-only opportunities demoted.`); } catch (e) { setError(e.message); } finally { setBusy(false); }
   }
   const displayError = error === "admin_request_failed"
     ? "The recalculation could not be completed. Please try again."

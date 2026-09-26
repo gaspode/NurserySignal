@@ -11,6 +11,7 @@ from app.classification import CLASSIFICATION_RULE_VERSION
 from app.config import Settings
 from app.correlation import (
     classify_match,
+    normalize_identity,
     preferred_match_reason,
     recruitment_evidence_strength,
 )
@@ -968,14 +969,6 @@ def correlate_signal(
 ) -> dict[str, Any]:
     """Create/link an opportunity only when the source supports that decision."""
     creation = opportunity_creation_decision(candidate)
-    if creation.decision in {"IGNORE_FOR_OPPORTUNITY", "REVIEW"}:
-        return {
-            "opportunity_id": None,
-            "linked": False,
-            "created": False,
-            "creation_decision": creation.decision,
-            "reason": creation.reason,
-        }
     metadata = candidate.get("metadata") or {}
     postcode = metadata.get("postcode")
     name = (
@@ -993,6 +986,38 @@ def correlate_signal(
     elif source_type == "recruitment" and recruitment_contribution == 0.05:
         base_confidence = min(base_confidence, 0.55)
     with connection(settings) as conn:
+        # Serialise matching for one signal. This protects the check-then-create
+        # path when a worker retry and an administrator reprocess overlap.
+        conn.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (str(signal_id),))
+        active = conn.execute(
+            """SELECT opportunity_id FROM opportunity_signals
+               WHERE raw_signal_id = %s AND status = 'ACTIVE'
+               ORDER BY created_at, opportunity_id
+               LIMIT 1""",
+            (signal_id,),
+        ).fetchone()
+        if active:
+            conn.commit()
+            return {
+                "opportunity_id": str(active[0]),
+                "linked": True,
+                "reused": True,
+                "relationship_created": False,
+                "created": False,
+                "creation_decision": creation.decision,
+                "reason": "signal already has an active opportunity relationship",
+            }
+        if creation.decision in {"IGNORE_FOR_OPPORTUNITY", "REVIEW"}:
+            conn.commit()
+            return {
+                "opportunity_id": None,
+                "linked": False,
+                "reused": False,
+                "relationship_created": False,
+                "created": False,
+                "creation_decision": creation.decision,
+                "reason": creation.reason,
+            }
         existing = conn.execute(
             """SELECT o.id, o.name, o.operator_id, o.lifecycle_stage, o.confidence,
                       o.confidence_breakdown, COALESCE(n.postcode, linked.postcode),
@@ -1014,7 +1039,7 @@ def correlate_signal(
         match_reason = None
         uncertain_matches: list[tuple[Any, float, str]] = []
         for row in existing:
-            comparison = classify_match(postcode, name, row[6], row[1])
+            comparison = classify_match(postcode, name, row[6], row[7] or row[1])
             operator_comparison = classify_match(postcode, operator, row[6], row[7])
             if comparison.outcome == "UNCERTAIN" or operator_comparison.outcome == "UNCERTAIN":
                 uncertain = comparison if comparison.outcome == "UNCERTAIN" else operator_comparison
@@ -1112,6 +1137,8 @@ def correlate_signal(
             return {
                 "opportunity_id": None,
                 "linked": False,
+                "reused": False,
+                "relationship_created": False,
                 "created": False,
                 "creation_decision": creation.decision,
                 "reason": creation.reason,
@@ -1145,10 +1172,147 @@ def correlate_signal(
     return {
         "opportunity_id": str(opportunity_id),
         "linked": bool(match),
+        "reused": bool(match),
+        "relationship_created": True,
         "created": not bool(match),
         "creation_decision": creation.decision,
         "reason": match_reason or "initial signal",
     }
+
+
+def _safe_system_duplicate_key(row: tuple[Any, ...]) -> tuple[str, str, str, str] | None:
+    vertical, postcode, operator, change_type = row[1], row[2], row[3], row[4]
+    normalized_postcode = normalize_identity(postcode)
+    normalized_operator = normalize_identity(operator)
+    if not normalized_postcode or not normalized_operator:
+        return None
+    return (
+        str(vertical or "NURSERY"),
+        normalized_postcode,
+        normalized_operator,
+        str(change_type or "OTHER_CHANGE"),
+    )
+
+
+def _consolidate_system_duplicates(settings: Settings, *, actor: str) -> int:
+    """Merge only exact, system-created duplicate opportunity groups.
+
+    Display names are deliberately not used as identity. Groups require the
+    same vertical, postcode, operator identity and change type, and every
+    active relationship must remain system-owned with no admin history.
+    """
+    merged = 0
+    with connection(settings) as conn:
+        conn.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", ("opportunity-dedupe",))
+        rows = conn.execute(
+            """SELECT id, vertical, postcode, operator_name, change_type, created_at
+               FROM opportunities
+               WHERE review_status NOT IN ('MERGED', 'REJECTED')
+               ORDER BY created_at, id"""
+        ).fetchall()
+        groups: dict[tuple[str, str, str, str], list[tuple[Any, ...]]] = {}
+        for row in rows:
+            key = _safe_system_duplicate_key(row)
+            if key:
+                groups.setdefault(key, []).append(row)
+        for group in groups.values():
+            if len(group) < 2:
+                continue
+            target = group[0]
+            opportunity_ids = [row[0] for row in group]
+            active_links = conn.execute(
+                """SELECT opportunity_id, created_by FROM opportunity_signals
+                   WHERE opportunity_id = ANY(%s::uuid[]) AND status = 'ACTIVE'""",
+                (opportunity_ids,),
+            ).fetchall()
+            if any(created_by != "SYSTEM" for _, created_by in active_links):
+                continue
+            if conn.execute(
+                """SELECT 1 FROM opportunity_signal_history
+                   WHERE opportunity_id = ANY(%s::uuid[]) AND action LIKE 'ADMIN%%'
+                   LIMIT 1""",
+                (opportunity_ids,),
+            ).fetchone():
+                continue
+            for source_id, *_ in group[1:]:
+                source_links = conn.execute(
+                    """SELECT raw_signal_id, relationship_type, extracted_facts,
+                              provenance, match_outcome, match_confidence, match_reason
+                       FROM opportunity_signals
+                       WHERE opportunity_id = %s AND status = 'ACTIVE'""",
+                    (source_id,),
+                ).fetchall()
+                for (
+                    signal_id,
+                    relationship_type,
+                    extracted_facts,
+                    provenance,
+                    match_outcome,
+                    match_confidence,
+                    match_reason,
+                ) in source_links:
+                    _archive_relationship(
+                        conn,
+                        source_id,
+                        signal_id,
+                        "SYSTEM_DEDUPLICATE",
+                        actor,
+                        f"consolidated into {target[0]}",
+                    )
+                    target_link = conn.execute(
+                        """SELECT 1 FROM opportunity_signals
+                           WHERE opportunity_id = %s AND raw_signal_id = %s
+                             AND status = 'ACTIVE'""",
+                        (target[0], signal_id),
+                    ).fetchone()
+                    if target_link:
+                        conn.execute(
+                            """UPDATE opportunity_signals SET status = 'REJECTED',
+                               match_reason = %s
+                               WHERE opportunity_id = %s AND raw_signal_id = %s""",
+                            (
+                                f"duplicate relationship consolidated into {target[0]}",
+                                source_id,
+                                signal_id,
+                            ),
+                        )
+                    else:
+                        conn.execute(
+                            """INSERT INTO opportunity_signals
+                               (opportunity_id, raw_signal_id, relationship_type,
+                                extracted_facts, provenance, status, created_by,
+                                match_outcome, match_confidence, match_reason)
+                               VALUES (%s, %s, %s, %s, %s, 'ACTIVE', 'SYSTEM', %s, %s, %s)""",
+                            (
+                                target[0],
+                                signal_id,
+                                relationship_type,
+                                Jsonb(extracted_facts or {}),
+                                Jsonb(
+                                    {
+                                        **(provenance or {}),
+                                        "deduplicated_from": str(source_id),
+                                    }
+                                ),
+                                match_outcome,
+                                match_confidence,
+                                f"consolidated from duplicate opportunity {source_id}",
+                            ),
+                        )
+                    conn.execute(
+                        """UPDATE opportunity_signals SET status = 'REJECTED',
+                           match_reason = %s WHERE opportunity_id = %s AND raw_signal_id = %s""",
+                        (f"consolidated into {target[0]}", source_id, signal_id),
+                    )
+                conn.execute(
+                    """UPDATE opportunities SET review_status = 'MERGED',
+                       merged_into_opportunity_id = %s, updated_at = now()
+                       WHERE id = %s""",
+                    (target[0], source_id),
+                )
+                merged += 1
+        conn.commit()
+    return merged
 
 
 def recalculate_opportunity_creation(
@@ -1156,6 +1320,7 @@ def recalculate_opportunity_creation(
 ) -> dict[str, Any]:
     """Boundedly recalculate opportunity creation from stored signal evidence."""
     limit = min(max(limit, 1), 100)
+    merged = _consolidate_system_duplicates(settings, actor=actor)
     with connection(settings) as conn:
         params: list[Any] = []
         where = "rs.source_type IN ('planning', 'recruitment')"
@@ -1173,6 +1338,8 @@ def recalculate_opportunity_creation(
     selected = 0
     created = 0
     linked = 0
+    reused = 0
+    relationships_created = 0
     routine_only_demoted = 0
     review_required = 0
     unchanged = 0
@@ -1270,6 +1437,10 @@ def recalculate_opportunity_creation(
             created += 1
         elif result.get("linked"):
             linked += 1
+            if result.get("reused"):
+                reused += 1
+        if result.get("relationship_created"):
+            relationships_created += 1
         elif result.get("creation_decision") == "REVIEW":
             review_required += 1
         else:
@@ -1283,6 +1454,9 @@ def recalculate_opportunity_creation(
             "selected": selected,
             "created": created,
             "linked": linked,
+            "reused": reused,
+            "relationships_created": relationships_created,
+            "merged": merged,
             "routine_only_demoted": routine_only_demoted,
             "review_required": review_required,
             "unchanged": unchanged,
@@ -1294,6 +1468,9 @@ def recalculate_opportunity_creation(
         "selected": selected,
         "created": created,
         "linked": linked,
+        "reused": reused,
+        "relationships_created": relationships_created,
+        "merged": merged,
         "routine_only_demoted": routine_only_demoted,
         "review_required": review_required,
         "unchanged": unchanged,
