@@ -1216,6 +1216,23 @@ def _safe_system_duplicate_key(row: tuple[Any, ...]) -> tuple[str, str, str, str
     )
 
 
+def _duplicate_group_keys(row: tuple[Any, ...]) -> list[tuple[str, str, str, str, str]]:
+    """Return stable identity keys, including an exact shared-signal key.
+
+    A shared active signal is the strongest possible duplicate indicator: one
+    source record must not be actively attached to two system opportunities.
+    """
+    keys: list[tuple[str, str, str, str, str]] = []
+    identity_key = _safe_system_duplicate_key(row)
+    if identity_key:
+        keys.append(identity_key)
+    vertical = str(row[1] or "NURSERY")
+    change_type = str(row[4] or "OTHER_CHANGE")
+    for signal_id in row[7] or []:
+        keys.append((vertical, "shared_signal", str(signal_id), change_type, ""))
+    return keys
+
+
 def _consolidate_system_duplicates(settings: Settings, *, actor: str) -> int:
     """Merge only exact, system-created duplicate opportunity groups.
 
@@ -1231,7 +1248,10 @@ def _consolidate_system_duplicates(settings: Settings, *, actor: str) -> int:
             """SELECT o.id, o.vertical, o.postcode,
                       COALESCE(o.operator_name, linked.operator_name),
                       o.change_type, o.created_at,
-                      COALESCE(o.address, linked.site_identity, o.name)
+                      COALESCE(o.address, linked.site_identity, o.name),
+                      (SELECT array_agg(os2.raw_signal_id::text ORDER BY os2.raw_signal_id)
+                       FROM opportunity_signals os2
+                       WHERE os2.opportunity_id = o.id AND os2.status = 'ACTIVE')
                FROM opportunities o
                LEFT JOIN LATERAL (
                    SELECT COALESCE(se.operator_name, rs.organisation_hint) AS operator_name,
@@ -1248,10 +1268,11 @@ def _consolidate_system_duplicates(settings: Settings, *, actor: str) -> int:
         ).fetchall()
         groups: dict[tuple[str, str, str, str, str], list[tuple[Any, ...]]] = {}
         for row in rows:
-            key = _safe_system_duplicate_key(row)
-            if key:
+            for key in _duplicate_group_keys(row):
                 groups.setdefault(key, []).append(row)
+        merged_opportunity_ids: set[Any] = set()
         for group in groups.values():
+            group = [row for row in group if row[0] not in merged_opportunity_ids]
             if len(group) < 2:
                 continue
             target = group[0]
@@ -1353,6 +1374,7 @@ def _consolidate_system_duplicates(settings: Settings, *, actor: str) -> int:
                        WHERE id = %s""",
                     (target[0], source_id),
                 )
+                merged_opportunity_ids.add(source_id)
                 merged += 1
             conn.execute(
                 """UPDATE opportunities target

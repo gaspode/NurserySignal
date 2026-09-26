@@ -170,7 +170,7 @@ Opportunity matching foundation:
 - opportunity creation is now gated separately from signal relevance: routine recruitment supports existing opportunities only, while strong material planning/change evidence can create opportunities;
 - bounded administrator recalculation can demote routine-only system opportunities, promote strong unmatched planning evidence and preserve source/review history; concise change-type titles are shown in the admin UI.
 - opportunity basis/creation reasons are now stored separately from per-signal match reasons, so single-signal opportunities do not present relational matching text as their reason for existence.
-- bounded recalculation now performs conservative historical duplicate consolidation using stable vertical/postcode/operator or stored site identity, while preserving admin intent and relationship history.
+- bounded recalculation now performs conservative historical duplicate consolidation using stable vertical/postcode/operator or stored site identity, plus exact shared-signal identity, while preserving admin intent and relationship history.
 
 Current next step:
 

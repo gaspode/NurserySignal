@@ -1,5 +1,5 @@
 from app.correlation import classify_match, preferred_match_reason
-from app.repository import _safe_system_duplicate_key
+from app.repository import _duplicate_group_keys, _safe_system_duplicate_key
 
 
 def test_preferred_match_reason_uses_match_decision_outcome():
@@ -58,3 +58,18 @@ def test_system_duplicate_key_normalizes_identity_but_rejects_conflicts():
     assert _safe_system_duplicate_key(first) == _safe_system_duplicate_key(equivalent)
     assert _safe_system_duplicate_key(first) != _safe_system_duplicate_key(different_operator)
     assert _safe_system_duplicate_key(first) != _safe_system_duplicate_key(different_postcode)
+
+
+def test_duplicate_group_keys_include_exact_shared_signal_identity():
+    row = (
+        "op-1",
+        "NURSERY",
+        "AL1 1JD",
+        None,
+        "EXPANSION",
+        None,
+        "Orient Close Nursery",
+        ["signal-1"],
+    )
+
+    assert ("NURSERY", "shared_signal", "signal-1", "EXPANSION", "") in _duplicate_group_keys(row)
