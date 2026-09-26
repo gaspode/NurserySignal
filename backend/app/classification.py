@@ -51,9 +51,7 @@ HORTICULTURAL_EVIDENCE_PATTERNS = (
     ("RHS", r"\brhs\b"),
 )
 
-_NEGATION_PREFIX = re.compile(
-    r"\b(?:no|not|without|never)\b(?:\W+\w+){0,3}\W*$", re.IGNORECASE
-)
+_NEGATION_PREFIX = re.compile(r"\b(?:no|not|without|never)\b(?:\W+\w+){0,3}\W*$", re.IGNORECASE)
 
 
 @dataclass(frozen=True)

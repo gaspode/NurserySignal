@@ -111,8 +111,13 @@ def collect_recruitment(
             event.get("source", "manual")[:32],
         )
         finish_run(
-            settings, source_key="recruitment", run_id=run_id, started_at=started_at,
-            status=status, counts=counts, failure_category=failure_category,
+            settings,
+            source_key="recruitment",
+            run_id=run_id,
+            started_at=started_at,
+            status=status,
+            counts=counts,
+            failure_category=failure_category,
             failure_message=failure_message,
         )
     return counts

@@ -107,6 +107,7 @@ def list_runs(settings: Settings, source_key: str, *, limit: int = 10) -> list[d
     )
     results = []
     for item in response.get("Items", []):
+
         def value(name: str, default: Any = None) -> Any:
             entry = item.get(name)
             if not entry:

@@ -1,7 +1,7 @@
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { Dashboard, LoginPage, OpportunitiesPage, ReviewInboxPage, ReviewedSignalsPage, SignalDetail, SourcesPage } from "./App.jsx";
+import { Dashboard, LoginPage, MatchReviewPage, OpportunitiesPage, ReviewInboxPage, ReviewedSignalsPage, SignalDetail, SourcesPage, UnmatchedSignalsPage } from "./App.jsx";
 
 const pendingItem = {
   id: "signal-1",
@@ -364,6 +364,24 @@ describe("admin frontend", () => {
     expect(await screen.findByText("Little Acorns Nursery")).toBeInTheDocument();
     await userEvent.click(screen.getByText("Little Acorns Nursery"));
     expect(onNavigate).toHaveBeenCalledWith("/opportunities/opp-1");
+  });
+
+  it("shows unmatched signals and can create an opportunity from preserved evidence", async () => {
+    const apiClient = vi.fn()
+      .mockResolvedValueOnce(listResult([pendingItem]))
+      .mockResolvedValueOnce({ ...detail(), opportunity_id: null });
+    const onNavigate = vi.fn();
+    render(<UnmatchedSignalsPage apiClient={apiClient} onNavigate={onNavigate} />);
+    expect(await screen.findByText(pendingItem.title)).toBeInTheDocument();
+    expect(apiClient).toHaveBeenCalledWith(expect.stringContaining("unmatched=true"));
+  });
+
+  it("renders uncertain match review actions", async () => {
+    const apiClient = vi.fn().mockResolvedValue({ items: [{ id: "match-1", signal_id: "signal-1", opportunity_id: "opp-1", signal_title: "Nursery Manager", opportunity_name: "Little Acorns", outcome: "UNCERTAIN", confidence: 0.55, reason: "same postcode but names differ" }], total: 1 });
+    render(<MatchReviewPage apiClient={apiClient} onNavigate={vi.fn()} />);
+    expect(await screen.findByText("Nursery Manager")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Link" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Reject" })).toBeInTheDocument();
   });
 
   it("keeps stored planning reprocess behind the custom confirmation modal", async () => {

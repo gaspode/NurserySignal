@@ -173,7 +173,11 @@ def _parse(
             reason = f"Relevant routine recruitment signal. {reason.strip()}"
     elif source_type == "planning":
         if planning_relevance not in {
-            "RELEVANT_CHANGE", "RELEVANT_FOLLOWUP", "RELEVANT_ROUTINE", "UNCERTAIN", "IRRELEVANT"
+            "RELEVANT_CHANGE",
+            "RELEVANT_FOLLOWUP",
+            "RELEVANT_ROUTINE",
+            "UNCERTAIN",
+            "IRRELEVANT",
         }:
             raise ValueError("invalid planning relevance")
     usage = response.get("usage") or {}
@@ -223,9 +227,7 @@ def evaluate_shadow(raw: dict[str, Any], settings: Settings) -> dict[str, Any]:
             ],
             inferenceConfig={"temperature": 0.0, "maxTokens": 256},
         )
-        result = _parse(
-            response, settings, started, source_type, deterministic_relevance
-        )
+        result = _parse(response, settings, started, source_type, deterministic_relevance)
     except (ReadTimeoutError, ConnectTimeoutError, EndpointConnectionError):
         result = _failure(settings, "TIMEOUT", started, source_type)
     except ClientError as exc:

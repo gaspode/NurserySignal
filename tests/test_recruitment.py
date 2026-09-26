@@ -8,7 +8,7 @@ from urllib.error import HTTPError
 
 import pytest
 from app.config import Settings
-from app.correlation import deterministic_match, recruitment_evidence_strength
+from app.correlation import classify_match, deterministic_match, recruitment_evidence_strength
 from app.recruitment import (
     GovApprenticeshipProvider,
     RecruitmentQuery,
@@ -117,9 +117,7 @@ def test_recruitment_role_and_setting_evidence_are_separate() -> None:
     )
     early_years = classify_recruitment(vacancy("Early Years Apprentice"))
     educator = classify_recruitment(vacancy("Early Years Educator"))
-    childcare_apprenticeship = classify_recruitment(
-        vacancy("Level 3 Childcare Apprenticeship")
-    )
+    childcare_apprenticeship = classify_recruitment(vacancy("Level 3 Childcare Apprenticeship"))
     generic_ta = classify_recruitment(
         replace(
             vacancy("Teaching Assistant Apprentice", "A mainstream secondary school role."),
@@ -283,3 +281,14 @@ def test_routine_recruitment_is_weak_corroboration_and_change_is_stronger() -> N
     assert recruitment_evidence_strength(routine)[0] == 0.05
     assert recruitment_evidence_strength(change)[0] == 0.18
     assert recruitment_evidence_strength(uncertain)[0] == 0.0
+
+
+def test_generic_match_outcomes_are_explainable_and_conservative() -> None:
+    exact = classify_match("OX28 4XX", "Little Acorns Nursery", "OX28 4XX", "Little Acorns")
+    assert (exact.outcome, exact.confidence) == ("EXACT", 0.98)
+    uncertain = classify_match("OX28 4XX", "Little Acorns", "OX28 4XX", "Other Nursery")
+    assert uncertain.outcome == "UNCERTAIN"
+    assert (
+        classify_match("OX28 4XX", "Little Acorns", "OX29 1AA", "Little Acorns").outcome
+        == "NO_MATCH"
+    )

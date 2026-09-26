@@ -42,9 +42,7 @@ def record(description: str, *, address: str = "12 High Street, Bristol BS1 1AA"
 
 
 def test_scheduled_query_uses_a_bounded_recent_window() -> None:
-    query = PlanningQuery.from_event(
-        {"lookback_days": 2, "max_records": 100, "page_size": 25}
-    )
+    query = PlanningQuery.from_event({"lookback_days": 2, "max_records": 100, "page_size": 25})
 
     assert query.to_date >= query.from_date
     assert (query.to_date - query.from_date).days == 2
@@ -122,9 +120,7 @@ def test_incidental_school_nursery_reference_is_excluded() -> None:
         ),
     ],
 )
-def test_live_sample_false_positive_contexts_are_excluded(
-    description: str, address: str
-) -> None:
+def test_live_sample_false_positive_contexts_are_excluded(description: str, address: str) -> None:
     decision = candidate_decision(record(description, address=address))
     assert decision.matched is False
 

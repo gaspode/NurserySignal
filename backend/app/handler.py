@@ -15,15 +15,22 @@ from app.db import check_connection
 from app.ingestion import NormalizedSignal
 from app.logging import configure_logging
 from app.repository import (
+    create_opportunity_from_signal,
+    link_signal_to_opportunity,
+    list_match_reviews,
     list_opportunities,
     list_signals,
+    merge_opportunities,
     opportunity_detail,
     record_admin_audit,
     reprocess_planning_signals,
     reprocess_recruitment_signals,
+    resolve_match_review,
     review_signal,
     review_signals_bulk,
     signal_detail,
+    split_opportunity,
+    unlink_signal_from_opportunity,
 )
 from app.service import EnrichmentQueueError, SignalConflictError, ingest_signal, parse_json_payload
 from app.shadow_review import reevaluate_ai_shadow
@@ -40,7 +47,10 @@ SOURCE_DEFINITIONS = {
         "schedule_state": "ENABLED",
         "schedule_expression": "rate(1 day)",
         "default_parameters": {
-            "source": "manual", "lookback_days": 2, "max_records": 100, "page_size": 25
+            "source": "manual",
+            "lookback_days": 2,
+            "max_records": 100,
+            "page_size": 25,
         },
         "function_setting": "planning_collector_function_name",
     },
@@ -50,7 +60,10 @@ SOURCE_DEFINITIONS = {
         "schedule_state": "ENABLED",
         "schedule_expression": "rate(1 day)",
         "default_parameters": {
-            "source": "manual", "posted_since_days": 7, "max_records": 50, "page_size": 25
+            "source": "manual",
+            "posted_since_days": 7,
+            "max_records": 50,
+            "page_size": 25,
         },
         "function_setting": "recruitment_collector_function_name",
     },
@@ -128,7 +141,16 @@ def _admin_path(path: str) -> tuple[str, str | None]:
     if path == "/admin/opportunities":
         return "opportunity-list", None
     if path.startswith("/admin/opportunities/"):
-        return "opportunity-detail", path[len("/admin/opportunities/") :]
+        parts = path[len("/admin/opportunities/") :].split("/")
+        if len(parts) == 2 and parts[1] in {"link", "unlink", "merge", "split"}:
+            return f"opportunity-{parts[1]}", parts[0]
+        return "opportunity-detail", parts[0]
+    if path == "/admin/match-review":
+        return "match-review-list", None
+    if path.startswith("/admin/match-review/"):
+        parts = path[len("/admin/match-review/") :].split("/")
+        if len(parts) == 2 and parts[1] in {"link", "reject"}:
+            return f"match-review-{parts[1]}", parts[0]
     if path == "/admin/signals/bulk-review":
         return "bulk-review", None
     prefix = "/admin/signals"
@@ -139,7 +161,13 @@ def _admin_path(path: str) -> tuple[str, str | None]:
         parts = remainder.split("/")
         if len(parts) == 1:
             return "detail", parts[0]
-        if len(parts) == 2 and parts[1] in {"approve", "reject", "evidence", "ai-review"}:
+        if len(parts) == 2 and parts[1] in {
+            "approve",
+            "reject",
+            "evidence",
+            "ai-review",
+            "create-opportunity",
+        }:
             return parts[1], parts[0]
     return "unknown", None
 
@@ -270,7 +298,10 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 except Exception as exc:
                     category, message = type(exc).__name__, str(exc)[:240].replace("\n", " ")
                     finish_run(
-                        settings, source_key=signal_id, run_id=run_id, started_at=started_at,
+                        settings,
+                        source_key=signal_id,
+                        run_id=run_id,
+                        started_at=started_at,
                         status="FAILED",
                         counts={},
                         failure_category=category,
@@ -391,6 +422,105 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                     200,
                     review_signals_bulk(settings, signal_ids, status, reviewer),
                 )
+            if action == "match-review-list" and method == "GET":
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                limit = min(max(int(_query(event, "limit") or "25"), 1), 100)
+                offset = max(int(_query(event, "offset") or "0"), 0)
+                return _response(200, list_match_reviews(settings, limit=limit, offset=offset))
+            if (
+                action in {"match-review-link", "match-review-reject"}
+                and method == "POST"
+                and signal_id
+            ):
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                actor = str(claims.get("sub") or claims.get("username") or "unknown")
+                return _response(
+                    200,
+                    resolve_match_review(
+                        settings,
+                        signal_id,
+                        "link" if action == "match-review-link" else "reject",
+                        actor,
+                    ),
+                )
+            if (
+                action
+                in {
+                    "opportunity-link",
+                    "opportunity-unlink",
+                    "opportunity-merge",
+                    "opportunity-split",
+                }
+                and method == "POST"
+                and signal_id
+            ):
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                payload = parse_json_payload(_raw_body(event))
+                actor = str(claims.get("sub") or claims.get("username") or "unknown")
+                if action == "opportunity-link":
+                    target_signal = str(payload.get("signal_id") or "")
+                    if not target_signal:
+                        raise ValueError("signal_id_required")
+                    return _response(
+                        200,
+                        link_signal_to_opportunity(
+                            settings,
+                            signal_id,
+                            target_signal,
+                            actor,
+                            str(payload.get("reason") or "admin link"),
+                        ),
+                    )
+                if action == "opportunity-unlink":
+                    target_signal = str(payload.get("signal_id") or "")
+                    if not target_signal:
+                        raise ValueError("signal_id_required")
+                    if not unlink_signal_from_opportunity(
+                        settings,
+                        signal_id,
+                        target_signal,
+                        actor,
+                        str(payload.get("reason") or "admin unlink"),
+                    ):
+                        return _response(404, {"error": "relationship_not_found"})
+                    return _response(
+                        200,
+                        {
+                            "status": "REJECTED",
+                            "signal_id": target_signal,
+                            "opportunity_id": signal_id,
+                        },
+                    )
+                if action == "opportunity-merge":
+                    target = str(payload.get("target_opportunity_id") or "")
+                    if not target:
+                        raise ValueError("target_opportunity_id_required")
+                    return _response(200, merge_opportunities(settings, signal_id, target, actor))
+                values = payload.get("signal_ids")
+                if not isinstance(values, list) or not 1 <= len(values) <= 100:
+                    raise ValueError("signal_ids must contain between 1 and 100 IDs")
+                return _response(
+                    200,
+                    split_opportunity(
+                        settings,
+                        signal_id,
+                        [str(UUID(v)) for v in values],
+                        actor,
+                        payload.get("name"),
+                    ),
+                )
+            if action == "create-opportunity" and method == "POST" and signal_id:
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                actor = str(claims.get("sub") or claims.get("username") or "unknown")
+                return _response(200, create_opportunity_from_signal(settings, signal_id, actor))
             if action == "list" and method == "GET":
                 limit = min(max(int(_query(event, "limit") or "25"), 1), 100)
                 offset = max(int(_query(event, "offset") or "0"), 0)
@@ -405,9 +535,13 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                         discovered_from=_query(event, "discovered_from"),
                         discovered_to=_query(event, "discovered_to"),
                         search=_query(event, "q"),
+                        unmatched_only=_query(event, "unmatched") == "true",
                     ),
                 )
             if action == "opportunity-list" and method == "GET":
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
                 limit = min(max(int(_query(event, "limit") or "25"), 1), 100)
                 offset = max(int(_query(event, "offset") or "0"), 0)
                 return _response(
@@ -417,6 +551,9 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                     ),
                 )
             if action == "opportunity-detail" and method == "GET" and signal_id:
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
                 detail = opportunity_detail(settings, signal_id)
                 return _response(200, detail) if detail else _response(404, {"error": "not_found"})
             if action == "detail" and method == "GET" and signal_id:

@@ -159,8 +159,15 @@ Do not build these before the underlying signal quality justifies them.
 
 ## Current next step
 
-Validate source-aware AI shadow review against a bounded planning sample, including new provision, school nursery, expansion, horticultural and stale follow-up cases. Continue improving the triage inbox with bounded bulk review while comparing planning-shadow-v2 with recruitment-shadow-v3; AI remains advisory-only and human review authoritative.
+Validate the opportunity matching foundation against a bounded mixed planning/recruitment sample. Review uncertain matches, manually correct obvious groupings, and measure whether postcode/name correlation is precise enough before adding richer identifiers or any AI-assisted matching; AI remains advisory-only and human review authoritative.
 
 Operational source visibility:
 - planning and recruitment collector runs are persisted as bounded summaries and exposed to administrators through the Sources page;
 - manual runs invoke only the configured collector Lambdas with server-controlled limits and do not change either daily schedule.
+
+Opportunity matching foundation:
+- signals can now be grouped into generic, nursery-vertical opportunities without losing source evidence;
+- deterministic postcode/name matches carry explainable outcome and confidence provenance, while uncertain matches enter an admin Match Review queue;
+- administrators can link, unlink, merge and split relationships through audited, history-preserving operations;
+- Opportunities, Unmatched Signals and Match Review are available in the internal admin UI;
+- manual relationship corrections are authoritative, and rejected automatic links are not recreated by routine matching.

@@ -11,6 +11,13 @@ class CorrelationMatch:
     reason: str
 
 
+@dataclass(frozen=True)
+class MatchDecision:
+    outcome: str
+    confidence: float
+    reason: str
+
+
 def normalize_identity(value: Any) -> str:
     return re.sub(r"[^a-z0-9]+", " ", str(value or "").lower()).strip()
 
@@ -32,6 +39,25 @@ def deterministic_match(
     if not compatible_names(name, other_name):
         return CorrelationMatch(False, "postcode matches but operator/nursery name is incompatible")
     return CorrelationMatch(True, "same postcode and compatible operator/nursery name")
+
+
+def classify_match(postcode: Any, name: Any, other_postcode: Any, other_name: Any) -> MatchDecision:
+    """Return an explainable, conservative generic matching outcome."""
+    if (
+        postcode
+        and other_postcode
+        and normalize_identity(postcode) == normalize_identity(other_postcode)
+    ):
+        if compatible_names(name, other_name):
+            return MatchDecision(
+                "EXACT", 0.98, "same postcode and compatible operator/nursery name"
+            )
+        return MatchDecision(
+            "UNCERTAIN", 0.55, "same postcode but operator/nursery name is incompatible"
+        )
+    if not postcode or not other_postcode:
+        return MatchDecision("NO_MATCH", 0.0, "postcode missing")
+    return MatchDecision("NO_MATCH", 0.0, "postcode differs")
 
 
 def recruitment_evidence_strength(candidate: dict[str, Any]) -> tuple[float, str]:

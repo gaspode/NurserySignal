@@ -148,11 +148,7 @@ def test_recruitment_reprocess_updates_pending_and_preserves_reviewed_state(monk
     assert result["matched"] == 1
     assert result["excluded"] == 0
     assert fake.audit_inserts == 1
-    normalized_updates = [
-        params
-        for sql, params in fake.statements
-        if "UPDATE raw_signals" in sql
-    ]
+    normalized_updates = [params for sql, params in fake.statements if "UPDATE raw_signals" in sql]
     assert normalized_updates
     assert normalized_updates[0][0] == "Stephenson Way, DL5 7DD"
     assert normalized_updates[0][1].obj["postcode"] == "DL5 7DD"

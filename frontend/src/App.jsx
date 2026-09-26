@@ -201,6 +201,8 @@ function Shell({ user, onLogout, onNavigate, currentPath, children }) {
           <button className={route.startsWith("/inbox") ? "nav-link active" : "nav-link"} onClick={() => onNavigate("/inbox")}>Review Inbox</button>
           <button className={route.startsWith("/history") ? "nav-link active" : "nav-link"} onClick={() => onNavigate("/history")}>Reviewed Signals</button>
           <button className={route.startsWith("/opportunities") ? "nav-link active" : "nav-link"} onClick={() => onNavigate("/opportunities")}>Opportunities</button>
+          <button className={route.startsWith("/unmatched") ? "nav-link active" : "nav-link"} onClick={() => onNavigate("/unmatched")}>Unmatched Signals</button>
+          <button className={route.startsWith("/match-review") ? "nav-link active" : "nav-link"} onClick={() => onNavigate("/match-review")}>Match Review</button>
           <button className={route.startsWith("/sources") ? "nav-link active" : "nav-link"} onClick={() => onNavigate("/sources")}>Sources</button>
         </nav>
         <div className="sidebar-bottom">
@@ -335,7 +337,7 @@ function Metric({ label, value, tone, onClick }) {
 function initialFilters(initialQuery, mode) {
   const params = new URLSearchParams(initialQuery);
   return {
-    review_status: mode === "history" ? params.get("review_status") || "REVIEWED" : "PENDING",
+    review_status: mode === "history" ? params.get("review_status") || "REVIEWED" : mode === "unmatched" ? "" : "PENDING",
     source_type: params.get("source_type") || "",
     discovered_from: params.get("discovered_from") || "",
     discovered_to: params.get("discovered_to") || "",
@@ -386,8 +388,9 @@ function SignalListPage({ apiClient, onNavigate, initialQuery = "", mode }) {
   const query = useMemo(() => {
     const params = new URLSearchParams({ limit: PAGE_SIZE, offset: page * PAGE_SIZE });
     Object.entries(filters).forEach(([key, value]) => value && params.set(key, value));
+    if (mode === "unmatched") params.set("unmatched", "true");
     return params.toString();
-  }, [filters, page]);
+  }, [filters, mode, page]);
   const load = async ({ initial = false } = {}) => {
     if (initial) setLoading(true);
     else setRefreshing(true);
@@ -440,14 +443,15 @@ function SignalListPage({ apiClient, onNavigate, initialQuery = "", mode }) {
   }
   const totalPages = result ? Math.max(1, Math.ceil(result.total / PAGE_SIZE)) : 1;
   const inbox = mode === "inbox";
+  const unmatched = mode === "unmatched";
   return (
     <section>
-      <div className="page-heading"><div><p className="eyebrow">{inbox ? "Active queue" : "Decision history"}</p><h1>{inbox ? "Review Inbox" : "Reviewed Signals"}</h1><p className="muted">{inbox ? "Work through pending signals one at a time." : "Search and correct previous review decisions without changing evidence."}</p></div><div className="page-actions"><RefreshButton busy={refreshing} onClick={() => load()} />{inbox ? <button className="button secondary" onClick={() => onNavigate("/history")}>View reviewed signals</button> : <ReprocessTool apiClient={apiClient} onComplete={setNotice} />}<span className="result-count">{result?.total ?? "—"} total</span></div></div>
+      <div className="page-heading"><div><p className="eyebrow">{inbox ? "Active queue" : unmatched ? "Needs grouping" : "Decision history"}</p><h1>{inbox ? "Review Inbox" : unmatched ? "Unmatched Signals" : "Reviewed Signals"}</h1><p className="muted">{inbox ? "Work through pending signals one at a time." : unmatched ? "Signals without an active opportunity relationship." : "Search and correct previous review decisions without changing evidence."}</p></div><div className="page-actions"><RefreshButton busy={refreshing} onClick={() => load()} />{inbox ? <button className="button secondary" onClick={() => onNavigate("/history")}>View reviewed signals</button> : !unmatched && <ReprocessTool apiClient={apiClient} onComplete={setNotice} />}<span className="result-count">{result?.total ?? "—"} total</span></div></div>
       {notice && <div className="notice" role="status">{notice}</div>}
       {inbox && selectedIds.size > 0 && <div className="bulk-toolbar" role="toolbar" aria-label="Bulk review actions"><strong>{selectedIds.size} selected</strong><button className="button approve" onClick={() => setBulkAction("approve")}>Approve selected</button><button className="button reject" onClick={() => setBulkAction("reject")}>Reject selected</button><button className="button ghost" onClick={() => setSelectedIds(new Set())}>Clear</button></div>}
       <div className="filter-bar" aria-label="Signal filters">
-        {!inbox && <label>Status<select aria-label="Review status" value={filters.review_status} onChange={(event) => updateFilter("review_status", event.target.value)}><option value="REVIEWED">All reviewed</option><option value="APPROVED">Approved</option><option value="REJECTED">Rejected</option></select></label>}
-        {!inbox && <label>Search<input aria-label="Search reviewed signals" type="search" placeholder="Proposal, reference, council…" value={filters.q} onChange={(event) => updateFilter("q", event.target.value)} /></label>}
+        {!inbox && !unmatched && <label>Status<select aria-label="Review status" value={filters.review_status} onChange={(event) => updateFilter("review_status", event.target.value)}><option value="REVIEWED">All reviewed</option><option value="APPROVED">Approved</option><option value="REJECTED">Rejected</option></select></label>}
+        {!inbox && <label>Search<input aria-label={unmatched ? "Search unmatched signals" : "Search reviewed signals"} type="search" placeholder="Proposal, reference, council…" value={filters.q} onChange={(event) => updateFilter("q", event.target.value)} /></label>}
         <label>Source<select aria-label="Source type" value={filters.source_type} onChange={(event) => updateFilter("source_type", event.target.value)}><option value="">All sources</option><option value="planning">Planning</option><option value="recruitment">Recruitment</option><option value="operator_announcement">Operator announcement</option><option value="local_news">Local news</option></select></label>
         <label>From<input aria-label="Discovered from" type="date" value={filters.discovered_from} onChange={(event) => updateFilter("discovered_from", event.target.value)} /></label>
         <label>To<input aria-label="Discovered to" type="date" value={filters.discovered_to} onChange={(event) => updateFilter("discovered_to", event.target.value)} /></label>
@@ -455,9 +459,9 @@ function SignalListPage({ apiClient, onNavigate, initialQuery = "", mode }) {
       </div>
       {loading && <LoadingState label="Loading signals" />}
       {error && <ErrorState message={error} onRetry={load} />}
-      {!loading && !error && result?.items.length === 0 && <div className="state-card"><strong>{inbox ? "Inbox clear" : "No reviewed signals match these filters."}</strong><p className="muted">{inbox ? "There are no pending signals waiting for review." : "Try changing the search or filters."}</p></div>}
+      {!loading && !error && result?.items.length === 0 && <div className="state-card"><strong>{inbox ? "Inbox clear" : unmatched ? "No unmatched signals" : "No reviewed signals match these filters."}</strong><p className="muted">{inbox ? "There are no pending signals waiting for review." : "Try changing the search or filters."}</p></div>}
       {!loading && !error && result?.items.length > 0 && <>
-        <div className="table-wrap"><table><thead><tr>{inbox && <th><input type="checkbox" aria-label="Select all signals" checked={result.items.every((item) => selectedIds.has(item.id))} onChange={() => toggleAll(result.items)} /></th>}<th>Discovered</th><th>Signal</th><th>Source</th><th>Location / operator</th><th>Candidate</th><th>Rule confidence</th><th>AI shadow</th><th>Review</th>{inbox && <th>⋯</th>}</tr></thead><tbody>{result.items.map((item) => <SignalRow key={item.id} item={item} inbox={inbox} selected={selectedIds.has(item.id)} onSelect={() => toggleSelected(item.id)} onReview={reviewOne} onClick={() => onNavigate(`/${inbox ? "inbox" : "history"}/${item.id}`)} />)}</tbody></table></div>
+        <div className="table-wrap"><table><thead><tr>{inbox && <th><input type="checkbox" aria-label="Select all signals" checked={result.items.every((item) => selectedIds.has(item.id))} onChange={() => toggleAll(result.items)} /></th>}<th>Discovered</th><th>Signal</th><th>Source</th><th>Location / operator</th><th>Candidate</th><th>Rule confidence</th><th>AI shadow</th><th>Review</th>{inbox && <th>⋯</th>}</tr></thead><tbody>{result.items.map((item) => <SignalRow key={item.id} item={item} inbox={inbox} selected={selectedIds.has(item.id)} onSelect={() => toggleSelected(item.id)} onReview={reviewOne} onClick={() => onNavigate(`/${inbox ? "inbox" : unmatched ? "unmatched" : "history"}/${item.id}`)} />)}</tbody></table></div>
         <div className="pagination"><span>Page {page + 1} of {totalPages}</span><div><button className="button secondary" disabled={page === 0} onClick={() => setPage((current) => current - 1)}>Previous</button><button className="button secondary" disabled={page + 1 >= totalPages} onClick={() => setPage((current) => current + 1)}>Next</button></div></div>
       </>}
       {bulkAction && <ConfirmationModal title={`${bulkAction === "approve" ? "Approve" : "Reject"} selected signals?`} message={`This will ${bulkAction} ${selectedIds.size} pending signal${selectedIds.size === 1 ? "" : "s"}.`} confirmLabel={bulkAction === "approve" ? "Approve selected" : "Reject selected"} danger={bulkAction === "reject"} busy={bulkBusy} onCancel={() => setBulkAction(null)} onConfirm={reviewBulk} />}
@@ -467,7 +471,17 @@ function SignalListPage({ apiClient, onNavigate, initialQuery = "", mode }) {
 
 export function ReviewInboxPage(props) { return <SignalListPage {...props} mode="inbox" />; }
 export function ReviewedSignalsPage(props) { return <SignalListPage {...props} mode="history" />; }
+export function UnmatchedSignalsPage(props) { return <SignalListPage {...props} mode="unmatched" />; }
 export function SignalsPage(props) { return <ReviewInboxPage {...props} />; }
+
+export function MatchReviewPage({ apiClient, onNavigate }) {
+  const [result, setResult] = useState(null); const [error, setError] = useState(""); const [busy, setBusy] = useState("");
+  const load = async () => { try { setResult(await apiClient("/admin/match-review?limit=50&offset=0")); } catch (e) { setError(e.message); } };
+  useEffect(() => { load(); }, []);
+  async function resolve(id, action) { setBusy(id); try { await apiClient(`/admin/match-review/${id}/${action}`, { method: "POST" }); await load(); } catch (e) { setError(e.message); } finally { setBusy(""); } }
+  if (error) return <ErrorState message={error} onRetry={load} />;
+  return <section><div className="page-heading"><div><p className="eyebrow">Grouping decisions</p><h1>Match Review</h1><p className="muted">Review uncertain system suggestions before they join an opportunity.</p></div><RefreshButton onClick={load} /></div>{!result && <LoadingState label="Loading match review" />}{result?.items?.length === 0 && <div className="state-card"><strong>No uncertain matches.</strong><p className="muted">Conservative automatic matching has no suggestions waiting.</p></div>}{result?.items?.map((item) => <article className="panel match-review-card" key={item.id}><div><Badge>{titleCase(item.outcome)}</Badge><h2>{item.signal_title}</h2><p className="muted">Possible match: {item.opportunity_name}</p><p>{item.reason}</p><span className="cell-subtitle">{Math.round((item.confidence || 0) * 100)}% confidence · {formatDate(item.created_at)}</span></div><div className="review-actions"><button className="button approve" disabled={busy === item.id} onClick={() => resolve(item.id, "link")}>Link</button><button className="button reject" disabled={busy === item.id} onClick={() => resolve(item.id, "reject")}>Reject</button><button className="button ghost" onClick={() => onNavigate(`/history/${item.signal_id}`)}>View signal</button><button className="button ghost" onClick={() => onNavigate(`/opportunities/${item.opportunity_id}`)}>View opportunity</button></div></article>)}</section>;
+}
 
 export function OpportunitiesPage({ apiClient, onNavigate }) {
   const [result, setResult] = useState(null);
@@ -481,10 +495,12 @@ export function OpportunitiesPage({ apiClient, onNavigate }) {
 }
 
 export function OpportunityDetail({ opportunityId, apiClient, onBack }) {
-  const [opportunity, setOpportunity] = useState(null); const [error, setError] = useState("");
-  useEffect(() => { apiClient(`/admin/opportunities/${opportunityId}`).then(setOpportunity).catch((e) => setError(e.message)); }, [opportunityId]);
+  const [opportunity, setOpportunity] = useState(null); const [error, setError] = useState(""); const [notice, setNotice] = useState(""); const [selected, setSelected] = useState(new Set()); const [mergeTarget, setMergeTarget] = useState(""); const [signalToLink, setSignalToLink] = useState(""); const [modal, setModal] = useState(null); const [busy, setBusy] = useState(false);
+  const load = () => apiClient(`/admin/opportunities/${opportunityId}`).then(setOpportunity).catch((e) => setError(e.message));
+  useEffect(() => { load(); }, [opportunityId]);
+  async function action(kind, body) { setBusy(true); try { await apiClient(`/admin/opportunities/${opportunityId}/${kind}`, { method: "POST", body: JSON.stringify(body || {}) }); setNotice("Opportunity relationship updated."); setModal(null); setMergeTarget(""); setSelected(new Set()); await load(); } catch (e) { setError(e.message); } finally { setBusy(false); } }
   if (error) return <ErrorState message={error} />; if (!opportunity) return <LoadingState label="Loading opportunity" />;
-  return <section><button className="back-link" onClick={onBack}>← Back to Opportunities</button><div className="page-heading"><div><p className="eyebrow">Opportunity evidence</p><h1>{opportunity.name}</h1><p className="muted">{titleCase(opportunity.lifecycle_stage)} · {Math.round((opportunity.confidence || 0) * 100)}% opportunity confidence</p></div><Badge>{titleCase(opportunity.lifecycle_stage)}</Badge></div><div className="panel"><h2>Evidence timeline</h2>{opportunity.signals.map((signal) => <article className="timeline-item" key={signal.id}><div><Badge>{titleCase(signal.source_type)}</Badge><strong>{signal.title}</strong><span className="cell-subtitle">{formatDate(signal.discovered_at)} · Rule confidence {signal.rule_confidence == null ? "—" : `${Math.round(signal.rule_confidence * 100)}%`}</span></div><p className="muted">{signal.provenance?.reason || "Linked by deterministic v1 correlation."}</p><button className="button ghost" onClick={() => window.location.hash = `/history/${signal.id}`}>Open signal</button>{signal.ai_status === "SUCCEEDED" && <span className="cell-subtitle">AI shadow: {titleCase(signal.ai_recommendation)} · {Math.round(signal.ai_confidence * 100)}%</span>}</article>)}</div><div className="panel"><h2>Correlation explanation</h2><p>{opportunity.stage_reason || "Evidence collected from the signal pipeline."}</p><pre>{JSON.stringify(opportunity.confidence_breakdown || {}, null, 2)}</pre></div></section>;
+  return <section><button className="back-link" onClick={onBack}>← Back to Opportunities</button><div className="page-heading"><div><p className="eyebrow">Opportunity evidence</p><h1>{opportunity.name}</h1><p className="muted">{titleCase(opportunity.lifecycle_stage)} · {Math.round((opportunity.confidence || 0) * 100)}% opportunity confidence</p></div><Badge>{titleCase(opportunity.lifecycle_stage)}</Badge></div>{notice && <div className="notice" role="status">{notice}</div>}<div className="panel"><h2>Evidence timeline</h2>{opportunity.signals.map((signal) => <article className="timeline-item" key={signal.id}><div><input type="checkbox" aria-label={`Select ${signal.title} for split`} checked={selected.has(signal.id)} onChange={() => setSelected((current) => { const next = new Set(current); next.has(signal.id) ? next.delete(signal.id) : next.add(signal.id); return next; })} /> <Badge>{titleCase(signal.source_type)}</Badge><strong>{signal.title}</strong><span className="cell-subtitle">{formatDate(signal.discovered_at)} · Rule confidence {signal.rule_confidence == null ? "—" : `${Math.round(signal.rule_confidence * 100)}%`}</span></div><p className="muted">{signal.provenance?.reason || "Linked by deterministic v1 correlation."}</p><button className="button ghost" onClick={() => window.location.hash = `/history/${signal.id}`}>Open signal</button><button className="button ghost" onClick={() => setModal({ kind: "unlink", signalId: signal.id })}>Unlink</button>{signal.ai_status === "SUCCEEDED" && <span className="cell-subtitle">AI shadow: {titleCase(signal.ai_recommendation)} · {Math.round(signal.ai_confidence * 100)}%</span>}</article>)}{selected.size > 0 && <button className="button secondary" onClick={() => setModal({ kind: "split" })}>Split selected signals</button>}</div><div className="panel"><h2>Manual correction</h2><p className="muted">Manual links are authoritative and preserve the original relationship history.</p><div className="inline-form"><input aria-label="Signal ID to link" placeholder="Signal ID to link" value={signalToLink} onChange={(event) => setSignalToLink(event.target.value)} /><button className="button secondary" disabled={!signalToLink} onClick={() => action("link", { signal_id: signalToLink })}>Link signal</button></div><div className="inline-form"><input aria-label="Target opportunity ID" placeholder="Target opportunity ID" value={mergeTarget} onChange={(event) => setMergeTarget(event.target.value)} /><button className="button secondary" disabled={!mergeTarget} onClick={() => setModal({ kind: "merge" })}>Merge into target</button></div></div><div className="panel"><h2>Correlation explanation</h2><p>{opportunity.stage_reason || "Evidence collected from the signal pipeline."}</p><pre>{JSON.stringify(opportunity.confidence_breakdown || {}, null, 2)}</pre></div>{modal?.kind === "unlink" && <ConfirmationModal title="Unlink signal?" message="The relationship will be marked rejected and preserved in the audit history." confirmLabel="Unlink" danger={busy} busy={busy} onCancel={() => setModal(null)} onConfirm={() => action("unlink", { signal_id: modal.signalId })} />}{modal?.kind === "merge" && <ConfirmationModal title="Merge opportunities?" message="The source opportunity and its active links will be preserved in history and attached to the target." confirmLabel="Merge" danger={busy} busy={busy} onCancel={() => setModal(null)} onConfirm={() => action("merge", { target_opportunity_id: mergeTarget })} />}{modal?.kind === "split" && <ConfirmationModal title="Split selected signals?" message="Selected links will be preserved and moved to a new opportunity." confirmLabel="Split" danger={busy} busy={busy} onCancel={() => setModal(null)} onConfirm={() => action("split", { signal_ids: [...selected] })} />}</section>;
 }
 
 function SignalRow({ item, onClick, inbox, selected, onSelect, onReview }) {
@@ -503,7 +519,7 @@ function RowActions({ item, onClick, onReview }) {
   return <div className="row-actions-wrap"><button type="button" className="icon-button" aria-label={`Actions for ${item.title}`} aria-expanded={open} onClick={() => setOpen((value) => !value)}>⋯</button>{open && <div className="row-menu" role="menu"><button type="button" role="menuitem" onClick={() => onReview(item.id, "approve")}>Approve</button><button type="button" role="menuitem" onClick={() => onReview(item.id, "reject")}>Reject</button><button type="button" role="menuitem" onClick={onClick}>View</button></div>}</div>;
 }
 
-export function SignalDetail({ signalId, apiClient, onBack, queueMode = false, initialNotice = "", onReviewed }) {
+export function SignalDetail({ signalId, apiClient, onBack, queueMode = false, unmatchedMode = false, initialNotice = "", onReviewed }) {
   const [signal, setSignal] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -511,6 +527,7 @@ export function SignalDetail({ signalId, apiClient, onBack, queueMode = false, i
   const [modalAction, setModalAction] = useState(null);
   const [busy, setBusy] = useState(false);
   const [aiBusy, setAiBusy] = useState(false);
+  const [opportunityBusy, setOpportunityBusy] = useState(false);
   const load = async () => { setLoading(true); setError(""); try { setSignal(await apiClient(`/admin/signals/${signalId}`)); } catch (loadError) { setError(loadError.message); } finally { setLoading(false); } };
   useEffect(() => { load(); }, [signalId]);
   async function confirmReview() {
@@ -559,6 +576,10 @@ export function SignalDetail({ signalId, apiClient, onBack, queueMode = false, i
       setAiBusy(false);
     }
   }
+  async function createOpportunity() {
+    setOpportunityBusy(true); setError("");
+    try { const result = await apiClient(`/admin/signals/${signalId}/create-opportunity`, { method: "POST" }); setNotice(result.created ? "Opportunity created from signal." : "Signal is already linked to an opportunity."); } catch (e) { setError(e.message); } finally { setOpportunityBusy(false); }
+  }
   if (loading) return <LoadingState label="Loading signal" />;
   if (error && !signal) return <ErrorState message={error} onRetry={load} />;
   const enrichment = signal?.enrichment;
@@ -578,6 +599,7 @@ export function SignalDetail({ signalId, apiClient, onBack, queueMode = false, i
     <div className="page-heading detail-heading"><div><p className="eyebrow">{queueMode ? "Inbox review" : "Reviewed signal"}</p><h1>{signal.title}</h1><p className="muted">{signal.source_type} · {signal.external_id}</p></div><Badge tone={reviewTone(enrichment?.review_status)}>{enrichment?.review_status || "PROCESSING"}</Badge></div>
     {notice && <div className="notice toast" role="status">{notice}</div>}{error && <div className="notice toast error-state" role="alert">{error}</div>}
     {queueMode && reviewStatus === "PENDING" && <div className="review-action-bar"><div><strong>Ready for decision</strong><span className="muted">Approve or reject this candidate.</span></div><div className="review-actions"><button className="button approve" onClick={() => setModalAction("approve")}>Approve</button><button className="button reject" onClick={() => setModalAction("reject")}>Reject</button></div></div>}
+    {unmatchedMode && <div className="review-action-bar"><div><strong>No active opportunity</strong><span className="muted">Create a conservative opportunity from this preserved signal.</span></div><button className="button primary" onClick={createOpportunity} disabled={opportunityBusy}>{opportunityBusy ? "Creating…" : "Create opportunity"}</button></div>}
     {!queueMode && ["APPROVED", "REJECTED"].includes(reviewStatus) && <div className="review-action-bar"><div><strong>Decision recorded</strong><span className="muted">This reviewed decision can be deliberately corrected.</span></div><div className="review-actions"><button className="button secondary" onClick={runAiAssessment} disabled={aiBusy}>{aiBusy ? "Running AI…" : "Run AI shadow assessment"}</button><button className={`button ${correctionAction === "reject" ? "reject" : "approve"}`} onClick={() => setModalAction(correctionAction)}>Change to {correctionAction === "approve" ? "Approved" : "Rejected"}</button></div></div>}
     <div className="detail-grid">
       <DetailPanel title="Raw signal"><Field label="Source type" value={titleCase(signal.source_type)} /><Field label="Source URL" value={<a href={signal.source_url} target="_blank" rel="noreferrer">{signal.source_url}</a>} /><Field label="External ID" value={signal.external_id} /><Field label="Discovered" value={formatDate(signal.discovered_at, true)} /><Field label="Title" value={signal.title} /><Field label="Raw text" value={<p className="raw-text">{signal.raw_text}</p>} /><Field label="Organisation hint" value={signal.organisation_hint} /><Field label="Location hint" value={signal.location_hint} /><Field label="Metadata" value={<pre>{JSON.stringify(signal.metadata || {}, null, 2)}</pre>} /></DetailPanel>
@@ -602,11 +624,11 @@ export default function App() {
   if (!auth.user) return <LoginPage onLogin={auth.login} authError={auth.authError} configured={auth.configured} passwordChallenge={auth.passwordChallenge} onCompleteNewPassword={auth.completeNewPassword} onCancelPasswordChallenge={auth.cancelPasswordChallenge} />;
   const route = path.split("?")[0];
   const listQuery = path.includes("?") ? path.split("?")[1] : "";
-  const detailMatch = route.match(/^\/(inbox|history)\/([^/?#]+)/);
+  const detailMatch = route.match(/^\/(inbox|history|unmatched)\/([^/?#]+)/);
   const opportunityMatch = route.match(/^\/opportunities\/([^/?#]+)/);
-  const detailMode = detailMatch?.[1] === "inbox" ? "inbox" : "history";
+  const detailMode = detailMatch?.[1] === "inbox" ? "inbox" : detailMatch?.[1] === "unmatched" ? "unmatched" : "history";
   const detailNotice = new URLSearchParams(listQuery).get("notice") || "";
   return <Shell user={auth.user} onLogout={auth.logout} onNavigate={navigate} currentPath={path}>
-    {detailMatch ? <SignalDetail signalId={detailMatch[2]} apiClient={apiClient} queueMode={detailMode === "inbox"} initialNotice={detailNotice} onBack={() => navigate(detailMode === "inbox" ? "/inbox" : "/history")} onReviewed={({ message, nextId }) => navigate(nextId ? `/inbox/${nextId}?notice=${encodeURIComponent(message)}` : `/inbox?notice=${encodeURIComponent(message)}`)} /> : opportunityMatch ? <OpportunityDetail opportunityId={opportunityMatch[1]} apiClient={apiClient} onBack={() => navigate("/opportunities")} /> : route === "/inbox" ? <ReviewInboxPage apiClient={apiClient} onNavigate={navigate} initialQuery={listQuery} /> : route === "/history" ? <ReviewedSignalsPage apiClient={apiClient} onNavigate={navigate} initialQuery={listQuery} /> : route === "/opportunities" ? <OpportunitiesPage apiClient={apiClient} onNavigate={navigate} /> : route === "/sources" ? <SourcesPage apiClient={apiClient} /> : <Dashboard apiClient={apiClient} onNavigate={navigate} />}
+    {detailMatch ? <SignalDetail signalId={detailMatch[2]} apiClient={apiClient} queueMode={detailMode === "inbox"} unmatchedMode={detailMode === "unmatched"} initialNotice={detailNotice} onBack={() => navigate(detailMode === "inbox" ? "/inbox" : detailMode === "unmatched" ? "/unmatched" : "/history")} onReviewed={({ message, nextId }) => navigate(nextId ? `/inbox/${nextId}?notice=${encodeURIComponent(message)}` : `/inbox?notice=${encodeURIComponent(message)}`)} /> : opportunityMatch ? <OpportunityDetail opportunityId={opportunityMatch[1]} apiClient={apiClient} onBack={() => navigate("/opportunities")} /> : route === "/inbox" ? <ReviewInboxPage apiClient={apiClient} onNavigate={navigate} initialQuery={listQuery} /> : route === "/history" ? <ReviewedSignalsPage apiClient={apiClient} onNavigate={navigate} initialQuery={listQuery} /> : route === "/unmatched" ? <UnmatchedSignalsPage apiClient={apiClient} onNavigate={navigate} initialQuery={listQuery} /> : route === "/match-review" ? <MatchReviewPage apiClient={apiClient} onNavigate={navigate} /> : route === "/opportunities" ? <OpportunitiesPage apiClient={apiClient} onNavigate={navigate} /> : route === "/sources" ? <SourcesPage apiClient={apiClient} /> : <Dashboard apiClient={apiClient} onNavigate={navigate} />}
   </Shell>;
 }

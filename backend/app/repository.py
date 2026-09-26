@@ -9,7 +9,7 @@ from psycopg.types.json import Jsonb
 
 from app.classification import CLASSIFICATION_RULE_VERSION
 from app.config import Settings
-from app.correlation import deterministic_match, recruitment_evidence_strength
+from app.correlation import classify_match, recruitment_evidence_strength
 from app.db import connection
 from app.enrichment import fixture_enrichment
 from app.ingestion import NormalizedSignal
@@ -289,6 +289,7 @@ def list_signals(
     discovered_from: str | None = None,
     discovered_to: str | None = None,
     search: str | None = None,
+    unmatched_only: bool = False,
 ) -> dict[str, Any]:
     clauses = ["TRUE"]
     params: list[Any] = []
@@ -321,6 +322,11 @@ def list_signals(
             ")"
         )
         params.extend([search_pattern] * 10)
+    if unmatched_only:
+        clauses.append(
+            "NOT EXISTS (SELECT 1 FROM opportunity_signals active_os "
+            "WHERE active_os.raw_signal_id = rs.id AND active_os.status = 'ACTIVE')"
+        )
     where = " AND ".join(clauses)
     with connection(settings) as conn:
         total = conn.execute(
@@ -723,9 +729,18 @@ def reprocess_recruitment_signals(
             raw = dict(
                 zip(
                     (
-                        "id", "schema_version", "source_type", "source_url", "external_id",
-                        "discovered_at", "title", "raw_text", "location_hint",
-                        "organisation_hint", "metadata", "review_status",
+                        "id",
+                        "schema_version",
+                        "source_type",
+                        "source_url",
+                        "external_id",
+                        "discovered_at",
+                        "title",
+                        "raw_text",
+                        "location_hint",
+                        "organisation_hint",
+                        "metadata",
+                        "review_status",
                     ),
                     row,
                 )
@@ -744,16 +759,19 @@ def reprocess_recruitment_signals(
                     "region": recruitment_record.region,
                 }
             )
-            normalized_location = ", ".join(
-                value
-                for value in (
-                    recruitment_record.address,
-                    recruitment_record.postcode,
-                    recruitment_record.locality,
-                    recruitment_record.region,
+            normalized_location = (
+                ", ".join(
+                    value
+                    for value in (
+                        recruitment_record.address,
+                        recruitment_record.postcode,
+                        recruitment_record.locality,
+                        recruitment_record.region,
+                    )
+                    if value
                 )
-                if value
-            ) or raw["location_hint"]
+                or raw["location_hint"]
+            )
             conn.execute(
                 """
                 UPDATE raw_signals
@@ -965,10 +983,21 @@ def correlate_signal(
         ).fetchall()
         match = None
         match_reason = None
+        uncertain_matches: list[tuple[Any, float, str]] = []
         for row in existing:
-            comparison = deterministic_match(postcode, name, row[6], row[1])
-            operator_comparison = deterministic_match(postcode, operator, row[6], row[7])
-            if comparison.matched or operator_comparison.matched:
+            comparison = classify_match(postcode, name, row[6], row[1])
+            operator_comparison = classify_match(postcode, operator, row[6], row[7])
+            if comparison.outcome == "UNCERTAIN" or operator_comparison.outcome == "UNCERTAIN":
+                uncertain = comparison if comparison.outcome == "UNCERTAIN" else operator_comparison
+                uncertain_matches.append((row[0], uncertain.confidence, uncertain.reason))
+            if comparison.outcome == "EXACT" or operator_comparison.outcome == "EXACT":
+                blocked = conn.execute(
+                    """SELECT 1 FROM opportunity_signals
+                       WHERE opportunity_id = %s AND raw_signal_id = %s AND status = 'REJECTED'""",
+                    (row[0], signal_id),
+                ).fetchone()
+                if blocked:
+                    continue
                 match = row
                 match_reason = (
                     comparison.reason if comparison.matched else operator_comparison.reason
@@ -1019,9 +1048,11 @@ def correlate_signal(
             )
         else:
             opportunity_id = conn.execute(
-                """INSERT INTO opportunities (name, event_type, lifecycle_stage, confidence,
-                   confidence_breakdown, stage_reason)
-                   VALUES (%s, %s, %s, %s, %s, %s) RETURNING id""",
+                """INSERT INTO opportunities
+                   (name, event_type, lifecycle_stage, confidence, confidence_breakdown,
+                    stage_reason, vertical, operator_name, address, postcode, town)
+                   VALUES (%s, %s, %s, %s, %s, %s, 'NURSERY', %s, %s, %s, %s)
+                   RETURNING id""",
                 (
                     name,
                     candidate.get("event_type") or "other",
@@ -1040,24 +1071,38 @@ def correlate_signal(
                             "independence": 1,
                         }
                     ),
-                    "planning evidence"
-                    if source_type == "planning"
-                    else recruitment_reason,
+                    "planning evidence" if source_type == "planning" else recruitment_reason,
+                    operator,
+                    candidate.get("address"),
+                    postcode,
+                    metadata.get("town") or metadata.get("locality"),
                 ),
             ).fetchone()[0]
         conn.execute(
             """INSERT INTO opportunity_signals (
                    opportunity_id, raw_signal_id, relationship_type,
-                   extracted_facts, provenance)
-               VALUES (%s, %s, 'SUPPORTS', %s, %s)
+                   extracted_facts, provenance, status, created_by,
+                   match_outcome, match_confidence, match_reason)
+               VALUES (%s, %s, 'SUPPORTS', %s, %s, 'ACTIVE', 'SYSTEM', %s, %s, %s)
                ON CONFLICT (opportunity_id, raw_signal_id) DO NOTHING""",
             (
                 opportunity_id,
                 signal_id,
                 Jsonb(candidate.get("extracted_facts") or {}),
                 Jsonb({"method": "deterministic-v1", "reason": match_reason or "initial signal"}),
+                "STRONG" if match else "NO_MATCH",
+                base_confidence,
+                match_reason or "initial signal",
             ),
         )
+        for possible_id, possible_confidence, possible_reason in uncertain_matches[:3]:
+            conn.execute(
+                """INSERT INTO opportunity_match_reviews
+                   (raw_signal_id, opportunity_id, outcome, confidence, reason)
+                   VALUES (%s, %s, 'UNCERTAIN', %s, %s)
+                   ON CONFLICT (raw_signal_id, opportunity_id) DO NOTHING""",
+                (signal_id, possible_id, possible_confidence, possible_reason),
+            )
         conn.commit()
     return {
         "opportunity_id": str(opportunity_id),
@@ -1081,9 +1126,10 @@ def list_opportunities(
             f"SELECT count(*) FROM opportunities o WHERE {where}", params
         ).fetchone()[0]
         rows = conn.execute(
-            f"""SELECT o.id, o.name, o.operator_id, o.event_type, o.lifecycle_stage, o.confidence,
+            f"""SELECT o.id, o.name, o.operator_id, o.operator_name, o.address, o.postcode, o.town,
+                       o.vertical, o.event_type, o.lifecycle_stage, o.confidence,
                        o.confidence_breakdown, o.stage_reason, o.first_seen_at, o.latest_update_at,
-                       count(os.raw_signal_id)
+                       count(os.raw_signal_id) FILTER (WHERE os.status = 'ACTIVE')
                 FROM opportunities o LEFT JOIN opportunity_signals os ON os.opportunity_id = o.id
                 WHERE {where} GROUP BY o.id ORDER BY o.latest_update_at DESC LIMIT %s OFFSET %s""",
             [*params, limit, offset],
@@ -1092,6 +1138,11 @@ def list_opportunities(
         "id",
         "name",
         "operator_id",
+        "operator_name",
+        "address",
+        "postcode",
+        "town",
+        "vertical",
         "event_type",
         "lifecycle_stage",
         "confidence",
@@ -1112,7 +1163,8 @@ def list_opportunities(
 def opportunity_detail(settings: Settings, opportunity_id: str) -> dict[str, Any] | None:
     with connection(settings) as conn:
         opportunity = conn.execute(
-            """SELECT id, name, event_type, lifecycle_stage, confidence,
+            """SELECT id, name, operator_name, address, postcode, town, vertical,
+                      event_type, lifecycle_stage, confidence,
                       confidence_breakdown, stage_reason, first_seen_at,
                       latest_update_at FROM opportunities WHERE id = %s""",
             (opportunity_id,),
@@ -1122,7 +1174,8 @@ def opportunity_detail(settings: Settings, opportunity_id: str) -> dict[str, Any
         rows = conn.execute(
             """SELECT rs.id, rs.source_type, rs.title, rs.external_id, rs.discovered_at,
                       rs.source_url, rs.metadata, rs.organisation_hint, rs.location_hint,
-                      os.provenance, se.confidence, se.review_status,
+                      os.status, os.created_by, os.match_outcome, os.match_confidence,
+                      os.match_reason, os.provenance, se.confidence, se.review_status,
                       ai.recommendation, ai.confidence, ai.status
                FROM opportunity_signals os JOIN raw_signals rs ON rs.id = os.raw_signal_id
                LEFT JOIN signal_enrichments se ON se.raw_signal_id = rs.id
@@ -1141,6 +1194,11 @@ def opportunity_detail(settings: Settings, opportunity_id: str) -> dict[str, Any
         "metadata",
         "organisation_hint",
         "location_hint",
+        "relationship_status",
+        "relationship_created_by",
+        "match_outcome",
+        "match_confidence",
+        "match_reason",
         "provenance",
         "rule_confidence",
         "review_status",
@@ -1151,14 +1209,419 @@ def opportunity_detail(settings: Settings, opportunity_id: str) -> dict[str, Any
     return {
         "id": opportunity[0],
         "name": opportunity[1],
-        "event_type": opportunity[2],
-        "lifecycle_stage": opportunity[3],
-        "confidence": opportunity[4],
-        "confidence_breakdown": opportunity[5],
-        "stage_reason": opportunity[6],
-        "first_seen_at": opportunity[7],
-        "latest_update_at": opportunity[8],
+        "operator_name": opportunity[2],
+        "address": opportunity[3],
+        "postcode": opportunity[4],
+        "town": opportunity[5],
+        "vertical": opportunity[6],
+        "event_type": opportunity[7],
+        "lifecycle_stage": opportunity[8],
+        "confidence": opportunity[9],
+        "confidence_breakdown": opportunity[10],
+        "stage_reason": opportunity[11],
+        "first_seen_at": opportunity[12],
+        "latest_update_at": opportunity[13],
         "signals": [dict(zip(fields, row)) for row in rows],
+    }
+
+
+def list_match_reviews(settings: Settings, *, limit: int, offset: int) -> dict[str, Any]:
+    with connection(settings) as conn:
+        total = conn.execute(
+            "SELECT count(*) FROM opportunity_match_reviews WHERE status = 'PENDING'"
+        ).fetchone()[0]
+        rows = conn.execute(
+            """SELECT mr.id, mr.raw_signal_id, mr.opportunity_id, mr.outcome,
+                      mr.confidence, mr.reason, mr.created_at,
+                      rs.title, rs.source_type, o.name
+               FROM opportunity_match_reviews mr
+               JOIN raw_signals rs ON rs.id = mr.raw_signal_id
+               JOIN opportunities o ON o.id = mr.opportunity_id
+               WHERE mr.status = 'PENDING'
+               ORDER BY mr.created_at DESC LIMIT %s OFFSET %s""",
+            (limit, offset),
+        ).fetchall()
+    fields = (
+        "id",
+        "signal_id",
+        "opportunity_id",
+        "outcome",
+        "confidence",
+        "reason",
+        "created_at",
+        "signal_title",
+        "source_type",
+        "opportunity_name",
+    )
+    return {
+        "items": [dict(zip(fields, row)) for row in rows],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+def _audit_match(settings: Settings, action: str, actor: str, details: dict[str, Any]) -> None:
+    record_admin_audit(
+        settings, action=action, actor=actor, target_type="opportunity_match", details=details
+    )
+
+
+def _archive_relationship(
+    conn: Any, opportunity_id: str, signal_id: str, action: str, actor: str, reason: str | None
+) -> None:
+    conn.execute(
+        """INSERT INTO opportunity_signal_history
+           (opportunity_id, raw_signal_id, status, action, actor, reason)
+           SELECT opportunity_id, raw_signal_id, status, %s, %s, %s
+           FROM opportunity_signals
+           WHERE opportunity_id = %s AND raw_signal_id = %s""",
+        (action, actor, reason, opportunity_id, signal_id),
+    )
+
+
+def _signal_summary(conn: Any, signal_id: str) -> tuple[Any, ...] | None:
+    return conn.execute(
+        """SELECT rs.title, rs.source_type, rs.metadata, rs.organisation_hint,
+                  rs.location_hint, COALESCE(se.nursery_name, se.operator_name),
+                  se.event_type, se.lifecycle_stage, se.confidence
+           FROM raw_signals rs LEFT JOIN signal_enrichments se ON se.raw_signal_id = rs.id
+           WHERE rs.id = %s""",
+        (signal_id,),
+    ).fetchone()
+
+
+def create_opportunity_from_signal(
+    settings: Settings, signal_id: str, actor: str
+) -> dict[str, Any]:
+    with connection(settings) as conn:
+        signal = _signal_summary(conn, signal_id)
+        if signal is None:
+            raise ValueError("signal_not_found")
+        (
+            title,
+            source_type,
+            metadata,
+            organisation,
+            location,
+            name,
+            event_type,
+            lifecycle,
+            confidence,
+        ) = signal
+        metadata = metadata or {}
+        existing = conn.execute(
+            """SELECT o.id FROM opportunities o JOIN opportunity_signals os
+               ON os.opportunity_id = o.id WHERE os.raw_signal_id = %s AND os.status = 'ACTIVE'""",
+            (signal_id,),
+        ).fetchone()
+        if existing:
+            return {"opportunity_id": str(existing[0]), "created": False}
+        opportunity_id = conn.execute(
+            """INSERT INTO opportunities
+               (name, event_type, lifecycle_stage, confidence, vertical, operator_name,
+                address, postcode, town, stage_reason)
+               VALUES (%s, %s, %s, %s, 'NURSERY', %s, %s, %s, %s, %s) RETURNING id""",
+            (
+                name or organisation or title,
+                event_type or "other",
+                lifecycle or "DISCOVERED",
+                confidence or 0,
+                organisation,
+                location,
+                metadata.get("postcode"),
+                metadata.get("town") or metadata.get("locality"),
+                "created by admin from signal",
+            ),
+        ).fetchone()[0]
+        conn.execute(
+            """INSERT INTO opportunity_signals
+               (opportunity_id, raw_signal_id, relationship_type, provenance, status,
+                created_by, match_outcome, match_confidence, match_reason)
+               VALUES (%s, %s, 'SUPPORTS', %s, 'ACTIVE', 'ADMIN', 'EXACT', %s, %s)""",
+            (
+                opportunity_id,
+                signal_id,
+                Jsonb({"method": "admin", "reason": "created from signal"}),
+                confidence or 0,
+                "admin-created opportunity",
+            ),
+        )
+        conn.commit()
+    _audit_match(
+        settings,
+        "opportunity_created_from_signal",
+        actor,
+        {"signal_id": signal_id, "opportunity_id": str(opportunity_id)},
+    )
+    return {"opportunity_id": str(opportunity_id), "created": True}
+
+
+def link_signal_to_opportunity(
+    settings: Settings, opportunity_id: str, signal_id: str, actor: str, reason: str = "admin link"
+) -> dict[str, Any]:
+    with connection(settings) as conn:
+        if not conn.execute(
+            "SELECT 1 FROM opportunities WHERE id = %s", (opportunity_id,)
+        ).fetchone():
+            raise ValueError("opportunity_not_found")
+        signal = _signal_summary(conn, signal_id)
+        if signal is None:
+            raise ValueError("signal_not_found")
+        confidence = signal[-1] or 0
+        row = conn.execute(
+            "SELECT status FROM opportunity_signals "
+            "WHERE opportunity_id = %s AND raw_signal_id = %s",
+            (opportunity_id, signal_id),
+        ).fetchone()
+        if row:
+            _archive_relationship(conn, opportunity_id, signal_id, "ADMIN_LINK", actor, reason)
+            conn.execute(
+                """UPDATE opportunity_signals SET status = 'ACTIVE', created_by = 'ADMIN',
+                   match_outcome = 'EXACT', match_confidence = %s, match_reason = %s,
+                   admin_override_by = %s, admin_override_at = now()
+                   WHERE opportunity_id = %s AND raw_signal_id = %s""",
+                (confidence, reason, actor, opportunity_id, signal_id),
+            )
+        else:
+            conn.execute(
+                """INSERT INTO opportunity_signals
+                   (opportunity_id, raw_signal_id, relationship_type, provenance, status,
+                    created_by, match_outcome, match_confidence, match_reason,
+                    admin_override_by, admin_override_at)
+                   VALUES (%s, %s, 'SUPPORTS', %s, 'ACTIVE', 'ADMIN', 'EXACT', %s, %s, %s,
+                           now())""",
+                (
+                    opportunity_id,
+                    signal_id,
+                    Jsonb({"method": "admin", "reason": reason}),
+                    confidence,
+                    reason,
+                    actor,
+                ),
+            )
+        conn.execute(
+            "UPDATE opportunities SET latest_update_at = now(), updated_at = now() WHERE id = %s",
+            (opportunity_id,),
+        )
+        conn.commit()
+    _audit_match(
+        settings,
+        "opportunity_signal_linked",
+        actor,
+        {"signal_id": signal_id, "opportunity_id": opportunity_id, "reason": reason},
+    )
+    return {"opportunity_id": opportunity_id, "signal_id": signal_id, "status": "ACTIVE"}
+
+
+def unlink_signal_from_opportunity(
+    settings: Settings,
+    opportunity_id: str,
+    signal_id: str,
+    actor: str,
+    reason: str = "admin unlink",
+) -> bool:
+    with connection(settings) as conn:
+        row = conn.execute(
+            "SELECT status FROM opportunity_signals "
+            "WHERE opportunity_id = %s AND raw_signal_id = %s",
+            (opportunity_id, signal_id),
+        ).fetchone()
+        if not row:
+            return False
+        _archive_relationship(conn, opportunity_id, signal_id, "ADMIN_UNLINK", actor, reason)
+        conn.execute(
+            """UPDATE opportunity_signals SET status = 'REJECTED', admin_override_by = %s,
+               admin_override_at = now(), match_reason = %s
+               WHERE opportunity_id = %s AND raw_signal_id = %s""",
+            (actor, reason, opportunity_id, signal_id),
+        )
+        conn.commit()
+    _audit_match(
+        settings,
+        "opportunity_signal_unlinked",
+        actor,
+        {"signal_id": signal_id, "opportunity_id": opportunity_id, "reason": reason},
+    )
+    return True
+
+
+def merge_opportunities(
+    settings: Settings, source_id: str, target_id: str, actor: str
+) -> dict[str, Any]:
+    if source_id == target_id:
+        raise ValueError("cannot_merge_opportunity_into_itself")
+    with connection(settings) as conn:
+        if not conn.execute("SELECT 1 FROM opportunities WHERE id = %s", (source_id,)).fetchone():
+            raise ValueError("source_opportunity_not_found")
+        if not conn.execute("SELECT 1 FROM opportunities WHERE id = %s", (target_id,)).fetchone():
+            raise ValueError("target_opportunity_not_found")
+        links = conn.execute(
+            "SELECT raw_signal_id FROM opportunity_signals "
+            "WHERE opportunity_id = %s AND status = 'ACTIVE'",
+            (source_id,),
+        ).fetchall()
+        for (signal_id,) in links:
+            _archive_relationship(
+                conn, source_id, signal_id, "ADMIN_MERGE", actor, f"merged into {target_id}"
+            )
+            conn.execute(
+                """UPDATE opportunity_signals SET status = 'REJECTED',
+                admin_override_by = %s, admin_override_at = now(), match_reason = %s
+                WHERE opportunity_id = %s AND raw_signal_id = %s""",
+                (actor, f"merged into {target_id}", source_id, signal_id),
+            )
+            conn.execute(
+                """INSERT INTO opportunity_signals
+                   (opportunity_id, raw_signal_id, relationship_type, provenance, status,
+                    created_by, match_outcome, match_confidence, match_reason,
+                    admin_override_by, admin_override_at)
+                   VALUES (%s, %s, 'SUPPORTS', %s, 'ACTIVE', 'ADMIN', 'STRONG', 1, %s, %s, now())
+                   ON CONFLICT (opportunity_id, raw_signal_id) DO UPDATE SET status = 'ACTIVE',
+                    created_by = 'ADMIN', admin_override_by = EXCLUDED.admin_override_by,
+                    admin_override_at = now(), match_reason = EXCLUDED.match_reason""",
+                (
+                    target_id,
+                    signal_id,
+                    Jsonb({"method": "admin_merge", "from": source_id}),
+                    f"merged from {source_id}",
+                    actor,
+                ),
+            )
+        conn.execute(
+            """UPDATE opportunities SET review_status = 'MERGED',
+            merged_into_opportunity_id = %s, updated_at = now() WHERE id = %s""",
+            (target_id, source_id),
+        )
+        conn.commit()
+    _audit_match(
+        settings,
+        "opportunities_merged",
+        actor,
+        {
+            "source_opportunity_id": source_id,
+            "target_opportunity_id": target_id,
+            "moved_signals": len(links),
+        },
+    )
+    return {
+        "source_opportunity_id": source_id,
+        "target_opportunity_id": target_id,
+        "moved_signals": len(links),
+    }
+
+
+def split_opportunity(
+    settings: Settings,
+    opportunity_id: str,
+    signal_ids: list[str],
+    actor: str,
+    name: str | None = None,
+) -> dict[str, Any]:
+    if not signal_ids:
+        raise ValueError("signal_ids_required")
+    with connection(settings) as conn:
+        base = conn.execute(
+            "SELECT name, event_type, lifecycle_stage, confidence, vertical, operator_name, "
+            "address, postcode, town FROM opportunities WHERE id = %s",
+            (opportunity_id,),
+        ).fetchone()
+        if not base:
+            raise ValueError("opportunity_not_found")
+        new_id = conn.execute(
+            """INSERT INTO opportunities
+               (name, event_type, lifecycle_stage, confidence, vertical, operator_name,
+                address, postcode, town, stage_reason)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s,
+                       'created by admin split') RETURNING id""",
+            (name or f"{base[0]} (split)", *base[1:]),
+        ).fetchone()[0]
+        moved = 0
+        for signal_id in signal_ids:
+            if not conn.execute(
+                """SELECT 1 FROM opportunity_signals WHERE opportunity_id = %s
+                                  AND raw_signal_id = %s AND status = 'ACTIVE'""",
+                (opportunity_id, signal_id),
+            ).fetchone():
+                continue
+            _archive_relationship(
+                conn, opportunity_id, signal_id, "ADMIN_SPLIT", actor, f"split into {new_id}"
+            )
+            conn.execute(
+                """UPDATE opportunity_signals SET status = 'REJECTED',
+                admin_override_by = %s, admin_override_at = now(), match_reason = %s
+                WHERE opportunity_id = %s AND raw_signal_id = %s""",
+                (actor, f"split into {new_id}", opportunity_id, signal_id),
+            )
+            conn.execute(
+                """INSERT INTO opportunity_signals
+                (opportunity_id, raw_signal_id, relationship_type, provenance, status,
+                 created_by, match_outcome, match_confidence, match_reason,
+                 admin_override_by, admin_override_at)
+                VALUES (%s, %s, 'SUPPORTS', %s, 'ACTIVE', 'ADMIN', 'STRONG', 1, %s, %s, now())""",
+                (
+                    new_id,
+                    signal_id,
+                    Jsonb({"method": "admin_split", "from": opportunity_id}),
+                    f"split from {opportunity_id}",
+                    actor,
+                ),
+            )
+            moved += 1
+        conn.commit()
+    _audit_match(
+        settings,
+        "opportunity_split",
+        actor,
+        {
+            "source_opportunity_id": opportunity_id,
+            "new_opportunity_id": str(new_id),
+            "signal_count": moved,
+        },
+    )
+    return {"opportunity_id": str(new_id), "moved_signals": moved}
+
+
+def resolve_match_review(
+    settings: Settings, review_id: str, action: str, actor: str
+) -> dict[str, Any]:
+    with connection(settings) as conn:
+        row = conn.execute(
+            "SELECT raw_signal_id, opportunity_id, status FROM opportunity_match_reviews "
+            "WHERE id = %s",
+            (review_id,),
+        ).fetchone()
+        if not row:
+            raise ValueError("match_review_not_found")
+        if row[2] != "PENDING":
+            return {"review_id": review_id, "status": row[2]}
+        status = "LINKED" if action == "link" else "REJECTED"
+        conn.execute(
+            """UPDATE opportunity_match_reviews SET status = %s,
+            reviewed_by = %s, reviewed_at = now() WHERE id = %s""",
+            (status, actor, review_id),
+        )
+        conn.commit()
+    if action == "link":
+        link_signal_to_opportunity(
+            settings, str(row[1]), str(row[0]), actor, "match review accepted"
+        )
+    _audit_match(
+        settings,
+        "match_review_resolved",
+        actor,
+        {
+            "review_id": review_id,
+            "action": action,
+            "signal_id": str(row[0]),
+            "opportunity_id": str(row[1]),
+        },
+    )
+    return {
+        "review_id": review_id,
+        "status": status,
+        "signal_id": str(row[0]),
+        "opportunity_id": str(row[1]),
     }
 
 

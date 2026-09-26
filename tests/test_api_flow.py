@@ -106,7 +106,8 @@ def test_admin_list_filters_and_paginates(monkeypatch) -> None:
                 "review_status": "PENDING",
                 "source_type": "planning",
             },
-        ), None
+        ),
+        None,
     )
     assert response["statusCode"] == 200
     assert captured == {
@@ -117,6 +118,7 @@ def test_admin_list_filters_and_paginates(monkeypatch) -> None:
         "discovered_from": None,
         "discovered_to": None,
         "search": None,
+        "unmatched_only": False,
     }
 
 
@@ -135,7 +137,8 @@ def test_bulk_review_requires_admin_and_enforces_bounded_ids(monkeypatch) -> Non
             "POST",
             body=json.dumps({"action": "approve", "signal_ids": signal_ids}),
             claims={"sub": "staff", "cognito:groups": ["NurserySignalAdmins"]},
-        ), None
+        ),
+        None,
     )
     assert response["statusCode"] == 200
     assert captured == {"values": signal_ids, "status": "APPROVED", "reviewer": "staff"}
@@ -146,7 +149,8 @@ def test_bulk_review_requires_admin_and_enforces_bounded_ids(monkeypatch) -> Non
             "POST",
             body=json.dumps({"action": "approve", "signal_ids": signal_ids}),
             claims={"sub": "staff", "cognito:groups": ["Other"]},
-        ), None
+        ),
+        None,
     )
     assert denied["statusCode"] == 403
 
@@ -178,11 +182,17 @@ def test_admin_list_passes_bounded_text_search(monkeypatch) -> None:
 def test_sources_status_is_admin_only_and_includes_recent_runs(monkeypatch) -> None:
     monkeypatch.setattr(
         "app.handler.list_runs",
-        lambda settings, source_key, limit=10: [{
-            "id": "run-1", "status": "SUCCESS", "started_at": "2026-09-26T18:00:00Z",
-            "completed_at": "2026-09-26T18:00:02Z", "invocation_source": "scheduled",
-            "counts": {"records_fetched": 4}, "parameters": {},
-        }],
+        lambda settings, source_key, limit=10: [
+            {
+                "id": "run-1",
+                "status": "SUCCESS",
+                "started_at": "2026-09-26T18:00:00Z",
+                "completed_at": "2026-09-26T18:00:02Z",
+                "invocation_source": "scheduled",
+                "counts": {"records_fetched": 4},
+                "parameters": {},
+            }
+        ],
     )
     admin_claims = {**CLAIMS, "cognito:groups": ["NurserySignalAdmins"]}
     response = handler(event("/admin/sources", claims=admin_claims), None)
@@ -227,8 +237,12 @@ def test_source_manual_run_uses_fixed_bounds_and_exact_lambda(monkeypatch) -> No
     assert calls[0]["FunctionName"] == settings.planning_collector_function_name
     payload = json.loads(calls[0]["Payload"])
     assert payload == {
-        "source": "manual", "lookback_days": 2, "max_records": 100,
-        "page_size": 25, "run_id": "run-1", "run_started_at": "2026-09-26T19:00:00Z",
+        "source": "manual",
+        "lookback_days": 2,
+        "max_records": 100,
+        "page_size": 25,
+        "run_id": "run-1",
+        "run_started_at": "2026-09-26T19:00:00Z",
     }
 
 
@@ -448,3 +462,56 @@ def test_recruitment_reprocess_rejects_unbounded_id_lists() -> None:
         None,
     )
     assert response["statusCode"] == 400
+
+
+def test_opportunity_views_and_corrections_are_admin_only(monkeypatch) -> None:
+    denied = handler(event("/admin/opportunities"), None)
+    assert denied["statusCode"] == 403
+
+    monkeypatch.setattr(
+        "app.handler.list_opportunities",
+        lambda settings, **kwargs: {"items": [], "total": 0, **kwargs},
+    )
+    response = handler(
+        event("/admin/opportunities", claims={**CLAIMS, "cognito:groups": ["NurserySignalAdmins"]}),
+        None,
+    )
+    assert response["statusCode"] == 200
+
+    captured = {}
+    monkeypatch.setattr(
+        "app.handler.link_signal_to_opportunity",
+        lambda settings, opportunity_id, signal_id, actor, reason: (
+            captured.update(
+                opportunity_id=opportunity_id, signal_id=signal_id, actor=actor, reason=reason
+            )
+            or {"status": "ACTIVE"}
+        ),
+    )
+    signal_id = str(uuid4())
+    opportunity_id = str(uuid4())
+    response = handler(
+        event(
+            f"/admin/opportunities/{opportunity_id}/link",
+            "POST",
+            body=json.dumps({"signal_id": signal_id, "reason": "same postcode"}),
+            claims={**CLAIMS, "cognito:groups": ["NurserySignalAdmins"]},
+        ),
+        None,
+    )
+    assert response["statusCode"] == 200
+    assert captured["signal_id"] == signal_id
+
+
+def test_match_review_is_admin_only_and_bounded(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "app.handler.list_match_reviews",
+        lambda settings, **kwargs: {"items": [], "total": 0, **kwargs},
+    )
+    denied = handler(event("/admin/match-review"), None)
+    assert denied["statusCode"] == 403
+    response = handler(
+        event("/admin/match-review", claims={**CLAIMS, "cognito:groups": ["NurserySignalAdmins"]}),
+        None,
+    )
+    assert response["statusCode"] == 200

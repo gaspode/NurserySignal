@@ -170,6 +170,8 @@ def _address_text(location: dict[str, Any], record: dict[str, Any]) -> str | Non
         parts = [location.get("address") or record.get("address")]
     values = [_text(value) for value in parts]
     return ", ".join(value for value in values if value) or None
+
+
 def normalize_gov_vacancy(record: dict[str, Any], base_url: str) -> RecruitmentRecord:
     if not isinstance(record, dict):
         raise ValueError("vacancy must be an object")

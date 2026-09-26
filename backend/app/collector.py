@@ -108,8 +108,13 @@ def collect_planning(
             source,
         )
         finish_run(
-            settings, source_key="planning", run_id=run_id, started_at=started_at,
-            status=status, counts=counts, failure_category=failure_category,
+            settings,
+            source_key="planning",
+            run_id=run_id,
+            started_at=started_at,
+            status=status,
+            counts=counts,
+            failure_category=failure_category,
             failure_message=failure_message,
         )
     return counts

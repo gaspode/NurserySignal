@@ -128,9 +128,7 @@ def fixture_enrichment(
             "recruitment_relevance": recruitment_candidate["relevance"]
             if recruitment_candidate
             else "unknown",
-            "commercial_change_evidence": recruitment_candidate[
-                "commercial_change_evidence"
-            ]
+            "commercial_change_evidence": recruitment_candidate["commercial_change_evidence"]
             if recruitment_candidate
             else "NONE",
             "recruitment_matched_role_terms": recruitment_candidate["matched_role_terms"]

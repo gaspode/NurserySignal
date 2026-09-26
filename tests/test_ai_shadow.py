@@ -115,12 +115,10 @@ def test_shadow_v2_records_commercial_change_evidence(monkeypatch):
                             "text": json.dumps(
                                 {
                                     "recommendation": "APPROVE",
-                                        "confidence": 0.85,
-                                        "reason": (
-                                            "Relevant recruitment at a nursery-school setting."
-                                        ),
-                                        "planning_relevance": "RELEVANT_CHANGE",
-                                        "commercial_change_evidence": "NONE",
+                                    "confidence": 0.85,
+                                    "reason": ("Relevant recruitment at a nursery-school setting."),
+                                    "planning_relevance": "RELEVANT_CHANGE",
+                                    "commercial_change_evidence": "NONE",
                                 }
                             )
                         }

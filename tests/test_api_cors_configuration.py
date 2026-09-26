@@ -7,8 +7,7 @@ def test_cors_configuration_is_restricted_to_admin_frontend_and_required_headers
     source = API_TERRAFORM.read_text()
 
     assert (
-        'allow_origins = ["https://${aws_cloudfront_distribution.frontend.domain_name}"]'
-        in source
+        'allow_origins = ["https://${aws_cloudfront_distribution.frontend.domain_name}"]' in source
     )
     assert 'allow_headers = ["content-type", "authorization"]' in source
     assert 'allow_methods = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]' in source

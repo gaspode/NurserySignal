@@ -15,6 +15,7 @@ def test_initial_migration_exists_and_contains_provenance_tables() -> None:
         "0007_recruitment_ai_shadow_v2.sql",
         "0008_recruitment_ai_shadow_v3.sql",
         "0009_source_aware_ai_shadow.sql",
+        "0010_opportunity_matching_corrections.sql",
     ]
     sql = "\n".join(path.read_text(encoding="utf-8") for path in files)
     tables = (
@@ -37,6 +38,9 @@ def test_initial_migration_exists_and_contains_provenance_tables() -> None:
     assert "commercial_change_evidence" in sql
     assert "recruitment_relevance" in sql
     assert "planning_relevance" in sql
+    assert "CREATE TABLE IF NOT EXISTS opportunity_match_reviews" in sql
+    assert "CREATE TABLE IF NOT EXISTS opportunity_signal_history" in sql
+    assert "match_outcome" in sql
 
 
 def test_ai_review_insert_has_one_value_placeholder_per_column() -> None:
