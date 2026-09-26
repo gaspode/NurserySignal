@@ -4,6 +4,7 @@ from datetime import date
 from typing import Any
 
 from app.classification import CLASSIFICATION_RULE_VERSION, classify_signal_text
+from app.opportunity_policy import opportunity_creation_decision
 from app.planning import candidate_decision, planning_record_from_signal
 from app.recruitment import classify_recruitment, recruitment_record_from_signal
 
@@ -79,9 +80,88 @@ def fixture_enrichment(
     if capacity is not None:
         capacity = int(capacity)
     nursery_name = raw.get("organisation_hint") or raw["title"]
+    extracted_facts = {
+        "method": "fixture-v1",
+        "classification": classification,
+        "classification_rule_version": CLASSIFICATION_RULE_VERSION,
+        "childcare_terms": list(classification_result.childcare_terms),
+        "horticultural_terms": list(classification_result.horticultural_terms),
+        "likely_false_positive": (classification_result.likely_false_positive or planning_excluded),
+        "planning_candidate_matched": (
+            planning_candidate.matched if planning_candidate is not None else None
+        ),
+        "planning_positive_terms": (
+            list(planning_candidate.positive_terms) if planning_candidate is not None else []
+        ),
+        "planning_exclusions": (
+            list(planning_candidate.exclusions) if planning_candidate is not None else []
+        ),
+        "school_nursery": school_nursery,
+        "source_type": raw["source_type"],
+        "recruitment_candidate_matched": recruitment_candidate["matched"]
+        if recruitment_candidate
+        else None,
+        "recruitment_role_categories": recruitment_candidate["role_categories"]
+        if recruitment_candidate
+        else [],
+        "recruitment_role_category": recruitment_candidate["role_category"]
+        if recruitment_candidate
+        else "unknown",
+        "recruitment_setting_categories": recruitment_candidate["setting_categories"]
+        if recruitment_candidate
+        else [],
+        "recruitment_setting_category": recruitment_candidate["setting_category"]
+        if recruitment_candidate
+        else "unknown",
+        "recruitment_relevance": recruitment_candidate["relevance"]
+        if recruitment_candidate
+        else "unknown",
+        "commercial_change_evidence": recruitment_candidate["commercial_change_evidence"]
+        if recruitment_candidate
+        else "NONE",
+        "recruitment_matched_role_terms": recruitment_candidate["matched_role_terms"]
+        if recruitment_candidate
+        else [],
+        "recruitment_matched_setting_terms": recruitment_candidate["matched_setting_terms"]
+        if recruitment_candidate
+        else [],
+        "recruitment_ambiguity_flags": recruitment_candidate["ambiguity_flags"]
+        if recruitment_candidate
+        else [],
+        "recruitment_explicit_change_terms": recruitment_candidate["explicit_change_terms"]
+        if recruitment_candidate
+        else [],
+        "recruitment_exclusions": recruitment_candidate["exclusions"]
+        if recruitment_candidate
+        else [],
+        "recruitment_is_apprenticeship": recruitment_candidate["is_apprenticeship"]
+        if recruitment_candidate
+        else False,
+    }
+    policy_candidate = {
+        "source_type": raw["source_type"],
+        "raw_text": raw.get("raw_text"),
+        "nursery_name": nursery_name,
+        "operator_name": raw.get("organisation_hint"),
+        "address": raw.get("location_hint"),
+        "event_type": event_type,
+        "extracted_facts": extracted_facts,
+        "metadata": metadata,
+    }
+    creation = opportunity_creation_decision(policy_candidate)
+    extracted_facts.update(
+        {
+            "opportunity_creation_decision": creation.decision,
+            "opportunity_change_type": creation.change_type,
+            "opportunity_creation_reason": creation.reason,
+        }
+    )
     return {
         "raw_signal_id": raw["id"],
         "schema_version": "1.0",
+        "source_type": raw["source_type"],
+        "raw_text": raw.get("raw_text"),
+        "metadata": metadata,
         "event_type": event_type,
         "nursery_name": nursery_name,
         "operator_name": raw.get("organisation_hint"),
@@ -90,66 +170,7 @@ def fixture_enrichment(
         "capacity": capacity,
         "lifecycle_stage": lifecycle_stage,
         "confidence": confidence,
-        "extracted_facts": {
-            "method": "fixture-v1",
-            "classification": classification,
-            "classification_rule_version": CLASSIFICATION_RULE_VERSION,
-            "childcare_terms": list(classification_result.childcare_terms),
-            "horticultural_terms": list(classification_result.horticultural_terms),
-            "likely_false_positive": (
-                classification_result.likely_false_positive or planning_excluded
-            ),
-            "planning_candidate_matched": (
-                planning_candidate.matched if planning_candidate is not None else None
-            ),
-            "planning_positive_terms": (
-                list(planning_candidate.positive_terms) if planning_candidate is not None else []
-            ),
-            "planning_exclusions": (
-                list(planning_candidate.exclusions) if planning_candidate is not None else []
-            ),
-            "school_nursery": school_nursery,
-            "source_type": raw["source_type"],
-            "recruitment_candidate_matched": recruitment_candidate["matched"]
-            if recruitment_candidate
-            else None,
-            "recruitment_role_categories": recruitment_candidate["role_categories"]
-            if recruitment_candidate
-            else [],
-            "recruitment_role_category": recruitment_candidate["role_category"]
-            if recruitment_candidate
-            else "unknown",
-            "recruitment_setting_categories": recruitment_candidate["setting_categories"]
-            if recruitment_candidate
-            else [],
-            "recruitment_setting_category": recruitment_candidate["setting_category"]
-            if recruitment_candidate
-            else "unknown",
-            "recruitment_relevance": recruitment_candidate["relevance"]
-            if recruitment_candidate
-            else "unknown",
-            "commercial_change_evidence": recruitment_candidate["commercial_change_evidence"]
-            if recruitment_candidate
-            else "NONE",
-            "recruitment_matched_role_terms": recruitment_candidate["matched_role_terms"]
-            if recruitment_candidate
-            else [],
-            "recruitment_matched_setting_terms": recruitment_candidate["matched_setting_terms"]
-            if recruitment_candidate
-            else [],
-            "recruitment_ambiguity_flags": recruitment_candidate["ambiguity_flags"]
-            if recruitment_candidate
-            else [],
-            "recruitment_explicit_change_terms": recruitment_candidate["explicit_change_terms"]
-            if recruitment_candidate
-            else [],
-            "recruitment_exclusions": recruitment_candidate["exclusions"]
-            if recruitment_candidate
-            else [],
-            "recruitment_is_apprenticeship": recruitment_candidate["is_apprenticeship"]
-            if recruitment_candidate
-            else False,
-        },
+        "extracted_facts": extracted_facts,
         "evidence": {
             "source_url": raw["source_url"],
             "title": raw["title"],

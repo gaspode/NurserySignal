@@ -157,10 +157,6 @@ Do not build these before the underlying signal quality justifies them.
 - automated outreach to detected organisations
 - enabling scheduled collectors before their validation gate is passed
 
-## Current next step
-
-Validate the opportunity matching foundation against a bounded mixed planning/recruitment sample. Review uncertain matches, manually correct obvious groupings, and measure whether postcode/name correlation is precise enough before adding richer identifiers or any AI-assisted matching; AI remains advisory-only and human review authoritative.
-
 Operational source visibility:
 - planning and recruitment collector runs are persisted as bounded summaries and exposed to administrators through the Sources page;
 - manual runs invoke only the configured collector Lambdas with server-controlled limits and do not change either daily schedule.
@@ -171,3 +167,9 @@ Opportunity matching foundation:
 - administrators can link, unlink, merge and split relationships through audited, history-preserving operations;
 - Opportunities, Unmatched Signals and Match Review are available in the internal admin UI;
 - manual relationship corrections are authoritative, and rejected automatic links are not recreated by routine matching.
+- opportunity creation is now gated separately from signal relevance: routine recruitment supports existing opportunities only, while strong material planning/change evidence can create opportunities;
+- bounded administrator recalculation can demote routine-only system opportunities, promote strong unmatched planning evidence and preserve source/review history; concise change-type titles are shown in the admin UI.
+
+Current next step:
+
+Run the bounded opportunity-creation recalculation against production data, review demotions/promotions and uncertain matches, then tune only from observed false positives or false negatives.

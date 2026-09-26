@@ -357,11 +357,12 @@ describe("admin frontend", () => {
 
   it("shows opportunities and links their evidence", async () => {
     const apiClient = vi.fn()
-      .mockResolvedValueOnce({ items: [{ id: "opp-1", name: "Little Acorns Nursery", lifecycle_stage: "STAFFING", confidence: 0.93, signal_count: 2, stage_reason: "same postcode and compatible operator/nursery name", event_type: "opening" }], total: 1 })
+      .mockResolvedValueOnce({ items: [{ id: "opp-1", name: "Little Acorns Nursery", lifecycle_stage: "PLANNING", change_type: "EXPANSION", confidence: 0.93, signal_count: 2, stage_reason: "same postcode and compatible operator/nursery name", event_type: "expansion" }], total: 1 })
       .mockResolvedValueOnce({ id: "opp-1", name: "Little Acorns Nursery", lifecycle_stage: "STAFFING", confidence: 0.93, signals: [{ id: "signal-1", source_type: "planning", title: "Change of use to day nursery", discovered_at: "2026-09-20T00:00:00Z", rule_confidence: 0.86, provenance: { reason: "same postcode" } }] });
     const onNavigate = vi.fn();
     render(<OpportunitiesPage apiClient={apiClient} onNavigate={onNavigate} />);
     expect(await screen.findByText("Little Acorns Nursery")).toBeInTheDocument();
+    expect(screen.getByText("Expansion")).toBeInTheDocument();
     await userEvent.click(screen.getByText("Little Acorns Nursery"));
     expect(onNavigate).toHaveBeenCalledWith("/opportunities/opp-1");
   });
@@ -369,11 +370,14 @@ describe("admin frontend", () => {
   it("shows unmatched signals and can create an opportunity from preserved evidence", async () => {
     const apiClient = vi.fn()
       .mockResolvedValueOnce(listResult([pendingItem]))
-      .mockResolvedValueOnce({ ...detail(), opportunity_id: null });
+      .mockResolvedValue(listResult([pendingItem]));
     const onNavigate = vi.fn();
     render(<UnmatchedSignalsPage apiClient={apiClient} onNavigate={onNavigate} />);
     expect(await screen.findByText(pendingItem.title)).toBeInTheDocument();
     expect(apiClient).toHaveBeenCalledWith(expect.stringContaining("unmatched=true"));
+    expect(apiClient).toHaveBeenCalledWith(expect.not.stringContaining("include_excluded=true"));
+    await userEvent.click(screen.getByRole("checkbox", { name: "Include rejected/false positives" }));
+    await waitFor(() => expect(apiClient).toHaveBeenLastCalledWith(expect.stringContaining("include_excluded=true")));
   });
 
   it("renders uncertain match review actions", async () => {

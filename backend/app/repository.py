@@ -13,6 +13,7 @@ from app.correlation import classify_match, recruitment_evidence_strength
 from app.db import connection
 from app.enrichment import fixture_enrichment
 from app.ingestion import NormalizedSignal
+from app.opportunity_policy import opportunity_creation_decision, opportunity_title
 from app.queueing import EnrichmentMessage, send_enrichment_message
 from app.recruitment import recruitment_record_from_signal
 
@@ -290,6 +291,8 @@ def list_signals(
     discovered_to: str | None = None,
     search: str | None = None,
     unmatched_only: bool = False,
+    include_excluded: bool = False,
+    opportunity_decision: str | None = None,
 ) -> dict[str, Any]:
     clauses = ["TRUE"]
     params: list[Any] = []
@@ -327,6 +330,18 @@ def list_signals(
             "NOT EXISTS (SELECT 1 FROM opportunity_signals active_os "
             "WHERE active_os.raw_signal_id = rs.id AND active_os.status = 'ACTIVE')"
         )
+        if not include_excluded:
+            clauses.append("COALESCE(se.review_status, '') <> 'REJECTED'")
+            clauses.append(
+                "COALESCE(se.extracted_facts->>'likely_false_positive', 'false') <> 'true'"
+            )
+            clauses.append(
+                "COALESCE(se.extracted_facts->>'opportunity_creation_decision', '') "
+                "<> 'IGNORE_FOR_OPPORTUNITY'"
+            )
+    if opportunity_decision:
+        clauses.append("se.extracted_facts->>'opportunity_creation_decision' = %s")
+        params.append(opportunity_decision)
     where = " AND ".join(clauses)
     with connection(settings) as conn:
         total = conn.execute(
@@ -947,7 +962,16 @@ def save_enrichment(settings: Settings, candidate: dict[str, Any]) -> bool:
 def correlate_signal(
     settings: Settings, signal_id: str, candidate: dict[str, Any]
 ) -> dict[str, Any]:
-    """Create/link a conservative v1 opportunity without changing the signal."""
+    """Create/link an opportunity only when the source supports that decision."""
+    creation = opportunity_creation_decision(candidate)
+    if creation.decision in {"IGNORE_FOR_OPPORTUNITY", "REVIEW"}:
+        return {
+            "opportunity_id": None,
+            "linked": False,
+            "created": False,
+            "creation_decision": creation.decision,
+            "reason": creation.reason,
+        }
     metadata = candidate.get("metadata") or {}
     postcode = metadata.get("postcode")
     name = (
@@ -958,7 +982,7 @@ def correlate_signal(
     )
     operator = candidate.get("operator_name")
     base_confidence = float(candidate.get("confidence") or 0.2)
-    source_type = str(metadata.get("source_type") or "")
+    source_type = str(metadata.get("source_type") or candidate.get("source_type") or "")
     recruitment_contribution, recruitment_reason = recruitment_evidence_strength(candidate)
     if source_type == "recruitment" and recruitment_contribution == 0:
         base_confidence = min(base_confidence, 0.35)
@@ -979,7 +1003,8 @@ def correlate_signal(
                  LEFT JOIN signal_enrichments se ON se.raw_signal_id = rs.id
                  WHERE os.opportunity_id = o.id ORDER BY rs.discovered_at LIMIT 1
                ) linked ON TRUE
-               ORDER BY o.updated_at DESC"""
+                 WHERE o.review_status NOT IN ('MERGED', 'REJECTED')
+                 ORDER BY o.updated_at DESC"""
         ).fetchall()
         match = None
         match_reason = None
@@ -1046,15 +1071,16 @@ def correlate_signal(
                     opportunity_id,
                 ),
             )
-        else:
+        elif creation.decision == "CREATE_OPPORTUNITY":
+            display_name = opportunity_title(candidate, creation)
             opportunity_id = conn.execute(
                 """INSERT INTO opportunities
                    (name, event_type, lifecycle_stage, confidence, confidence_breakdown,
-                    stage_reason, vertical, operator_name, address, postcode, town)
-                   VALUES (%s, %s, %s, %s, %s, %s, 'NURSERY', %s, %s, %s, %s)
+                    stage_reason, vertical, operator_name, address, postcode, town, change_type)
+                   VALUES (%s, %s, %s, %s, %s, %s, 'NURSERY', %s, %s, %s, %s, %s)
                    RETURNING id""",
                 (
-                    name,
+                    display_name,
                     candidate.get("event_type") or "other",
                     "PLANNING" if source_type == "planning" else "DISCOVERED",
                     base_confidence,
@@ -1076,8 +1102,18 @@ def correlate_signal(
                     candidate.get("address"),
                     postcode,
                     metadata.get("town") or metadata.get("locality"),
+                    creation.change_type,
                 ),
             ).fetchone()[0]
+        else:
+            conn.commit()
+            return {
+                "opportunity_id": None,
+                "linked": False,
+                "created": False,
+                "creation_decision": creation.decision,
+                "reason": creation.reason,
+            }
         conn.execute(
             """INSERT INTO opportunity_signals (
                    opportunity_id, raw_signal_id, relationship_type,
@@ -1107,7 +1143,158 @@ def correlate_signal(
     return {
         "opportunity_id": str(opportunity_id),
         "linked": bool(match),
+        "created": not bool(match),
+        "creation_decision": creation.decision,
         "reason": match_reason or "initial signal",
+    }
+
+
+def recalculate_opportunity_creation(
+    settings: Settings, *, actor: str, limit: int = 100, signal_ids: list[str] | None = None
+) -> dict[str, Any]:
+    """Boundedly recalculate opportunity creation from stored signal evidence."""
+    limit = min(max(limit, 1), 100)
+    with connection(settings) as conn:
+        params: list[Any] = []
+        where = "rs.source_type IN ('planning', 'recruitment')"
+        if signal_ids:
+            where += " AND rs.id = ANY(%s::uuid[])"
+            params.append(signal_ids[:limit])
+        rows = conn.execute(
+            f"""SELECT rs.id, rs.schema_version, rs.source_type, rs.source_url, rs.external_id,
+                       rs.discovered_at, rs.title, rs.raw_text, rs.location_hint,
+                       rs.organisation_hint, rs.metadata, se.review_status
+                FROM raw_signals rs LEFT JOIN signal_enrichments se ON se.raw_signal_id = rs.id
+                WHERE {where} ORDER BY rs.discovered_at DESC LIMIT %s""",
+            [*params, limit],
+        ).fetchall()
+    selected = 0
+    created = 0
+    linked = 0
+    routine_only_demoted = 0
+    review_required = 0
+    unchanged = 0
+    for row in rows:
+        selected += 1
+        raw = dict(
+            zip(
+                (
+                    "id",
+                    "schema_version",
+                    "source_type",
+                    "source_url",
+                    "external_id",
+                    "discovered_at",
+                    "title",
+                    "raw_text",
+                    "location_hint",
+                    "organisation_hint",
+                    "metadata",
+                    "review_status",
+                ),
+                row,
+            )
+        )
+        candidate = fixture_enrichment(raw)
+        facts = candidate["extracted_facts"]
+        creation = opportunity_creation_decision(candidate)
+        with connection(settings) as conn:
+            conn.execute(
+                """UPDATE signal_enrichments
+                   SET extracted_facts = COALESCE(extracted_facts, '{}'::jsonb) || %s
+                   WHERE raw_signal_id = %s""",
+                (Jsonb(facts), raw["id"]),
+            )
+            demoted = conn.execute(
+                """SELECT o.id
+                   FROM opportunities o JOIN opportunity_signals os ON os.opportunity_id = o.id
+                   JOIN raw_signals old_rs ON old_rs.id = os.raw_signal_id
+                   JOIN signal_enrichments old_se ON old_se.raw_signal_id = old_rs.id
+                   WHERE os.raw_signal_id = %s AND os.status = 'ACTIVE' AND os.created_by = 'SYSTEM'
+                     AND old_rs.source_type = 'recruitment'
+                     AND COALESCE(old_se.extracted_facts->>'recruitment_relevance', '')
+                         = 'RELEVANT_ROUTINE'
+                     AND COALESCE(old_se.extracted_facts->>'commercial_change_evidence', 'NONE')
+                         = 'NONE'
+                     AND (SELECT count(*) FROM opportunity_signals active_os
+                          WHERE active_os.opportunity_id = o.id AND active_os.status = 'ACTIVE') = 1
+                     AND NOT EXISTS (SELECT 1 FROM opportunity_signal_history h
+                                     WHERE h.opportunity_id = o.id AND h.action LIKE 'ADMIN%')""",
+                (raw["id"],),
+            ).fetchall()
+            for (opportunity_id,) in demoted:
+                _archive_relationship(
+                    conn,
+                    opportunity_id,
+                    raw["id"],
+                    "SYSTEM_RECALCULATE",
+                    actor,
+                    "routine recruitment does not create an opportunity",
+                )
+                conn.execute(
+                    """UPDATE opportunity_signals SET status = 'REJECTED', match_reason = %s
+                       WHERE opportunity_id = %s AND raw_signal_id = %s""",
+                    (
+                        "routine recruitment does not create an opportunity",
+                        opportunity_id,
+                        raw["id"],
+                    ),
+                )
+                conn.execute(
+                    """UPDATE opportunities
+                       SET review_status = 'REJECTED', updated_at = now()
+                       WHERE id = %s""",
+                    (opportunity_id,),
+                )
+                routine_only_demoted += 1
+            if creation.decision == "CREATE_OPPORTUNITY":
+                conn.execute(
+                    """UPDATE opportunities
+                       SET name = %s, change_type = %s, updated_at = now()
+                       WHERE id IN (
+                           SELECT os.opportunity_id FROM opportunity_signals os
+                           WHERE os.raw_signal_id = %s AND os.status = 'ACTIVE'
+                             AND os.created_by = 'SYSTEM'
+                       )
+                         AND NOT EXISTS (
+                             SELECT 1 FROM opportunity_signal_history h
+                             WHERE h.opportunity_id = opportunities.id AND h.action LIKE 'ADMIN%'
+                         )""",
+                    (opportunity_title(candidate, creation), creation.change_type, raw["id"]),
+                )
+            conn.commit()
+        result = correlate_signal(settings, str(raw["id"]), candidate)
+        if result.get("created"):
+            created += 1
+        elif result.get("linked"):
+            linked += 1
+        elif result.get("creation_decision") == "REVIEW":
+            review_required += 1
+        else:
+            unchanged += 1
+    operation = record_admin_audit(
+        settings,
+        action="opportunity_creation_recalculate",
+        actor=actor,
+        target_type="signal",
+        details={
+            "selected": selected,
+            "created": created,
+            "linked": linked,
+            "routine_only_demoted": routine_only_demoted,
+            "review_required": review_required,
+            "unchanged": unchanged,
+            "bounded": True,
+        },
+    )
+    return {
+        "operation_id": operation,
+        "selected": selected,
+        "created": created,
+        "linked": linked,
+        "routine_only_demoted": routine_only_demoted,
+        "review_required": review_required,
+        "unchanged": unchanged,
     }
 
 
@@ -1123,15 +1310,18 @@ def list_opportunities(
     where = " AND ".join(clauses)
     with connection(settings) as conn:
         total = conn.execute(
-            f"SELECT count(*) FROM opportunities o WHERE {where}", params
+            f"""SELECT count(*) FROM opportunities o
+                WHERE o.review_status NOT IN ('MERGED', 'REJECTED') AND {where}""",
+            params,
         ).fetchone()[0]
         rows = conn.execute(
             f"""SELECT o.id, o.name, o.operator_id, o.operator_name, o.address, o.postcode, o.town,
-                       o.vertical, o.event_type, o.lifecycle_stage, o.confidence,
+                       o.vertical, o.change_type, o.event_type, o.lifecycle_stage, o.confidence,
                        o.confidence_breakdown, o.stage_reason, o.first_seen_at, o.latest_update_at,
                        count(os.raw_signal_id) FILTER (WHERE os.status = 'ACTIVE')
                 FROM opportunities o LEFT JOIN opportunity_signals os ON os.opportunity_id = o.id
-                WHERE {where} GROUP BY o.id ORDER BY o.latest_update_at DESC LIMIT %s OFFSET %s""",
+                WHERE o.review_status NOT IN ('MERGED', 'REJECTED') AND {where}
+                GROUP BY o.id ORDER BY o.latest_update_at DESC LIMIT %s OFFSET %s""",
             [*params, limit, offset],
         ).fetchall()
     fields = (
@@ -1143,6 +1333,7 @@ def list_opportunities(
         "postcode",
         "town",
         "vertical",
+        "change_type",
         "event_type",
         "lifecycle_stage",
         "confidence",
@@ -1163,7 +1354,7 @@ def list_opportunities(
 def opportunity_detail(settings: Settings, opportunity_id: str) -> dict[str, Any] | None:
     with connection(settings) as conn:
         opportunity = conn.execute(
-            """SELECT id, name, operator_name, address, postcode, town, vertical,
+            """SELECT id, name, operator_name, address, postcode, town, vertical, change_type,
                       event_type, lifecycle_stage, confidence,
                       confidence_breakdown, stage_reason, first_seen_at,
                       latest_update_at FROM opportunities WHERE id = %s""",
@@ -1214,13 +1405,14 @@ def opportunity_detail(settings: Settings, opportunity_id: str) -> dict[str, Any
         "postcode": opportunity[4],
         "town": opportunity[5],
         "vertical": opportunity[6],
-        "event_type": opportunity[7],
-        "lifecycle_stage": opportunity[8],
-        "confidence": opportunity[9],
-        "confidence_breakdown": opportunity[10],
-        "stage_reason": opportunity[11],
-        "first_seen_at": opportunity[12],
-        "latest_update_at": opportunity[13],
+        "change_type": opportunity[7],
+        "event_type": opportunity[8],
+        "lifecycle_stage": opportunity[9],
+        "confidence": opportunity[10],
+        "confidence_breakdown": opportunity[11],
+        "stage_reason": opportunity[12],
+        "first_seen_at": opportunity[13],
+        "latest_update_at": opportunity[14],
         "signals": [dict(zip(fields, row)) for row in rows],
     }
 
@@ -1282,9 +1474,9 @@ def _archive_relationship(
 
 def _signal_summary(conn: Any, signal_id: str) -> tuple[Any, ...] | None:
     return conn.execute(
-        """SELECT rs.title, rs.source_type, rs.metadata, rs.organisation_hint,
+        """SELECT rs.title, rs.raw_text, rs.source_type, rs.metadata, rs.organisation_hint,
                   rs.location_hint, COALESCE(se.nursery_name, se.operator_name),
-                  se.event_type, se.lifecycle_stage, se.confidence
+                  se.event_type, se.lifecycle_stage, se.confidence, se.extracted_facts
            FROM raw_signals rs LEFT JOIN signal_enrichments se ON se.raw_signal_id = rs.id
            WHERE rs.id = %s""",
         (signal_id,),
@@ -1300,6 +1492,7 @@ def create_opportunity_from_signal(
             raise ValueError("signal_not_found")
         (
             title,
+            raw_text,
             source_type,
             metadata,
             organisation,
@@ -1308,6 +1501,7 @@ def create_opportunity_from_signal(
             event_type,
             lifecycle,
             confidence,
+            facts,
         ) = signal
         metadata = metadata or {}
         existing = conn.execute(
@@ -1317,13 +1511,34 @@ def create_opportunity_from_signal(
         ).fetchone()
         if existing:
             return {"opportunity_id": str(existing[0]), "created": False}
+        facts = facts or {}
+        creation = opportunity_creation_decision(
+            {
+                "source_type": source_type,
+                "raw_text": raw_text,
+                "nursery_name": name,
+                "operator_name": organisation,
+                "address": location,
+                "event_type": event_type,
+                "extracted_facts": facts,
+                "metadata": metadata,
+            }
+        )
         opportunity_id = conn.execute(
             """INSERT INTO opportunities
                (name, event_type, lifecycle_stage, confidence, vertical, operator_name,
-                address, postcode, town, stage_reason)
-               VALUES (%s, %s, %s, %s, 'NURSERY', %s, %s, %s, %s, %s) RETURNING id""",
+                address, postcode, town, stage_reason, change_type)
+               VALUES (%s, %s, %s, %s, 'NURSERY', %s, %s, %s, %s, %s, %s) RETURNING id""",
             (
-                name or organisation or title,
+                opportunity_title(
+                    {
+                        "operator_name": organisation,
+                        "address": location,
+                        "metadata": metadata,
+                        "raw_text": raw_text,
+                    },
+                    creation,
+                ),
                 event_type or "other",
                 lifecycle or "DISCOVERED",
                 confidence or 0,
@@ -1332,6 +1547,7 @@ def create_opportunity_from_signal(
                 metadata.get("postcode"),
                 metadata.get("town") or metadata.get("locality"),
                 "created by admin from signal",
+                creation.change_type,
             ),
         ).fetchone()[0]
         conn.execute(
@@ -1523,7 +1739,7 @@ def split_opportunity(
     with connection(settings) as conn:
         base = conn.execute(
             "SELECT name, event_type, lifecycle_stage, confidence, vertical, operator_name, "
-            "address, postcode, town FROM opportunities WHERE id = %s",
+            "address, postcode, town, change_type FROM opportunities WHERE id = %s",
             (opportunity_id,),
         ).fetchone()
         if not base:
@@ -1531,8 +1747,8 @@ def split_opportunity(
         new_id = conn.execute(
             """INSERT INTO opportunities
                (name, event_type, lifecycle_stage, confidence, vertical, operator_name,
-                address, postcode, town, stage_reason)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s,
+                address, postcode, town, change_type, stage_reason)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                        'created by admin split') RETURNING id""",
             (name or f"{base[0]} (split)", *base[1:]),
         ).fetchone()[0]

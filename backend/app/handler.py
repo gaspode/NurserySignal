@@ -22,6 +22,7 @@ from app.repository import (
     list_signals,
     merge_opportunities,
     opportunity_detail,
+    recalculate_opportunity_creation,
     record_admin_audit,
     reprocess_planning_signals,
     reprocess_recruitment_signals,
@@ -140,6 +141,8 @@ def _admin_path(path: str) -> tuple[str, str | None]:
         return "recruitment-reprocess", None
     if path == "/admin/opportunities":
         return "opportunity-list", None
+    if path == "/admin/opportunities/recalculate":
+        return "opportunity-recalculate", None
     if path.startswith("/admin/opportunities/"):
         parts = path[len("/admin/opportunities/") :].split("/")
         if len(parts) == 2 and parts[1] in {"link", "unlink", "merge", "split"}:
@@ -536,6 +539,8 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                         discovered_to=_query(event, "discovered_to"),
                         search=_query(event, "q"),
                         unmatched_only=_query(event, "unmatched") == "true",
+                        include_excluded=_query(event, "include_excluded") == "true",
+                        opportunity_decision=_query(event, "opportunity_decision"),
                     ),
                 )
             if action == "opportunity-list" and method == "GET":
@@ -548,6 +553,28 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                     200,
                     list_opportunities(
                         settings, limit=limit, offset=offset, search=_query(event, "q")
+                    ),
+                )
+            if action == "opportunity-recalculate" and method == "POST":
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                payload = parse_json_payload(_raw_body(event))
+                limit = min(max(int(payload.get("limit", 50)), 1), 100)
+                signal_ids = payload.get("signal_ids")
+                if signal_ids is not None:
+                    if (
+                        not isinstance(signal_ids, list)
+                        or not signal_ids
+                        or len(signal_ids) > limit
+                    ):
+                        raise ValueError("signal_ids must be a non-empty list within the limit")
+                    signal_ids = [str(UUID(str(value))) for value in signal_ids]
+                actor = str(claims.get("sub") or claims.get("username") or "unknown")
+                return _response(
+                    200,
+                    recalculate_opportunity_creation(
+                        settings, actor=actor, limit=limit, signal_ids=signal_ids
                     ),
                 )
             if action == "opportunity-detail" and method == "GET" and signal_id:

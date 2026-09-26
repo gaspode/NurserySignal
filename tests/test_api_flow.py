@@ -119,6 +119,8 @@ def test_admin_list_filters_and_paginates(monkeypatch) -> None:
         "discovered_to": None,
         "search": None,
         "unmatched_only": False,
+        "include_excluded": False,
+        "opportunity_decision": None,
     }
 
 
@@ -177,6 +179,39 @@ def test_admin_list_passes_bounded_text_search(monkeypatch) -> None:
     response = handler(event("/admin/signals", query={"q": "nursery planning ref"}), None)
     assert response["statusCode"] == 200
     assert captured["search"] == "nursery planning ref"
+
+
+def test_opportunity_recalculate_requires_admin_and_is_bounded(monkeypatch) -> None:
+    captured = {}
+
+    def fake_recalculate(settings, **kwargs):
+        captured.update(kwargs)
+        return {"selected": 1}
+
+    monkeypatch.setattr("app.handler.recalculate_opportunity_creation", fake_recalculate)
+    signal_id = str(uuid4())
+    response = handler(
+        event(
+            "/admin/opportunities/recalculate",
+            "POST",
+            body=json.dumps({"limit": 999, "signal_ids": [signal_id]}),
+            claims={"sub": "staff", "cognito:groups": ["NurserySignalAdmins"]},
+        ),
+        None,
+    )
+    assert response["statusCode"] == 200
+    assert captured == {"actor": "staff", "limit": 100, "signal_ids": [signal_id]}
+
+    denied = handler(
+        event(
+            "/admin/opportunities/recalculate",
+            "POST",
+            body=json.dumps({"limit": 1}),
+            claims={"sub": "staff", "cognito:groups": ["Other"]},
+        ),
+        None,
+    )
+    assert denied["statusCode"] == 403
 
 
 def test_sources_status_is_admin_only_and_includes_recent_runs(monkeypatch) -> None:
