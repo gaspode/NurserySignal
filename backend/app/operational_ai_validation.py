@@ -74,3 +74,48 @@ def run_bounded_recruitment_ai_validation(
             }
         )
     return {"selected": len(rows), "results": results}
+
+
+def compare_bounded_recruitment_ai_reviews(
+    settings: Settings, *, limit: int
+) -> dict[str, Any]:
+    if not 1 <= limit <= 25:
+        raise ValueError("limit must be between 1 and 25")
+    with connection(settings) as conn:
+        rows = conn.execute(
+            """
+            SELECT rs.title, rs.external_id, se.review_status,
+                   v2.recommendation, v2.confidence, v2.reason,
+                   v3.recommendation, v3.confidence, v3.reason,
+                   v3.recruitment_relevance, v3.commercial_change_evidence
+            FROM raw_signals rs
+            LEFT JOIN signal_enrichments se ON se.raw_signal_id = rs.id
+            LEFT JOIN signal_ai_reviews v2
+              ON v2.raw_signal_id = rs.id AND v2.provider = 'BEDROCK'
+             AND v2.prompt_version = 'shadow-v2'
+            LEFT JOIN signal_ai_reviews v3
+              ON v3.raw_signal_id = rs.id AND v3.provider = 'BEDROCK'
+             AND v3.prompt_version = %s
+            WHERE rs.source_type = 'recruitment' AND v3.id IS NOT NULL
+            ORDER BY rs.discovered_at, rs.id LIMIT %s
+            """,
+            (settings.ai_prompt_version, limit),
+        ).fetchall()
+    results = []
+    for row in rows:
+        results.append(
+            {
+                "title": row[0],
+                "external_id": row[1],
+                "review_status": row[2],
+                "v2": {"recommendation": row[3], "confidence": row[4], "reason": row[5]},
+                "v3": {
+                    "recommendation": row[6],
+                    "confidence": row[7],
+                    "reason": row[8],
+                    "recruitment_relevance": row[9],
+                    "commercial_change_evidence": row[10],
+                },
+            }
+        )
+    return {"count": len(results), "results": results}
