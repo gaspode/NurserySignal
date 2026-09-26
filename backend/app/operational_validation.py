@@ -11,6 +11,7 @@ from app.repository import (
     save_ai_review,
     signal_detail,
 )
+from app.recruitment import recruitment_record_from_signal
 
 
 def run_bounded_recruitment_validation(
@@ -58,6 +59,7 @@ def run_bounded_recruitment_validation(
         detail = signal_detail(settings, signal_id)
         enrichment = detail.get("enrichment") if detail else None
         facts = (enrichment or {}).get("extracted_facts") or {}
+        recruitment_record = recruitment_record_from_signal(detail or {})
         ai_reviews = detail.get("ai_reviews", []) if detail else []
         results.append(
             {
@@ -72,6 +74,8 @@ def run_bounded_recruitment_validation(
                 "relevance": facts.get("recruitment_relevance"),
                 "commercial_change_evidence": facts.get("commercial_change_evidence"),
                 "postcode": (detail.get("metadata") or {}).get("postcode") if detail else None,
+                "normalized_address": recruitment_record.address,
+                "normalized_postcode": recruitment_record.postcode,
                 "ai_reviews": [
                     {
                         "prompt_version": item.get("prompt_version"),
