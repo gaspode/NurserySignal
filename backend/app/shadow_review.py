@@ -20,6 +20,7 @@ def _result(
         "confidence": review.get("confidence"),
         "reason": review.get("reason"),
         "recruitment_relevance": review.get("recruitment_relevance"),
+        "planning_relevance": review.get("planning_relevance"),
         "commercial_change_evidence": review.get("commercial_change_evidence"),
         "model_id": review["model_id"],
         "prompt_version": review["prompt_version"],
@@ -38,7 +39,13 @@ def reevaluate_ai_shadow(settings: Settings, signal_id: str) -> dict[str, Any] |
     raw = get_raw_signal(settings, signal_id)
     if raw is None:
         return None
-    existing = get_ai_review(settings, signal_id, settings.ai_model_id, settings.ai_prompt_version)
+    source_type = str(raw.get("source_type") or "").lower()
+    prompt_version = (
+        settings.ai_planning_prompt_version
+        if source_type == "planning"
+        else settings.ai_recruitment_prompt_version
+    )
+    existing = get_ai_review(settings, signal_id, settings.ai_model_id, prompt_version)
     review_status = get_signal_review_status(settings, signal_id)
     if existing is not None:
         return _result(existing, idempotent=True, review_status=review_status)
@@ -47,7 +54,7 @@ def reevaluate_ai_shadow(settings: Settings, signal_id: str) -> dict[str, Any] |
     saved = save_ai_review(settings, signal_id, review)
     if not saved:
         existing = get_ai_review(
-            settings, signal_id, settings.ai_model_id, settings.ai_prompt_version
+            settings, signal_id, settings.ai_model_id, prompt_version
         )
         if existing is not None:
             return _result(existing, idempotent=True, review_status=review_status)

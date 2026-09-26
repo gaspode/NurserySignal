@@ -20,29 +20,51 @@ from app.logging import configure_logging
 
 logger = configure_logging()
 ALLOWED_RECOMMENDATIONS = {"APPROVE", "REJECT", "NEEDS_HUMAN"}
-PROMPT_VERSION = "shadow-v3"
-SYSTEM_PROMPT = """NurserySignal shadow review, prompt version shadow-v3.
-For recruitment sources, answer the PRIMARY question only: is this a genuine,
-commercially relevant recruitment signal associated with a UK nursery or
-early-years setting? The primary recommendation is about relevance, not growth.
-APPROVE routine and change recruitment at an identifiable nursery, preschool,
-nursery school, school-based nursery or early-years setting, including Early
-Years Educators, Nursery Practitioners, childcare apprentices, Nursery Managers,
-Deputies, Room Leaders and relevant teaching assistants. REJECT horticultural,
-plant or tree nursery roles, ordinary school roles with no nursery/EYFS relevance,
-unrelated healthcare roles, or generic education roles with no meaningful
-early-years setting. Use NEEDS_HUMAN only when relevance itself is genuinely
-ambiguous or evidence conflicts. The absence of opening or expansion evidence
-must never by itself cause REJECT for an otherwise relevant routine vacancy.
-Separately classify recruitment_relevance as RELEVANT_ROUTINE, RELEVANT_CHANGE,
-UNCERTAIN or IRRELEVANT, and commercial_change_evidence as NONE, WEAK or STRONG.
-Routine recruitment normally means NONE; explicit new/opening/expansion wording
-may mean STRONG. For non-recruitment sources, recruitment fields may be null.
-Return strict JSON only:
-{"recommendation":"APPROVE|REJECT|NEEDS_HUMAN","confidence":0.0,
-"reason":"brief reason",
-"recruitment_relevance":"RELEVANT_ROUTINE|RELEVANT_CHANGE|UNCERTAIN|IRRELEVANT|null",
-"commercial_change_evidence":"NONE|WEAK|STRONG|null"}."""
+RECRUITMENT_PROMPT_VERSION = "recruitment-shadow-v3"
+PLANNING_PROMPT_VERSION = "planning-shadow-v2"
+RECRUITMENT_SYSTEM_PROMPT = """NurserySignal recruitment shadow review,
+prompt version recruitment-shadow-v3.
+Answer ONLY: is this a genuine and commercially relevant recruitment signal associated
+with a UK nursery or early-years setting? APPROVE routine or change recruitment at an
+identifiable nursery, preschool, nursery school, school-based nursery or early-years
+setting. REJECT horticultural/plant/tree nursery roles, ordinary school roles with no
+nursery/EYFS relevance, unrelated healthcare roles, and generic education roles with
+no meaningful early-years setting. Use NEEDS_HUMAN only when relevance itself is
+genuinely ambiguous or evidence conflicts. Lack of opening/expansion evidence must
+never by itself cause REJECT. Separately classify recruitment_relevance as
+RELEVANT_ROUTINE, RELEVANT_CHANGE, UNCERTAIN or IRRELEVANT, and
+commercial_change_evidence as NONE, WEAK or STRONG. Return strict JSON only:
+{"recommendation":"APPROVE|REJECT|NEEDS_HUMAN","confidence":0.0,"reason":"brief reason",
+"recruitment_relevance":"RELEVANT_ROUTINE|RELEVANT_CHANGE|UNCERTAIN|IRRELEVANT",
+"commercial_change_evidence":"NONE|WEAK|STRONG"}."""
+PLANNING_SYSTEM_PROMPT = """NurserySignal planning shadow review, prompt version planning-shadow-v2.
+Answer ONLY: is this planning signal commercially relevant to a supplier serving UK
+nursery/early-years settings? APPROVE new nurseries, conversions to nursery/day
+nursery use, expansions or capacity increases, new nursery classrooms/buildings,
+additional provision, school-based nursery creation/expansion, planning responding to
+excess nursery demand, and material childcare alterations. REJECT horticultural,
+plant/tree nursery use, nursery only in an address/property name, incidental nearby
+nursery references, unrelated applications, or stale follow-up wording with no current
+commercial change. Use NEEDS_HUMAN for genuinely ambiguous or unclear operational
+wording. Classify planning_relevance as RELEVANT_CHANGE, RELEVANT_FOLLOWUP,
+RELEVANT_ROUTINE, UNCERTAIN or IRRELEVANT, and commercial_change_evidence as NONE,
+WEAK or STRONG. Do not emit recruitment_relevance. Return strict JSON only:
+{"recommendation":"APPROVE|REJECT|NEEDS_HUMAN","confidence":0.0,"reason":"brief reason",
+"planning_relevance":"RELEVANT_CHANGE|RELEVANT_FOLLOWUP|RELEVANT_ROUTINE|UNCERTAIN|IRRELEVANT",
+"commercial_change_evidence":"NONE|WEAK|STRONG"}."""
+
+
+def prompt_version_for(source_type: str | None, settings: Settings) -> str:
+    """Select a source-specific version, retaining compatibility for old callers."""
+    if source_type == "planning" and settings.ai_planning_prompt_version:
+        return settings.ai_planning_prompt_version
+    if source_type == "recruitment" and settings.ai_recruitment_prompt_version:
+        return settings.ai_recruitment_prompt_version
+    return settings.ai_prompt_version
+
+
+def system_prompt_for(source_type: str | None) -> str:
+    return PLANNING_SYSTEM_PROMPT if source_type == "planning" else RECRUITMENT_SYSTEM_PROMPT
 
 
 def _input_for_model(raw: dict[str, Any]) -> dict[str, Any]:
@@ -74,17 +96,20 @@ def _input_for_model(raw: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _failure(settings: Settings, category: str, started: float) -> dict[str, Any]:
+def _failure(
+    settings: Settings, category: str, started: float, source_type: str | None
+) -> dict[str, Any]:
     return {
         "provider": "BEDROCK",
         "model_id": settings.ai_model_id,
-        "prompt_version": settings.ai_prompt_version,
+        "prompt_version": prompt_version_for(source_type, settings),
         "status": "FAILED",
         "recommendation": None,
         "confidence": None,
         "reason": None,
         "commercial_change_evidence": None,
         "recruitment_relevance": None,
+        "planning_relevance": None,
         "failure_category": category,
         "attempted_at": time.time(),
         "evaluated_at": None,
@@ -116,6 +141,10 @@ def _parse(
     reason = parsed.get("reason")
     change_evidence = parsed.get("commercial_change_evidence", "NONE")
     recruitment_relevance = parsed.get("recruitment_relevance")
+    planning_relevance = parsed.get("planning_relevance") if source_type == "planning" else None
+    recruitment_relevance = (
+        parsed.get("recruitment_relevance") if source_type == "recruitment" else None
+    )
     if recommendation not in ALLOWED_RECOMMENDATIONS or not isinstance(confidence, (int, float)):
         raise ValueError("invalid structured response")
     if not math.isfinite(float(confidence)) or not 0 <= float(confidence) <= 1:
@@ -142,17 +171,23 @@ def _parse(
         ):
             recommendation = "APPROVE"
             reason = f"Relevant routine recruitment signal. {reason.strip()}"
+    elif source_type == "planning":
+        if planning_relevance not in {
+            "RELEVANT_CHANGE", "RELEVANT_FOLLOWUP", "RELEVANT_ROUTINE", "UNCERTAIN", "IRRELEVANT"
+        }:
+            raise ValueError("invalid planning relevance")
     usage = response.get("usage") or {}
     return {
         "provider": "BEDROCK",
         "model_id": settings.ai_model_id,
-        "prompt_version": settings.ai_prompt_version,
+        "prompt_version": prompt_version_for(source_type, settings),
         "status": "SUCCEEDED",
         "recommendation": recommendation,
         "confidence": float(confidence),
         "reason": reason.strip()[:500],
         "commercial_change_evidence": change_evidence,
         "recruitment_relevance": recruitment_relevance,
+        "planning_relevance": planning_relevance,
         "failure_category": None,
         "attempted_at": time.time(),
         "evaluated_at": time.time(),
@@ -164,6 +199,7 @@ def _parse(
 
 def evaluate_shadow(raw: dict[str, Any], settings: Settings) -> dict[str, Any]:
     started = time.perf_counter()
+    source_type = str(raw.get("source_type") or "").lower()
     try:
         client = boto3.client(
             "bedrock-runtime",
@@ -171,7 +207,6 @@ def evaluate_shadow(raw: dict[str, Any], settings: Settings) -> dict[str, Any]:
                 connect_timeout=3, read_timeout=20, retries={"max_attempts": 2, "mode": "standard"}
             ),
         )
-        source_type = str(raw.get("source_type") or "").lower()
         metadata = raw.get("metadata") if isinstance(raw.get("metadata"), dict) else {}
         deterministic_relevance = None
         classification = metadata.get("recruitment_classification")
@@ -179,7 +214,7 @@ def evaluate_shadow(raw: dict[str, Any], settings: Settings) -> dict[str, Any]:
             deterministic_relevance = classification.get("relevance")
         response = client.converse(
             modelId=settings.ai_model_id,
-            system=[{"text": SYSTEM_PROMPT}],
+            system=[{"text": system_prompt_for(source_type)}],
             messages=[
                 {
                     "role": "user",
@@ -192,7 +227,7 @@ def evaluate_shadow(raw: dict[str, Any], settings: Settings) -> dict[str, Any]:
             response, settings, started, source_type, deterministic_relevance
         )
     except (ReadTimeoutError, ConnectTimeoutError, EndpointConnectionError):
-        result = _failure(settings, "TIMEOUT", started)
+        result = _failure(settings, "TIMEOUT", started, source_type)
     except ClientError as exc:
         code = str(exc.response.get("Error", {}).get("Code", ""))
         http_status = exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
@@ -208,11 +243,11 @@ def evaluate_shadow(raw: dict[str, Any], settings: Settings) -> dict[str, Any]:
             http_status or "UNKNOWN",
             category,
         )
-        result = _failure(settings, category, started)
+        result = _failure(settings, category, started, source_type)
     except (ValueError, json.JSONDecodeError):
-        result = _failure(settings, "MALFORMED_RESPONSE", started)
+        result = _failure(settings, "MALFORMED_RESPONSE", started, source_type)
     except (BotoCoreError, Exception):
-        result = _failure(settings, "UNKNOWN", started)
+        result = _failure(settings, "UNKNOWN", started, source_type)
     logger.info(
         "ai_shadow status=%s category=%s model_id=%s latency_ms=%s",
         result["status"],

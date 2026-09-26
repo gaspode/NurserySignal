@@ -159,7 +159,7 @@ Do not build these before the underlying signal quality justifies them.
 
 ## Current next step
 
-Use the internal Sources page to monitor persisted planning/recruitment runs and bounded manual runs; compare routine recruitment against planning opportunities while keeping AI advisory-only.
+Validate source-aware AI shadow review against a bounded planning sample, including new provision, school nursery, expansion, horticultural and stale follow-up cases. Compare planning-shadow-v2 with recruitment-shadow-v3 while keeping AI advisory-only and human review authoritative.
 
 Operational source visibility:
 - planning and recruitment collector runs are persisted as bounded summaries and exposed to administrators through the Sources page;

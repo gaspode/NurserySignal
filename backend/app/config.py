@@ -21,6 +21,8 @@ class Settings:
     ai_shadow_enabled: bool = False
     ai_model_id: str = "eu.amazon.nova-lite-v1:0"
     ai_prompt_version: str = "shadow-v3"
+    ai_planning_prompt_version: str = "planning-shadow-v2"
+    ai_recruitment_prompt_version: str = "recruitment-shadow-v3"
     source_runs_table_name: str | None = None
     planning_collector_function_name: str | None = None
     recruitment_collector_function_name: str | None = None
@@ -49,6 +51,12 @@ class Settings:
             in {"1", "true", "yes"},
             ai_model_id=os.getenv("AI_MODEL_ID", "eu.amazon.nova-lite-v1:0"),
             ai_prompt_version=os.getenv("AI_PROMPT_VERSION", "shadow-v3"),
+            ai_planning_prompt_version=os.getenv(
+                "AI_PLANNING_PROMPT_VERSION", "planning-shadow-v2"
+            ),
+            ai_recruitment_prompt_version=os.getenv(
+                "AI_RECRUITMENT_PROMPT_VERSION", "recruitment-shadow-v3"
+            ),
             source_runs_table_name=os.getenv("SOURCE_RUNS_TABLE_NAME") or None,
             planning_collector_function_name=os.getenv("PLANNING_COLLECTOR_FUNCTION_NAME") or None,
             recruitment_collector_function_name=os.getenv("RECRUITMENT_COLLECTOR_FUNCTION_NAME")

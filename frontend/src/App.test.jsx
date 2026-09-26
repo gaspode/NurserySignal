@@ -159,6 +159,24 @@ describe("admin frontend", () => {
     expect(screen.queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();
   });
 
+  it("renders planning AI relevance without recruitment fields", async () => {
+    const value = detail();
+    value.ai_reviews = [{
+      status: "SUCCEEDED",
+      recommendation: "APPROVE",
+      confidence: 0.9,
+      planning_relevance: "RELEVANT_CHANGE",
+      commercial_change_evidence: "STRONG",
+      reason: "New nursery buildings address excess demand.",
+      model_id: "eu.amazon.nova-lite-v1:0",
+    }];
+    const apiClient = vi.fn().mockResolvedValue(value);
+    render(<SignalDetail signalId="signal-1" apiClient={apiClient} onBack={vi.fn()} />);
+    expect(await screen.findByText("Planning relevance")).toBeInTheDocument();
+    expect(screen.getByText("RELEVANT CHANGE")).toBeInTheDocument();
+    expect(screen.queryByText("Recruitment relevance")).not.toBeInTheDocument();
+  });
+
   it("shows collector status and starts a bounded manual source run", async () => {
     const planning = { key: "planning", display_name: "Planning applications", provider: "Plota", schedule_state: "ENABLED", schedule_expression: "rate(1 day)", last_status: "SUCCESS", last_summary: { records_fetched: 4, candidates_matched: 1, signals_queued: 1, excluded: 3, duplicates: 0, errors: 0 }, last_run: { id: "run-1", status: "SUCCESS", invocation_source: "scheduled", started_at: "2026-09-26T18:00:00Z" }, recent_runs: [] };
     const recruitment = { key: "recruitment", display_name: "Recruitment vacancies", provider: "GOV.UK Apprenticeships", schedule_state: "ENABLED", schedule_expression: "rate(1 day)", recent_runs: [] };

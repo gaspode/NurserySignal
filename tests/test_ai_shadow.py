@@ -51,6 +51,7 @@ def response(recommendation="APPROVE", confidence=0.91):
                                 "recommendation": recommendation,
                                 "confidence": confidence,
                                 "reason": "Explicit new childcare provision.",
+                                "planning_relevance": "RELEVANT_CHANGE",
                             }
                         )
                     }
@@ -114,9 +115,12 @@ def test_shadow_v2_records_commercial_change_evidence(monkeypatch):
                             "text": json.dumps(
                                 {
                                     "recommendation": "APPROVE",
-                                    "confidence": 0.85,
-                                    "reason": "Relevant recruitment at a nursery-school setting.",
-                                    "commercial_change_evidence": "NONE",
+                                        "confidence": 0.85,
+                                        "reason": (
+                                            "Relevant recruitment at a nursery-school setting."
+                                        ),
+                                        "planning_relevance": "RELEVANT_CHANGE",
+                                        "commercial_change_evidence": "NONE",
                                 }
                             )
                         }
@@ -126,8 +130,10 @@ def test_shadow_v2_records_commercial_change_evidence(monkeypatch):
         }
     )
     monkeypatch.setattr("app.ai_shadow.boto3.client", lambda *args, **kwargs: client)
-    result = evaluate_shadow(raw(), Settings(ai_prompt_version="shadow-v2"))
-    assert result["prompt_version"] == "shadow-v2"
+    result = evaluate_shadow(raw(), Settings(ai_planning_prompt_version="planning-shadow-v2"))
+    assert result["prompt_version"] == "planning-shadow-v2"
+    assert result["planning_relevance"] == "RELEVANT_CHANGE"
+    assert result["recruitment_relevance"] is None
     assert result["commercial_change_evidence"] == "NONE"
 
 
@@ -135,9 +141,9 @@ def test_shadow_v3_routine_recruitment_is_approved_even_without_growth_evidence(
     client = BedrockClient(recruitment_response("REJECT"))
     monkeypatch.setattr("app.ai_shadow.boto3.client", lambda *args, **kwargs: client)
     result = evaluate_shadow(
-        recruitment_raw(), Settings(ai_prompt_version="shadow-v3")
+        recruitment_raw(), Settings(ai_recruitment_prompt_version="recruitment-shadow-v3")
     )
-    assert result["prompt_version"] == "shadow-v3"
+    assert result["prompt_version"] == "recruitment-shadow-v3"
     assert result["recommendation"] == "APPROVE"
     assert result["recruitment_relevance"] == "RELEVANT_ROUTINE"
     assert result["commercial_change_evidence"] == "NONE"
@@ -147,11 +153,28 @@ def test_shadow_v3_requires_recruitment_relevance_and_preserves_change_dimension
     client = BedrockClient(recruitment_response("APPROVE", "RELEVANT_CHANGE"))
     monkeypatch.setattr("app.ai_shadow.boto3.client", lambda *args, **kwargs: client)
     result = evaluate_shadow(
-        recruitment_raw("RELEVANT_CHANGE"), Settings(ai_prompt_version="shadow-v3")
+        recruitment_raw("RELEVANT_CHANGE"),
+        Settings(ai_recruitment_prompt_version="recruitment-shadow-v3"),
     )
     assert result["recommendation"] == "APPROVE"
     assert result["recruitment_relevance"] == "RELEVANT_CHANGE"
     assert result["commercial_change_evidence"] == "NONE"
+
+
+def test_source_specific_prompts_do_not_cross_emit_semantics(monkeypatch):
+    planning_client = BedrockClient(response())
+    monkeypatch.setattr("app.ai_shadow.boto3.client", lambda *args, **kwargs: planning_client)
+    evaluate_shadow(raw(), Settings())
+    planning_prompt = planning_client.calls[0]["system"][0]["text"]
+    assert "planning-shadow-v2" in planning_prompt
+    assert "Do not emit recruitment_relevance" in planning_prompt
+
+    recruitment_client = BedrockClient(recruitment_response())
+    monkeypatch.setattr("app.ai_shadow.boto3.client", lambda *args, **kwargs: recruitment_client)
+    recruitment_result = evaluate_shadow(recruitment_raw(), Settings())
+    recruitment_prompt = recruitment_client.calls[0]["system"][0]["text"]
+    assert "recruitment-shadow-v3" in recruitment_prompt
+    assert recruitment_result["planning_relevance"] is None
 
 
 def test_shadow_rejects_malformed_or_invalid_confidence(monkeypatch):

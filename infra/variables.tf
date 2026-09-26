@@ -69,3 +69,15 @@ variable "ai_prompt_version" {
   default     = "shadow-v3"
   description = "Version of the shadow review prompt."
 }
+
+variable "ai_planning_prompt_version" {
+  type        = string
+  default     = "planning-shadow-v2"
+  description = "Source-specific version of the planning shadow-review prompt."
+}
+
+variable "ai_recruitment_prompt_version" {
+  type        = string
+  default     = "recruitment-shadow-v3"
+  description = "Source-specific version of the recruitment shadow-review prompt."
+}

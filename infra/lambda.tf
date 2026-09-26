@@ -41,6 +41,8 @@ resource "aws_lambda_function" "backend" {
       ADMIN_GROUP                         = aws_cognito_user_group.administrators.name
       AI_MODEL_ID                         = var.ai_model_id
       AI_PROMPT_VERSION                   = var.ai_prompt_version
+      AI_PLANNING_PROMPT_VERSION          = var.ai_planning_prompt_version
+      AI_RECRUITMENT_PROMPT_VERSION       = var.ai_recruitment_prompt_version
       SOURCE_RUNS_TABLE_NAME              = aws_dynamodb_table.source_runs.name
       PLANNING_COLLECTOR_FUNCTION_NAME    = aws_lambda_function.planning_collector.function_name
       RECRUITMENT_COLLECTOR_FUNCTION_NAME = aws_lambda_function.recruitment_collector.function_name
@@ -109,12 +111,14 @@ resource "aws_lambda_function" "enrichment" {
 
   environment {
     variables = {
-      APP_ENV           = var.environment
-      SERVICE_NAME      = "${local.name_prefix}-enrichment"
-      DB_SECRET_ARN     = aws_secretsmanager_secret.database.arn
-      AI_SHADOW_ENABLED = tostring(var.ai_shadow_enabled)
-      AI_MODEL_ID       = var.ai_model_id
-      AI_PROMPT_VERSION = var.ai_prompt_version
+      APP_ENV                       = var.environment
+      SERVICE_NAME                  = "${local.name_prefix}-enrichment"
+      DB_SECRET_ARN                 = aws_secretsmanager_secret.database.arn
+      AI_SHADOW_ENABLED             = tostring(var.ai_shadow_enabled)
+      AI_MODEL_ID                   = var.ai_model_id
+      AI_PROMPT_VERSION             = var.ai_prompt_version
+      AI_PLANNING_PROMPT_VERSION    = var.ai_planning_prompt_version
+      AI_RECRUITMENT_PROMPT_VERSION = var.ai_recruitment_prompt_version
     }
   }
 
