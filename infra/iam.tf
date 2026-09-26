@@ -206,7 +206,8 @@ resource "aws_iam_policy" "github_actions" {
         Action = [
           "dynamodb:DescribeTable",
           "dynamodb:DescribeContinuousBackups",
-          "dynamodb:DescribeTimeToLive"
+          "dynamodb:DescribeTimeToLive",
+          "dynamodb:ListTagsOfResource"
         ]
         Resource = aws_dynamodb_table.source_runs.arn
       },
