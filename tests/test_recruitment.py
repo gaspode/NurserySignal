@@ -83,6 +83,21 @@ def test_normalization_preserves_reference_and_location() -> None:
     )
 
 
+def test_normalization_falls_back_when_provider_application_url_is_relative() -> None:
+    record = normalize_gov_vacancy(
+        {
+            "vacancyReference": "VAC-RELATIVE",
+            "title": "Residential Support Worker Apprentice",
+            "applicationUrl": "/apply/VAC-RELATIVE",
+        },
+        "https://api.apprenticeships.education.gov.uk/vacancies",
+    )
+
+    assert record.source_url == (
+        "https://api.apprenticeships.education.gov.uk/vacancies/vacancy/VAC-RELATIVE"
+    )
+
+
 def test_gov_addresses_shape_preserves_teaching_assistant_postcode() -> None:
     record = normalize_gov_vacancy(
         {

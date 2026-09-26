@@ -193,6 +193,7 @@ Run the bounded opportunity-creation recalculation against production data, revi
 - CareSignal recruitment distinguishes routine supporting vacancies from explicit opening/pre-registration change evidence. Routine support-worker or manager recruitment cannot create an opportunity by itself.
 - Exact residential locations are marked internal-only for future subscriber projections, while source provenance remains available to authenticated administrators.
 - Evidence object identity is vertical-scoped, so one provider record can support independent NurserySignal and CareSignal records without sharing or losing document links.
+- GOV.UK vacancies with malformed optional application URLs fall back to their stable provider-reference URL so one provider record cannot abort a bounded shared Recruitment run.
 - Added source-specific advisory Bedrock prompt versions and a bounded stored-evidence backfill operation. AI remains advisory and cannot alter deterministic decisions or review state.
 
 Validation gate:

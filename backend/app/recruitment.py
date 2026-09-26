@@ -187,13 +187,14 @@ def normalize_gov_vacancy(record: dict[str, Any], base_url: str) -> RecruitmentR
         or "Untitled apprenticeship vacancy"
     )
     description = _text(record.get("description") or record.get("vacancyDescription")) or ""
-    url = (
-        record.get("applicationUrl")
-        or record.get("vacancyUrl")
-        or f"{base_url.rstrip('/')}/vacancy/{external_id}"
-    )
+    fallback_url = f"{base_url.rstrip('/')}/vacancy/{external_id}"
+    url = record.get("applicationUrl") or record.get("vacancyUrl") or fallback_url
+    # A small number of provider records contain a non-empty relative
+    # application URL. The stable vacancy reference still provides a safe
+    # canonical source URL; one malformed optional field must not abort an
+    # otherwise valid bounded collector run.
     if not str(url).startswith(("http://", "https://")):
-        raise ValueError("vacancy has no valid source URL")
+        url = fallback_url
     return RecruitmentRecord(
         provider="govuk-apprenticeships",
         external_id=str(external_id),
