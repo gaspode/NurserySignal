@@ -20,18 +20,29 @@ from app.logging import configure_logging
 
 logger = configure_logging()
 ALLOWED_RECOMMENDATIONS = {"APPROVE", "REJECT", "NEEDS_HUMAN"}
-PROMPT_VERSION = "shadow-v2"
-SYSTEM_PROMPT = """NurserySignal shadow review, prompt version shadow-v2.
-Assess whether this UK source is commercially useful to a supplier of nursery and
-early-years equipment or services. Separate setting relevance from evidence of a
-new opening or expansion. Routine recruitment at an existing nursery or
-nursery-school can be relevant, but does not prove commercial change. APPROVE
-credible nursery/early-years signals, including school-based nursery provision;
-REJECT horticultural/plant/tree nursery roles, address-only terms, unrelated
-school roles, stale follow-ups and incidental references. Use NEEDS_HUMAN when
-evidence is ambiguous. Return strict JSON only:
+PROMPT_VERSION = "shadow-v3"
+SYSTEM_PROMPT = """NurserySignal shadow review, prompt version shadow-v3.
+For recruitment sources, answer the PRIMARY question only: is this a genuine,
+commercially relevant recruitment signal associated with a UK nursery or
+early-years setting? The primary recommendation is about relevance, not growth.
+APPROVE routine and change recruitment at an identifiable nursery, preschool,
+nursery school, school-based nursery or early-years setting, including Early
+Years Educators, Nursery Practitioners, childcare apprentices, Nursery Managers,
+Deputies, Room Leaders and relevant teaching assistants. REJECT horticultural,
+plant or tree nursery roles, ordinary school roles with no nursery/EYFS relevance,
+unrelated healthcare roles, or generic education roles with no meaningful
+early-years setting. Use NEEDS_HUMAN only when relevance itself is genuinely
+ambiguous or evidence conflicts. The absence of opening or expansion evidence
+must never by itself cause REJECT for an otherwise relevant routine vacancy.
+Separately classify recruitment_relevance as RELEVANT_ROUTINE, RELEVANT_CHANGE,
+UNCERTAIN or IRRELEVANT, and commercial_change_evidence as NONE, WEAK or STRONG.
+Routine recruitment normally means NONE; explicit new/opening/expansion wording
+may mean STRONG. For non-recruitment sources, recruitment fields may be null.
+Return strict JSON only:
 {"recommendation":"APPROVE|REJECT|NEEDS_HUMAN","confidence":0.0,
-"reason":"brief reason","commercial_change_evidence":"NONE|WEAK|STRONG"}."""
+"reason":"brief reason",
+"recruitment_relevance":"RELEVANT_ROUTINE|RELEVANT_CHANGE|UNCERTAIN|IRRELEVANT|null",
+"commercial_change_evidence":"NONE|WEAK|STRONG|null"}."""
 
 
 def _input_for_model(raw: dict[str, Any]) -> dict[str, Any]:
@@ -49,6 +60,9 @@ def _input_for_model(raw: dict[str, Any]) -> dict[str, Any]:
         )
         if metadata.get(key) is not None
     }
+    recruitment_context = metadata.get("recruitment_classification")
+    if not isinstance(recruitment_context, dict):
+        recruitment_context = None
     return {
         "source_type": raw.get("source_type"),
         "title": str(raw.get("title") or "")[:2000],
@@ -56,6 +70,7 @@ def _input_for_model(raw: dict[str, Any]) -> dict[str, Any]:
         "location_hint": str(raw.get("location_hint") or "")[:1000],
         "organisation_hint": str(raw.get("organisation_hint") or "")[:1000],
         "metadata": useful_metadata,
+        "recruitment_context": recruitment_context,
     }
 
 
@@ -69,6 +84,7 @@ def _failure(settings: Settings, category: str, started: float) -> dict[str, Any
         "confidence": None,
         "reason": None,
         "commercial_change_evidence": None,
+        "recruitment_relevance": None,
         "failure_category": category,
         "attempted_at": time.time(),
         "evaluated_at": None,
@@ -78,7 +94,13 @@ def _failure(settings: Settings, category: str, started: float) -> dict[str, Any
     }
 
 
-def _parse(response: dict[str, Any], settings: Settings, started: float) -> dict[str, Any]:
+def _parse(
+    response: dict[str, Any],
+    settings: Settings,
+    started: float,
+    source_type: str | None,
+    deterministic_relevance: str | None,
+) -> dict[str, Any]:
     content = response.get("output", {}).get("message", {}).get("content", [])
     text = next(
         (item.get("text") for item in content if isinstance(item, dict) and item.get("text")), None
@@ -93,6 +115,7 @@ def _parse(response: dict[str, Any], settings: Settings, started: float) -> dict
     confidence = parsed.get("confidence")
     reason = parsed.get("reason")
     change_evidence = parsed.get("commercial_change_evidence", "NONE")
+    recruitment_relevance = parsed.get("recruitment_relevance")
     if recommendation not in ALLOWED_RECOMMENDATIONS or not isinstance(confidence, (int, float)):
         raise ValueError("invalid structured response")
     if not math.isfinite(float(confidence)) or not 0 <= float(confidence) <= 1:
@@ -101,6 +124,24 @@ def _parse(response: dict[str, Any], settings: Settings, started: float) -> dict
         raise ValueError("missing reason")
     if change_evidence not in {"NONE", "WEAK", "STRONG"}:
         raise ValueError("invalid commercial change evidence")
+    if source_type == "recruitment":
+        if recruitment_relevance not in {
+            "RELEVANT_ROUTINE",
+            "RELEVANT_CHANGE",
+            "UNCERTAIN",
+            "IRRELEVANT",
+        }:
+            raise ValueError("invalid recruitment relevance")
+        # A deterministic routine match is already known to be a relevant
+        # childcare-setting signal. Shadow AI may assess its strength, but the
+        # absence of growth evidence must not turn it into a rejection.
+        if (
+            deterministic_relevance == "RELEVANT_ROUTINE"
+            and recruitment_relevance == "RELEVANT_ROUTINE"
+            and recommendation != "APPROVE"
+        ):
+            recommendation = "APPROVE"
+            reason = f"Relevant routine recruitment signal. {reason.strip()}"
     usage = response.get("usage") or {}
     return {
         "provider": "BEDROCK",
@@ -111,6 +152,7 @@ def _parse(response: dict[str, Any], settings: Settings, started: float) -> dict
         "confidence": float(confidence),
         "reason": reason.strip()[:500],
         "commercial_change_evidence": change_evidence,
+        "recruitment_relevance": recruitment_relevance,
         "failure_category": None,
         "attempted_at": time.time(),
         "evaluated_at": time.time(),
@@ -129,6 +171,12 @@ def evaluate_shadow(raw: dict[str, Any], settings: Settings) -> dict[str, Any]:
                 connect_timeout=3, read_timeout=20, retries={"max_attempts": 2, "mode": "standard"}
             ),
         )
+        source_type = str(raw.get("source_type") or "").lower()
+        metadata = raw.get("metadata") if isinstance(raw.get("metadata"), dict) else {}
+        deterministic_relevance = None
+        classification = metadata.get("recruitment_classification")
+        if isinstance(classification, dict):
+            deterministic_relevance = classification.get("relevance")
         response = client.converse(
             modelId=settings.ai_model_id,
             system=[{"text": SYSTEM_PROMPT}],
@@ -140,7 +188,9 @@ def evaluate_shadow(raw: dict[str, Any], settings: Settings) -> dict[str, Any]:
             ],
             inferenceConfig={"temperature": 0.0, "maxTokens": 256},
         )
-        result = _parse(response, settings, started)
+        result = _parse(
+            response, settings, started, source_type, deterministic_relevance
+        )
     except (ReadTimeoutError, ConnectTimeoutError, EndpointConnectionError):
         result = _failure(settings, "TIMEOUT", started)
     except ClientError as exc:

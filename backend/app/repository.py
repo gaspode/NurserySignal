@@ -399,7 +399,8 @@ def signal_detail(settings: Settings, signal_id: str) -> dict[str, Any] | None:
         ).fetchall()
         ai_reviews = conn.execute(
             """SELECT id, provider, model_id, prompt_version, recommendation, confidence,
-                      reason, commercial_change_evidence, status, failure_category,
+                      reason, recruitment_relevance, commercial_change_evidence,
+                      status, failure_category,
                       attempted_at, evaluated_at,
                       input_tokens, output_tokens, latency_ms, created_at
                FROM signal_ai_reviews WHERE raw_signal_id = %s ORDER BY created_at DESC""",
@@ -439,6 +440,7 @@ def signal_detail(settings: Settings, signal_id: str) -> dict[str, Any] | None:
                     "recommendation",
                     "confidence",
                     "reason",
+                    "recruitment_relevance",
                     "commercial_change_evidence",
                     "status",
                     "failure_category",
@@ -1113,7 +1115,8 @@ def get_ai_review(
     with connection(settings) as conn:
         row = conn.execute(
             """SELECT id, provider, model_id, prompt_version, recommendation, confidence,
-                      reason, commercial_change_evidence, status, failure_category,
+                      reason, recruitment_relevance, commercial_change_evidence,
+                      status, failure_category,
                       attempted_at, evaluated_at,
                       input_tokens, output_tokens, latency_ms, created_at
                FROM signal_ai_reviews
@@ -1134,6 +1137,7 @@ def get_ai_review(
                 "recommendation",
                 "confidence",
                 "reason",
+                "recruitment_relevance",
                 "commercial_change_evidence",
                 "status",
                 "failure_category",
@@ -1163,7 +1167,7 @@ def save_ai_review(settings: Settings, signal_id: str, review: dict[str, Any]) -
         row = conn.execute(
             """INSERT INTO signal_ai_reviews (
                 raw_signal_id, provider, model_id, prompt_version, recommendation,
-                confidence, reason, commercial_change_evidence, status,
+                confidence, reason, recruitment_relevance, commercial_change_evidence, status,
                 failure_category, attempted_at,
                 evaluated_at, input_tokens, output_tokens, latency_ms
             ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
@@ -1178,6 +1182,7 @@ def save_ai_review(settings: Settings, signal_id: str, review: dict[str, Any]) -
                 review.get("recommendation"),
                 review.get("confidence"),
                 review.get("reason"),
+                review.get("recruitment_relevance"),
                 review.get("commercial_change_evidence"),
                 review["status"],
                 review.get("failure_category"),

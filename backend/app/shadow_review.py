@@ -19,6 +19,7 @@ def _result(
         "recommendation": review.get("recommendation"),
         "confidence": review.get("confidence"),
         "reason": review.get("reason"),
+        "recruitment_relevance": review.get("recruitment_relevance"),
         "commercial_change_evidence": review.get("commercial_change_evidence"),
         "model_id": review["model_id"],
         "prompt_version": review["prompt_version"],

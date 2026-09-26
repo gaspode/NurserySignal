@@ -61,6 +61,35 @@ def response(recommendation="APPROVE", confidence=0.91):
     }
 
 
+def recruitment_raw(relevance="RELEVANT_ROUTINE") -> dict:
+    value = raw()
+    value.update(
+        {
+            "source_type": "recruitment",
+            "title": "Early Years Educator",
+            "raw_text": "Early Years Educator at Alexandra Preschool.",
+            "metadata": {
+                "recruitment_classification": {
+                    "relevance": relevance,
+                    "commercial_change_evidence": "NONE",
+                    "role_category": "early_years_educator",
+                    "setting_category": "preschool",
+                }
+            },
+        }
+    )
+    return value
+
+
+def recruitment_response(recommendation="APPROVE", relevance="RELEVANT_ROUTINE"):
+    value = response(recommendation)
+    payload = json.loads(value["output"]["message"]["content"][0]["text"])
+    payload["recruitment_relevance"] = relevance
+    payload["commercial_change_evidence"] = "NONE"
+    value["output"]["message"]["content"][0]["text"] = json.dumps(payload)
+    return value
+
+
 def test_shadow_accepts_each_allowed_recommendation(monkeypatch):
     for recommendation in ("APPROVE", "REJECT", "NEEDS_HUMAN"):
         client = BedrockClient(response(recommendation))
@@ -99,6 +128,29 @@ def test_shadow_v2_records_commercial_change_evidence(monkeypatch):
     monkeypatch.setattr("app.ai_shadow.boto3.client", lambda *args, **kwargs: client)
     result = evaluate_shadow(raw(), Settings(ai_prompt_version="shadow-v2"))
     assert result["prompt_version"] == "shadow-v2"
+    assert result["commercial_change_evidence"] == "NONE"
+
+
+def test_shadow_v3_routine_recruitment_is_approved_even_without_growth_evidence(monkeypatch):
+    client = BedrockClient(recruitment_response("REJECT"))
+    monkeypatch.setattr("app.ai_shadow.boto3.client", lambda *args, **kwargs: client)
+    result = evaluate_shadow(
+        recruitment_raw(), Settings(ai_prompt_version="shadow-v3")
+    )
+    assert result["prompt_version"] == "shadow-v3"
+    assert result["recommendation"] == "APPROVE"
+    assert result["recruitment_relevance"] == "RELEVANT_ROUTINE"
+    assert result["commercial_change_evidence"] == "NONE"
+
+
+def test_shadow_v3_requires_recruitment_relevance_and_preserves_change_dimension(monkeypatch):
+    client = BedrockClient(recruitment_response("APPROVE", "RELEVANT_CHANGE"))
+    monkeypatch.setattr("app.ai_shadow.boto3.client", lambda *args, **kwargs: client)
+    result = evaluate_shadow(
+        recruitment_raw("RELEVANT_CHANGE"), Settings(ai_prompt_version="shadow-v3")
+    )
+    assert result["recommendation"] == "APPROVE"
+    assert result["recruitment_relevance"] == "RELEVANT_CHANGE"
     assert result["commercial_change_evidence"] == "NONE"
 
 

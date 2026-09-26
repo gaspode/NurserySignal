@@ -11,6 +11,7 @@ def test_initial_migration_exists_and_contains_provenance_tables() -> None:
         "0005_ai_shadow_reviews.sql",
         "0006_opportunity_correlation_v1.sql",
         "0007_recruitment_ai_shadow_v2.sql",
+        "0008_recruitment_ai_shadow_v3.sql",
     ]
     sql = "\n".join(path.read_text(encoding="utf-8") for path in files)
     tables = (
@@ -31,3 +32,4 @@ def test_initial_migration_exists_and_contains_provenance_tables() -> None:
     assert "CREATE TABLE IF NOT EXISTS signal_ai_reviews" in sql
     assert "UNIQUE (raw_signal_id, provider, model_id, prompt_version)" in sql
     assert "commercial_change_evidence" in sql
+    assert "recruitment_relevance" in sql

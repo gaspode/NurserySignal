@@ -40,7 +40,7 @@ def process_message(settings: Settings, body: str) -> None:
     )
     if getattr(settings, "ai_shadow_enabled", False):
         model_id = getattr(settings, "ai_model_id", "eu.amazon.nova-lite-v1:0")
-        prompt_version = getattr(settings, "ai_prompt_version", "shadow-v1")
+        prompt_version = getattr(settings, "ai_prompt_version", "shadow-v3")
         if not ai_review_exists(settings, message.signal_id, model_id, prompt_version):
             save_ai_review(settings, message.signal_id, evaluate_shadow(raw, settings))
 

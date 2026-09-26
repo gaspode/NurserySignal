@@ -67,7 +67,10 @@ The enrichment Lambda applies deterministic fixture classification and stores a
 `PENDING` candidate in `signal_enrichments`. New enrichment messages also get a
 separate advisory Bedrock shadow assessment in `signal_ai_reviews`; it never
 changes deterministic fields or human review state. The initial configurable
-model is `amazon.nova-lite-v1:0` with prompt version `shadow-v2`. Authenticated admins can
+model is `amazon.nova-lite-v1:0` with prompt version `shadow-v3`. For recruitment signals,
+the AI recommendation assesses setting/role relevance separately from commercial-change
+evidence: routine childcare recruitment can be APPROVE with `NONE` change evidence.
+Authenticated admins can
 inspect and review candidates with:
 
 - `GET /admin/signals`

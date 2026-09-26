@@ -66,6 +66,6 @@ variable "ai_model_regions" {
 
 variable "ai_prompt_version" {
   type        = string
-  default     = "shadow-v2"
+  default     = "shadow-v3"
   description = "Version of the shadow review prompt."
 }
