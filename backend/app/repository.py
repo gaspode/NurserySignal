@@ -1170,7 +1170,7 @@ def save_ai_review(settings: Settings, signal_id: str, review: dict[str, Any]) -
                 confidence, reason, recruitment_relevance, commercial_change_evidence, status,
                 failure_category, attempted_at,
                 evaluated_at, input_tokens, output_tokens, latency_ms
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                       to_timestamp(%s), to_timestamp(%s), %s, %s, %s)
             ON CONFLICT (raw_signal_id, provider, model_id, prompt_version) DO NOTHING
             RETURNING id""",
