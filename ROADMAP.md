@@ -110,7 +110,7 @@ Potential categories to investigate:
 
 Each new source should first be validated with a bounded sample before scheduled ingestion is enabled.
 
-## Phase 7 — Recruitment signals and opportunity correlation — IMPLEMENTED / VALIDATION PENDING
+## Phase 7 — Recruitment signals and opportunity correlation — OPERATIONAL
 
 - Selected the documented GOV.UK Find an Apprenticeship Display Advert API as the first recruitment provider. It supports bounded JSON vacancy queries, stable vacancy references and an independent subscription-key access path.
 - Reed was not selected for this first implementation because it requires a separate API key and its public documentation is less explicit about downstream data-use terms for this product. Specialist job boards and operator careers pages were deferred because they would add brittle, terms-sensitive HTML collection.
@@ -118,15 +118,19 @@ Each new source should first be validated with a bounded sample before scheduled
 - Recruitment classification now separates role evidence from setting evidence, preserves school-based nursery recruitment as relevant routine evidence, captures GOV.UK `addresses` postcodes, and distinguishes routine versus strong commercial-change evidence.
 - Opportunities and signal links now support conservative v1 correlation using exact postcode plus compatible operator/nursery names, with explainable provenance and independent evidence scoring. Recruitment alone remains a weak clue and cannot create a high-confidence opening opportunity.
 - Bedrock recruitment shadow assessments use versioned `shadow-v2` output with a separate commercial-change assessment; AI remains advisory-only.
-- The recruitment Lambda, private evidence flow and disabled daily `rate(1 day)` schedule are deployed through Terraform. The schedule remains disabled until the GOV.UK API key is configured and a bounded live sample is manually reviewed.
+- The recruitment Lambda, private evidence flow and daily `rate(1 day)` schedule are deployed through Terraform. The schedule is enabled with the bounded payload `source=scheduled`, `posted_since_days=7`, `max_records=50`, `page_size=25`.
 - A bounded admin-only recruitment reprocess operation is available for stored evidence and preserves human review history without creating ingestion, evidence or queue artefacts.
-- Final bounded validation of the deployed provider window fetched 100 records, matched 10 relevant routine vacancies, found no explicit change signals or provider errors, and retained postcodes for all 100 records; the schedule remains disabled pending explicit operational approval.
+- Final bounded validation of the deployed provider window fetched 100 records, matched 10 relevant routine vacancies, found no explicit change signals or provider errors, and retained postcodes for all 100 records. The three stored recruitment records were reprocessed from preserved evidence and received shadow-v2 assessments; all remained relevant routine evidence with no human review-state changes.
 - GOV.UK provider requests use a stable identifying User-Agent, trim secret-key whitespace, and expose only bounded/redacted provider error diagnostics for safe operational troubleshooting.
 
-Validation gate:
-- configure the Display Advert API subscription key in the recruitment-provider secret;
-- run a bounded sample and inspect every childcare candidate and automatic correlation;
-- enable the schedule only after precision, idempotency and correlation safety are demonstrated.
+Validation gate — COMPLETE:
+- Display Advert API subscription key configured privately in Secrets Manager;
+- bounded live sample manually inspected with no observed false positives or incorrect planning correlations;
+- stored-signal reprocessing and shadow-v2 assessment verified without duplicate ingestion artefacts;
+- daily recruitment collection enabled only after the gate passed.
+
+Operational guardrail:
+- Recruitment remains supporting evidence. Routine vacancies alone do not prove a new opening or expansion; explicit change evidence or independent corroboration is required for stronger opportunity progression.
 
 ## Phase 7 — Customer-facing product
 
@@ -155,4 +159,4 @@ Do not build these before the underlying signal quality justifies them.
 
 ## Current next step
 
-Configure the GOV.UK Display Advert API key, run the first bounded recruitment sample, and manually validate candidate quality and opportunity links before enabling recruitment collection.
+Monitor the first unattended recruitment runs and compare routine recruitment against planning opportunities; keep AI advisory-only while collecting a meaningful reviewed sample.

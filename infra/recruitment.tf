@@ -59,9 +59,9 @@ resource "aws_lambda_function" "recruitment_collector" {
 
 resource "aws_cloudwatch_event_rule" "recruitment_schedule" {
   name                = "${local.name_prefix}-recruitment-schedule"
-  description         = "Bounded GOV.UK apprenticeship recruitment collector; disabled until credential and sample validation"
+  description         = "Bounded GOV.UK apprenticeship recruitment collector"
   schedule_expression = "rate(1 day)"
-  state               = "DISABLED"
+  state               = "ENABLED"
   tags                = local.common_tags
 }
 
