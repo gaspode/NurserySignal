@@ -203,7 +203,7 @@ resource "aws_iam_policy" "github_actions" {
       },
       {
         Effect   = "Allow"
-        Action   = ["dynamodb:DescribeTable"]
+        Action   = ["dynamodb:DescribeTable", "dynamodb:DescribeContinuousBackups"]
         Resource = aws_dynamodb_table.source_runs.arn
       },
       {
