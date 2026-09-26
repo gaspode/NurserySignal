@@ -202,6 +202,11 @@ resource "aws_iam_policy" "github_actions" {
         ]
       },
       {
+        Effect   = "Allow"
+        Action   = ["dynamodb:DescribeTable"]
+        Resource = aws_dynamodb_table.source_runs.arn
+      },
+      {
         Effect = "Allow"
         Action = [
           "iam:CreatePolicyVersion", "iam:DeletePolicyVersion", "iam:GetPolicyVersion",
