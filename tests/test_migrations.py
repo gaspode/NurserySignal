@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from app.migrations import migration_files
 
 
@@ -35,3 +37,9 @@ def test_initial_migration_exists_and_contains_provenance_tables() -> None:
     assert "commercial_change_evidence" in sql
     assert "recruitment_relevance" in sql
     assert "planning_relevance" in sql
+
+
+def test_ai_review_insert_has_one_value_placeholder_per_column() -> None:
+    repository = Path("backend/app/repository.py").read_text()
+    statement = repository.split("def save_ai_review", 1)[1].split("ON CONFLICT", 1)[0]
+    assert statement.count("%s") == 17
