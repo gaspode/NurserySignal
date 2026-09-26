@@ -12,6 +12,7 @@ from app.config import Settings
 from app.db import check_connection
 from app.ingestion import NormalizedSignal
 from app.logging import configure_logging
+from app.operational_ai_validation import run_bounded_recruitment_ai_validation
 from app.repository import (
     list_opportunities,
     list_signals,
@@ -111,6 +112,12 @@ def _admin_path(path: str) -> tuple[str, str | None]:
 
 def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     settings = Settings.from_env()
+    if event.get("operation") == "bounded_recruitment_ai_validation":
+        return run_bounded_recruitment_ai_validation(
+            settings,
+            limit=int(event.get("limit", 1)),
+            signal_ids=event.get("signal_ids"),
+        )
     path = event.get("rawPath") or event.get("path") or "/"
     method = (event.get("requestContext", {}).get("http", {}).get("method") or "GET").upper()
     logger.info("request path=%s method=%s environment=%s", path, method, settings.environment)
