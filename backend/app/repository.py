@@ -1103,8 +1103,9 @@ def correlate_signal(
             opportunity_id = conn.execute(
                 """INSERT INTO opportunities
                    (name, event_type, lifecycle_stage, confidence, confidence_breakdown,
-                    stage_reason, vertical, operator_name, address, postcode, town, change_type)
-                   VALUES (%s, %s, %s, %s, %s, %s, 'NURSERY', %s, %s, %s, %s, %s)
+                    stage_reason, creation_reason, vertical, operator_name, address, postcode,
+                    town, change_type)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, 'NURSERY', %s, %s, %s, %s, %s)
                    RETURNING id""",
                 (
                     display_name,
@@ -1125,6 +1126,7 @@ def correlate_signal(
                         }
                     ),
                     "planning evidence" if source_type == "planning" else recruitment_reason,
+                    creation.reason,
                     operator,
                     candidate.get("address"),
                     postcode,
@@ -1483,9 +1485,12 @@ def list_opportunities(
     clauses = ["TRUE"]
     params: list[Any] = []
     if search:
-        clauses.append("(o.name ILIKE %s OR COALESCE(o.stage_reason, '') ILIKE %s)")
+        clauses.append(
+            "(o.name ILIKE %s OR COALESCE(o.creation_reason, '') ILIKE %s "
+            "OR COALESCE(o.stage_reason, '') ILIKE %s)"
+        )
         pattern = f"%{search[:200]}%"
-        params.extend([pattern, pattern])
+        params.extend([pattern, pattern, pattern])
     where = " AND ".join(clauses)
     with connection(settings) as conn:
         total = conn.execute(
@@ -1496,7 +1501,8 @@ def list_opportunities(
         rows = conn.execute(
             f"""SELECT o.id, o.name, o.operator_id, o.operator_name, o.address, o.postcode, o.town,
                        o.vertical, o.change_type, o.event_type, o.lifecycle_stage, o.confidence,
-                       o.confidence_breakdown, o.stage_reason, o.first_seen_at, o.latest_update_at,
+                       o.confidence_breakdown, o.stage_reason, o.creation_reason,
+                       o.first_seen_at, o.latest_update_at,
                        count(os.raw_signal_id) FILTER (WHERE os.status = 'ACTIVE')
                 FROM opportunities o LEFT JOIN opportunity_signals os ON os.opportunity_id = o.id
                 WHERE o.review_status NOT IN ('MERGED', 'REJECTED') AND {where}
@@ -1518,6 +1524,7 @@ def list_opportunities(
         "confidence",
         "confidence_breakdown",
         "stage_reason",
+        "creation_reason",
         "first_seen_at",
         "latest_update_at",
         "signal_count",
@@ -1535,7 +1542,7 @@ def opportunity_detail(settings: Settings, opportunity_id: str) -> dict[str, Any
         opportunity = conn.execute(
             """SELECT id, name, operator_name, address, postcode, town, vertical, change_type,
                       event_type, lifecycle_stage, confidence,
-                      confidence_breakdown, stage_reason, first_seen_at,
+                      confidence_breakdown, stage_reason, creation_reason, first_seen_at,
                       latest_update_at FROM opportunities WHERE id = %s""",
             (opportunity_id,),
         ).fetchone()
@@ -1590,8 +1597,9 @@ def opportunity_detail(settings: Settings, opportunity_id: str) -> dict[str, Any
         "confidence": opportunity[10],
         "confidence_breakdown": opportunity[11],
         "stage_reason": opportunity[12],
-        "first_seen_at": opportunity[13],
-        "latest_update_at": opportunity[14],
+        "creation_reason": opportunity[13],
+        "first_seen_at": opportunity[14],
+        "latest_update_at": opportunity[15],
         "signals": [dict(zip(fields, row)) for row in rows],
     }
 
@@ -1706,8 +1714,9 @@ def create_opportunity_from_signal(
         opportunity_id = conn.execute(
             """INSERT INTO opportunities
                (name, event_type, lifecycle_stage, confidence, vertical, operator_name,
-                address, postcode, town, stage_reason, change_type)
-               VALUES (%s, %s, %s, %s, 'NURSERY', %s, %s, %s, %s, %s, %s) RETURNING id""",
+                address, postcode, town, stage_reason, creation_reason, change_type)
+               VALUES (%s, %s, %s, %s, 'NURSERY', %s, %s, %s, %s, %s, %s, %s)
+               RETURNING id""",
             (
                 opportunity_title(
                     {
@@ -1726,6 +1735,7 @@ def create_opportunity_from_signal(
                 metadata.get("postcode"),
                 metadata.get("town") or metadata.get("locality"),
                 "created by admin from signal",
+                "Created manually from preserved signal evidence.",
                 creation.change_type,
             ),
         ).fetchone()[0]
@@ -1918,7 +1928,8 @@ def split_opportunity(
     with connection(settings) as conn:
         base = conn.execute(
             "SELECT name, event_type, lifecycle_stage, confidence, vertical, operator_name, "
-            "address, postcode, town, change_type FROM opportunities WHERE id = %s",
+            "address, postcode, town, change_type, creation_reason "
+            "FROM opportunities WHERE id = %s",
             (opportunity_id,),
         ).fetchone()
         if not base:
@@ -1926,8 +1937,8 @@ def split_opportunity(
         new_id = conn.execute(
             """INSERT INTO opportunities
                (name, event_type, lifecycle_stage, confidence, vertical, operator_name,
-                address, postcode, town, change_type, stage_reason)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                address, postcode, town, change_type, creation_reason, stage_reason)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                        'created by admin split') RETURNING id""",
             (name or f"{base[0]} (split)", *base[1:]),
         ).fetchone()[0]

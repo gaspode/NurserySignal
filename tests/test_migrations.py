@@ -17,6 +17,7 @@ def test_initial_migration_exists_and_contains_provenance_tables() -> None:
         "0009_source_aware_ai_shadow.sql",
         "0010_opportunity_matching_corrections.sql",
         "0011_opportunity_creation_policy.sql",
+        "0012_opportunity_reason_separation.sql",
     ]
     sql = "\n".join(path.read_text(encoding="utf-8") for path in files)
     tables = (
@@ -43,6 +44,7 @@ def test_initial_migration_exists_and_contains_provenance_tables() -> None:
     assert "CREATE TABLE IF NOT EXISTS opportunity_signal_history" in sql
     assert "opportunities_change_type_check" in sql
     assert "match_outcome" in sql
+    assert "creation_reason" in sql
 
 
 def test_ai_review_insert_has_one_value_placeholder_per_column() -> None:

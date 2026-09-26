@@ -1,7 +1,7 @@
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { Dashboard, LoginPage, MatchReviewPage, OpportunitiesPage, ReviewInboxPage, ReviewedSignalsPage, SignalDetail, SourcesPage, UnmatchedSignalsPage } from "./App.jsx";
+import { Dashboard, LoginPage, MatchReviewPage, OpportunitiesPage, OpportunityDetail, ReviewInboxPage, ReviewedSignalsPage, SignalDetail, SourcesPage, UnmatchedSignalsPage } from "./App.jsx";
 
 const pendingItem = {
   id: "signal-1",
@@ -357,12 +357,13 @@ describe("admin frontend", () => {
 
   it("shows opportunities and links their evidence", async () => {
     const apiClient = vi.fn()
-      .mockResolvedValueOnce({ items: [{ id: "opp-1", name: "Little Acorns Nursery", lifecycle_stage: "PLANNING", change_type: "EXPANSION", confidence: 0.93, signal_count: 2, stage_reason: "same postcode and compatible operator/nursery name", event_type: "expansion" }], total: 1 })
-      .mockResolvedValueOnce({ id: "opp-1", name: "Little Acorns Nursery", lifecycle_stage: "STAFFING", confidence: 0.93, signals: [{ id: "signal-1", source_type: "planning", title: "Change of use to day nursery", discovered_at: "2026-09-20T00:00:00Z", rule_confidence: 0.86, provenance: { reason: "same postcode" } }] });
+      .mockResolvedValueOnce({ items: [{ id: "opp-1", name: "Little Acorns Nursery", lifecycle_stage: "PLANNING", change_type: "EXPANSION", confidence: 0.93, signal_count: 2, creation_reason: "Planning evidence indicates expansion", stage_reason: "same postcode and compatible operator/nursery name", event_type: "expansion" }], total: 1 })
+      .mockResolvedValueOnce({ id: "opp-1", name: "Little Acorns Nursery", lifecycle_stage: "STAFFING", confidence: 0.93, creation_reason: "Planning evidence indicates expansion", signals: [{ id: "signal-1", source_type: "planning", title: "Change of use to day nursery", discovered_at: "2026-09-20T00:00:00Z", rule_confidence: 0.86, relationship_created_by: "SYSTEM", match_reason: "same postcode and compatible operator/nursery name" }] });
     const onNavigate = vi.fn();
     render(<OpportunitiesPage apiClient={apiClient} onNavigate={onNavigate} />);
     expect(await screen.findByText("Little Acorns Nursery")).toBeInTheDocument();
     expect(screen.getByText("Expansion")).toBeInTheDocument();
+    expect(screen.getByText("Planning evidence indicates expansion")).toBeInTheDocument();
     await userEvent.click(screen.getByText("Little Acorns Nursery"));
     expect(onNavigate).toHaveBeenCalledWith("/opportunities/opp-1");
   });
@@ -377,6 +378,31 @@ describe("admin frontend", () => {
     await userEvent.click(screen.getByRole("dialog").querySelector(".button.approve"));
     expect(await screen.findByRole("dialog")).toHaveTextContent("The recalculation could not be completed.");
     expect(screen.queryByText("admin_request_failed")).not.toBeInTheDocument();
+  });
+
+  it("separates opportunity basis from signal relationship reasons", async () => {
+    const apiClient = vi.fn().mockResolvedValue({
+      id: "opp-1",
+      name: "Little Acorns Nursery",
+      lifecycle_stage: "PLANNING",
+      change_type: "EXPANSION",
+      confidence: 0.93,
+      creation_reason: "Planning evidence indicates expansion",
+      stage_reason: "same postcode and compatible operator/nursery name",
+      signals: [{
+        id: "signal-1",
+        source_type: "planning",
+        title: "Capacity increase at nursery",
+        discovered_at: "2026-09-20T00:00:00Z",
+        rule_confidence: 0.86,
+        relationship_created_by: "SYSTEM",
+        match_reason: "same postcode and compatible operator/nursery name",
+      }],
+    });
+    render(<OpportunityDetail opportunityId="opp-1" apiClient={apiClient} onBack={vi.fn()} />);
+    expect(await screen.findByText("Planning evidence indicates expansion")).toBeInTheDocument();
+    expect(screen.queryByText("Initial signal established this opportunity.")).not.toBeInTheDocument();
+    expect(screen.getAllByText("same postcode and compatible operator/nursery name").length).toBeGreaterThan(0);
   });
 
   it("refreshes opportunity data after recalculation succeeds", async () => {

@@ -169,6 +169,7 @@ Opportunity matching foundation:
 - manual relationship corrections are authoritative, and rejected automatic links are not recreated by routine matching.
 - opportunity creation is now gated separately from signal relevance: routine recruitment supports existing opportunities only, while strong material planning/change evidence can create opportunities;
 - bounded administrator recalculation can demote routine-only system opportunities, promote strong unmatched planning evidence and preserve source/review history; concise change-type titles are shown in the admin UI.
+- opportunity basis/creation reasons are now stored separately from per-signal match reasons, so single-signal opportunities do not present relational matching text as their reason for existence.
 
 Current next step:
 
