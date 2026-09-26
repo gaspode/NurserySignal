@@ -367,6 +367,18 @@ describe("admin frontend", () => {
     expect(onNavigate).toHaveBeenCalledWith("/opportunities/opp-1");
   });
 
+  it("keeps recalculation errors inside the confirmation dialog", async () => {
+    const apiClient = vi.fn()
+      .mockResolvedValueOnce({ items: [], total: 0 })
+      .mockRejectedValueOnce(new Error("admin_request_failed"));
+    render(<OpportunitiesPage apiClient={apiClient} onNavigate={vi.fn()} />);
+    await screen.findByRole("heading", { name: "Opportunities" });
+    await userEvent.click(screen.getByRole("button", { name: "Recalculate opportunities" }));
+    await userEvent.click(screen.getByRole("dialog").querySelector(".button.approve"));
+    expect(await screen.findByRole("dialog")).toHaveTextContent("The recalculation could not be completed.");
+    expect(screen.queryByText("admin_request_failed")).not.toBeInTheDocument();
+  });
+
   it("shows unmatched signals and can create an opportunity from preserved evidence", async () => {
     const apiClient = vi.fn()
       .mockResolvedValueOnce(listResult([pendingItem]))

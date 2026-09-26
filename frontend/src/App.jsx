@@ -164,7 +164,7 @@ export function LoginPage({ onLogin, authError = "", configured = true, password
   );
 }
 
-function ConfirmationModal({ title, message, confirmLabel, danger = false, busy = false, onConfirm, onCancel }) {
+function ConfirmationModal({ title, message, confirmLabel, danger = false, busy = false, error = "", onConfirm, onCancel }) {
   const confirmRef = useRef(null);
   useEffect(() => {
     confirmRef.current?.focus();
@@ -179,6 +179,7 @@ function ConfirmationModal({ title, message, confirmLabel, danger = false, busy 
       <div className="modal" role="dialog" aria-modal="true" aria-labelledby="confirmation-title" onMouseDown={(event) => event.stopPropagation()}>
         <h2 id="confirmation-title">{title}</h2>
         <p className="muted">{message}</p>
+        {error && <p className="form-error" role="alert">{error}</p>}
         <div className="modal-actions">
           <button className="button secondary" onClick={onCancel} disabled={busy}>Cancel</button>
           <button ref={confirmRef} className={`button ${danger ? "reject" : "approve"}`} onClick={onConfirm} disabled={busy}>{busy ? "Saving…" : confirmLabel}</button>
@@ -380,7 +381,10 @@ function OpportunityRecalculateTool({ apiClient, onComplete }) {
     setBusy(true); setError("");
     try { const result = await apiClient("/admin/opportunities/recalculate", { method: "POST", body: JSON.stringify({ limit: 100 }) }); setOpen(false); onComplete(`Recalculated ${result.selected} signals; ${result.created} opportunities created and ${result.routine_only_demoted} routine-only opportunities demoted.`); } catch (e) { setError(e.message); } finally { setBusy(false); }
   }
-  return <><button className="button secondary" onClick={() => setOpen(true)}>Recalculate opportunities</button>{error && <span className="inline-error" role="alert">{error}</span>}{open && <ConfirmationModal title="Recalculate opportunities?" message="Up to 100 stored planning and recruitment signals will be re-evaluated from preserved evidence. Review history and source evidence remain intact." confirmLabel="Recalculate" busy={busy} onCancel={() => setOpen(false)} onConfirm={recalculate} />}</>;
+  const displayError = error === "admin_request_failed"
+    ? "The recalculation could not be completed. Please try again."
+    : error;
+  return <><button className="button secondary" onClick={() => { setError(""); setOpen(true); }}>Recalculate opportunities</button>{open && <ConfirmationModal title="Recalculate opportunities?" message="Up to 100 stored planning and recruitment signals will be re-evaluated from preserved evidence. Review history and source evidence remain intact." confirmLabel="Recalculate" busy={busy} error={displayError} onCancel={() => setOpen(false)} onConfirm={recalculate} />}</>;
 }
 
 function SignalListPage({ apiClient, onNavigate, initialQuery = "", mode }) {
