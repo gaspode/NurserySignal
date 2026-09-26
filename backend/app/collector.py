@@ -15,6 +15,7 @@ from app.planning import (
 )
 from app.queueing import SignalIngestionMessage, send_ingestion_message
 from app.secrets import provider_api_key_from_secret
+from app.source_runs import finish_run, safe_failure, start_run
 
 logger = configure_logging()
 
@@ -24,17 +25,23 @@ def collect_planning(
     event: dict[str, Any] | None = None,
     provider: PlanningProvider | None = None,
 ) -> dict[str, int]:
-    if provider is None:
-        if not settings.planning_provider_secret_arn:
-            raise RuntimeError("PLANNING_PROVIDER_SECRET_ARN is not configured")
-        api_key = provider_api_key_from_secret(settings.planning_provider_secret_arn)
-        provider = PlotaProvider(api_key, base_url=settings.planning_provider_base_url)
-    if not settings.ingestion_queue_url:
-        raise RuntimeError("INGESTION_QUEUE_URL is not configured")
-    query = PlanningQuery.from_event(event)
     event = event or {}
+    query = PlanningQuery.from_event(event)
     source = str(event.get("source", "manual"))[:32]
     lookback_days = min(max(int(event.get("lookback_days", 2)), 1), 31)
+    run_id, started_at = start_run(
+        settings,
+        source_key="planning",
+        provider="Plota",
+        invocation_source="scheduled" if source == "scheduled" else "manual",
+        parameters={
+            "lookback_days": lookback_days,
+            "max_records": query.max_records,
+            "page_size": query.page_size,
+        },
+        run_id=str(event.get("run_id")) if event.get("run_id") else None,
+        started_at=str(event.get("run_started_at")) if event.get("run_started_at") else None,
+    )
     counts = {
         "records_fetched": 0,
         "candidates_matched": 0,
@@ -43,7 +50,16 @@ def collect_planning(
         "excluded": 0,
         "errors": 0,
     }
+    status = "SUCCESS"
+    failure_category = failure_message = None
     try:
+        if provider is None:
+            if not settings.planning_provider_secret_arn:
+                raise RuntimeError("PLANNING_PROVIDER_SECRET_ARN is not configured")
+            api_key = provider_api_key_from_secret(settings.planning_provider_secret_arn)
+            provider = PlotaProvider(api_key, base_url=settings.planning_provider_base_url)
+        if not settings.ingestion_queue_url:
+            raise RuntimeError("INGESTION_QUEUE_URL is not configured")
         for record in provider.applications(query):
             counts["records_fetched"] += 1
             decision: CandidateDecision = candidate_decision(record)
@@ -71,7 +87,9 @@ def collect_planning(
                 logger.exception(
                     "planning_record_queue_failed application_id=%s", record.application_id
                 )
-    except Exception:
+    except Exception as exc:
+        status = "FAILED"
+        failure_category, failure_message = safe_failure(exc)
         counts["errors"] += 1
         raise
     finally:
@@ -88,6 +106,11 @@ def collect_planning(
             query.max_records,
             query.page_size,
             source,
+        )
+        finish_run(
+            settings, source_key="planning", run_id=run_id, started_at=started_at,
+            status=status, counts=counts, failure_category=failure_category,
+            failure_message=failure_message,
         )
     return counts
 

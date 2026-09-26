@@ -7,6 +7,8 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
+import boto3
+
 from app.authorization import normalized_groups
 from app.config import Settings
 from app.db import check_connection
@@ -16,6 +18,7 @@ from app.repository import (
     list_opportunities,
     list_signals,
     opportunity_detail,
+    record_admin_audit,
     reprocess_planning_signals,
     reprocess_recruitment_signals,
     review_signal,
@@ -23,9 +26,34 @@ from app.repository import (
 )
 from app.service import EnrichmentQueueError, SignalConflictError, ingest_signal, parse_json_payload
 from app.shadow_review import reevaluate_ai_shadow
+from app.source_runs import finish_run, list_runs, start_run
 from app.storage import EvidencePersistenceError, presigned_evidence_url
 
 logger = configure_logging()
+
+
+SOURCE_DEFINITIONS = {
+    "planning": {
+        "display_name": "Planning applications",
+        "provider": "Plota",
+        "schedule_state": "ENABLED",
+        "schedule_expression": "rate(1 day)",
+        "default_parameters": {
+            "source": "manual", "lookback_days": 2, "max_records": 100, "page_size": 25
+        },
+        "function_setting": "planning_collector_function_name",
+    },
+    "recruitment": {
+        "display_name": "Recruitment vacancies",
+        "provider": "GOV.UK Apprenticeships",
+        "schedule_state": "ENABLED",
+        "schedule_expression": "rate(1 day)",
+        "default_parameters": {
+            "source": "manual", "posted_since_days": 7, "max_records": 50, "page_size": 25
+        },
+        "function_setting": "recruitment_collector_function_name",
+    },
+}
 
 
 def _json_default(value: Any) -> str:
@@ -88,6 +116,10 @@ def _query(event: dict[str, Any], name: str) -> str | None:
 
 
 def _admin_path(path: str) -> tuple[str, str | None]:
+    if path == "/admin/sources":
+        return "source-list", None
+    if path in {"/admin/sources/planning/run", "/admin/sources/recruitment/run"}:
+        return "source-run", path.split("/")[3]
     if path == "/admin/planning/reprocess":
         return "reprocess", None
     if path == "/admin/recruitment/reprocess":
@@ -170,6 +202,105 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             return auth_error
         action, signal_id = _admin_path(path)
         try:
+            if action == "source-list" and method == "GET":
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                sources = []
+                for source_key, definition in SOURCE_DEFINITIONS.items():
+                    runs = list_runs(settings, source_key, limit=10)
+                    latest = runs[0] if runs else None
+                    successful = next((run for run in runs if run.get("status") == "SUCCESS"), None)
+                    sources.append(
+                        {
+                            "key": source_key,
+                            "display_name": definition["display_name"],
+                            "provider": definition["provider"],
+                            "schedule_state": definition["schedule_state"],
+                            "schedule_expression": definition["schedule_expression"],
+                            "last_attempt_at": latest.get("started_at") if latest else None,
+                            "last_success_at": (
+                                successful.get("completed_at") if successful else None
+                            ),
+                            "last_status": latest.get("status") if latest else None,
+                            "last_run": latest,
+                            "last_summary": latest.get("counts", {}) if latest else {},
+                            "last_error": (
+                                {
+                                    "category": latest.get("failure_category"),
+                                    "message": latest.get("failure_message"),
+                                }
+                                if latest and latest.get("failure_category")
+                                else None
+                            ),
+                            "manual_run_allowed": True,
+                            "default_parameters": definition["default_parameters"],
+                            "recent_runs": runs,
+                        }
+                    )
+                return _response(200, {"items": sources})
+            if action == "source-run" and method == "POST" and signal_id in SOURCE_DEFINITIONS:
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                definition = SOURCE_DEFINITIONS[signal_id]
+                function_name = getattr(settings, definition["function_setting"])
+                if not function_name:
+                    return _response(503, {"error": "collector_not_configured"})
+                parameters = dict(definition["default_parameters"])
+                run_id, started_at = start_run(
+                    settings,
+                    source_key=signal_id,
+                    provider=definition["provider"],
+                    invocation_source="manual",
+                    parameters=parameters,
+                )
+                payload = {**parameters, "run_id": run_id, "run_started_at": started_at}
+                try:
+                    response = boto3.client("lambda").invoke(
+                        FunctionName=function_name,
+                        InvocationType="Event",
+                        Payload=json.dumps(payload, separators=(",", ":")).encode(),
+                    )
+                    if response.get("StatusCode") not in {200, 202}:
+                        raise RuntimeError("collector invocation was not accepted")
+                except Exception as exc:
+                    category, message = type(exc).__name__, str(exc)[:240].replace("\n", " ")
+                    finish_run(
+                        settings, source_key=signal_id, run_id=run_id, started_at=started_at,
+                        status="FAILED",
+                        counts={},
+                        failure_category=category,
+                        failure_message=message,
+                    )
+                    logger.error(
+                        "source_manual_run_invoke_failed source=%s error_type=%s",
+                        signal_id,
+                        category,
+                    )
+                    return _response(503, {"error": "collector_invocation_failed"})
+                actor = str(claims.get("sub") or claims.get("username") or "unknown")
+                try:
+                    record_admin_audit(
+                        settings,
+                        action="source_manual_run",
+                        actor=actor,
+                        target_type="collector",
+                        details={
+                            "source_key": signal_id,
+                            "run_id": run_id,
+                            "parameters": parameters,
+                        },
+                    )
+                except Exception:
+                    logger.exception(
+                        "source_manual_run_audit_failed source=%s run_id=%s",
+                        signal_id,
+                        run_id,
+                    )
+                return _response(
+                    202, {"source_key": signal_id, "run_id": run_id, "status": "RUNNING"}
+                )
             if action == "reprocess" and method == "POST":
                 admin_error = _require_admin(claims, settings)
                 if admin_error:

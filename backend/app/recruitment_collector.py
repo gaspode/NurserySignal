@@ -14,6 +14,7 @@ from app.recruitment import (
     recruitment_signal,
 )
 from app.secrets import provider_api_key_from_secret
+from app.source_runs import finish_run, safe_failure, start_run
 
 logger = configure_logging()
 
@@ -23,17 +24,22 @@ def collect_recruitment(
     event: dict[str, Any] | None = None,
     provider: RecruitmentProvider | None = None,
 ) -> dict[str, int]:
-    if provider is None:
-        if not settings.recruitment_provider_secret_arn:
-            raise RuntimeError("RECRUITMENT_PROVIDER_SECRET_ARN is not configured")
-        api_key = provider_api_key_from_secret(settings.recruitment_provider_secret_arn)
-        provider = GovApprenticeshipProvider(
-            api_key, base_url=settings.recruitment_provider_base_url
-        )
-    if not settings.ingestion_queue_url:
-        raise RuntimeError("INGESTION_QUEUE_URL is not configured")
     event = event or {}
     query = RecruitmentQuery.from_event(event)
+    source = str(event.get("source", "manual"))[:32]
+    run_id, started_at = start_run(
+        settings,
+        source_key="recruitment",
+        provider="GOV.UK Apprenticeships",
+        invocation_source="scheduled" if source == "scheduled" else "manual",
+        parameters={
+            "posted_since_days": query.posted_since_days,
+            "max_records": query.max_records,
+            "page_size": query.page_size,
+        },
+        run_id=str(event.get("run_id")) if event.get("run_id") else None,
+        started_at=str(event.get("run_started_at")) if event.get("run_started_at") else None,
+    )
     counts = {
         "records_fetched": 0,
         "candidates_matched": 0,
@@ -42,7 +48,18 @@ def collect_recruitment(
         "excluded": 0,
         "errors": 0,
     }
+    status = "SUCCESS"
+    failure_category = failure_message = None
     try:
+        if provider is None:
+            if not settings.recruitment_provider_secret_arn:
+                raise RuntimeError("RECRUITMENT_PROVIDER_SECRET_ARN is not configured")
+            api_key = provider_api_key_from_secret(settings.recruitment_provider_secret_arn)
+            provider = GovApprenticeshipProvider(
+                api_key, base_url=settings.recruitment_provider_base_url
+            )
+        if not settings.ingestion_queue_url:
+            raise RuntimeError("INGESTION_QUEUE_URL is not configured")
         for record in provider.vacancies(query):
             counts["records_fetched"] += 1
             decision = classify_recruitment(record)
@@ -67,6 +84,8 @@ def collect_recruitment(
                     "recruitment_record_queue_failed external_id=%s", record.external_id
                 )
     except Exception as exc:
+        status = "FAILED"
+        failure_category, failure_message = safe_failure(exc)
         counts["errors"] += 1
         logger.error(
             "recruitment_provider_failed error_type=%s error=%s",
@@ -90,6 +109,11 @@ def collect_recruitment(
             query.max_records,
             query.page_size,
             event.get("source", "manual")[:32],
+        )
+        finish_run(
+            settings, source_key="recruitment", run_id=run_id, started_at=started_at,
+            status=status, counts=counts, failure_category=failure_category,
+            failure_message=failure_message,
         )
     return counts
 

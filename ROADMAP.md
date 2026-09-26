@@ -159,4 +159,8 @@ Do not build these before the underlying signal quality justifies them.
 
 ## Current next step
 
-Monitor the first unattended recruitment runs and compare routine recruitment against planning opportunities; keep AI advisory-only while collecting a meaningful reviewed sample.
+Use the internal Sources page to monitor persisted planning/recruitment runs and bounded manual runs; compare routine recruitment against planning opportunities while keeping AI advisory-only.
+
+Operational source visibility:
+- planning and recruitment collector runs are persisted as bounded summaries and exposed to administrators through the Sources page;
+- manual runs invoke only the configured collector Lambdas with server-controlled limits and do not change either daily schedule.

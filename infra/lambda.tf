@@ -33,14 +33,17 @@ resource "aws_lambda_function" "backend" {
 
   environment {
     variables = {
-      APP_ENV              = var.environment
-      SERVICE_NAME         = "${local.name_prefix}-api"
-      DB_SECRET_ARN        = aws_secretsmanager_secret.database.arn
-      EVIDENCE_BUCKET      = aws_s3_bucket.raw_evidence.bucket
-      ENRICHMENT_QUEUE_URL = aws_sqs_queue.enrichment.url
-      ADMIN_GROUP          = aws_cognito_user_group.administrators.name
-      AI_MODEL_ID          = var.ai_model_id
-      AI_PROMPT_VERSION    = var.ai_prompt_version
+      APP_ENV                             = var.environment
+      SERVICE_NAME                        = "${local.name_prefix}-api"
+      DB_SECRET_ARN                       = aws_secretsmanager_secret.database.arn
+      EVIDENCE_BUCKET                     = aws_s3_bucket.raw_evidence.bucket
+      ENRICHMENT_QUEUE_URL                = aws_sqs_queue.enrichment.url
+      ADMIN_GROUP                         = aws_cognito_user_group.administrators.name
+      AI_MODEL_ID                         = var.ai_model_id
+      AI_PROMPT_VERSION                   = var.ai_prompt_version
+      SOURCE_RUNS_TABLE_NAME              = aws_dynamodb_table.source_runs.name
+      PLANNING_COLLECTOR_FUNCTION_NAME    = aws_lambda_function.planning_collector.function_name
+      RECRUITMENT_COLLECTOR_FUNCTION_NAME = aws_lambda_function.recruitment_collector.function_name
     }
   }
 

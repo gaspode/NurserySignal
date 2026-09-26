@@ -17,6 +17,27 @@ from app.queueing import EnrichmentMessage, send_enrichment_message
 from app.recruitment import recruitment_record_from_signal
 
 
+def record_admin_audit(
+    settings: Settings,
+    *,
+    action: str,
+    actor: str,
+    target_type: str,
+    details: dict[str, Any],
+) -> str:
+    """Write a small audit event for an administrative operation."""
+    with connection(settings) as conn:
+        row = conn.execute(
+            """
+            INSERT INTO admin_audit_events (action, actor, target_type, details)
+            VALUES (%s, %s, %s, %s)
+            RETURNING id
+            """,
+            (action, actor, target_type, Jsonb(details)),
+        ).fetchone()
+    return str(row[0])
+
+
 @dataclass(frozen=True)
 class SignalIdentity:
     id: UUID

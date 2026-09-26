@@ -201,6 +201,7 @@ function Shell({ user, onLogout, onNavigate, currentPath, children }) {
           <button className={route.startsWith("/inbox") ? "nav-link active" : "nav-link"} onClick={() => onNavigate("/inbox")}>Review Inbox</button>
           <button className={route.startsWith("/history") ? "nav-link active" : "nav-link"} onClick={() => onNavigate("/history")}>Reviewed Signals</button>
           <button className={route.startsWith("/opportunities") ? "nav-link active" : "nav-link"} onClick={() => onNavigate("/opportunities")}>Opportunities</button>
+          <button className={route.startsWith("/sources") ? "nav-link active" : "nav-link"} onClick={() => onNavigate("/sources")}>Sources</button>
         </nav>
         <div className="sidebar-bottom">
           <span className="connection-dot" /> Production workspace
@@ -215,6 +216,64 @@ function Shell({ user, onLogout, onNavigate, currentPath, children }) {
       </div>
     </div>
   );
+}
+
+export function SourcesPage({ apiClient }) {
+  const [sources, setSources] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [running, setRunning] = useState(null);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const load = async ({ initial = false } = {}) => {
+    if (initial) setLoading(true); else setRefreshing(true);
+    setError("");
+    try { setSources((await apiClient("/admin/sources")).items || []); }
+    catch (loadError) { setError(loadError.message); }
+    finally { setLoading(false); setRefreshing(false); }
+  };
+  useEffect(() => { load({ initial: true }); }, []);
+  useEffect(() => {
+    if (!running) return undefined;
+    const timer = window.setInterval(async () => {
+      try {
+        const result = (await apiClient("/admin/sources")).items || [];
+        setSources(result);
+        const source = result.find((item) => item.key === running.sourceKey);
+        if (source?.last_run?.id === running.runId && source.last_run.status !== "RUNNING") {
+          setRunning(null);
+          setNotice(`${source.display_name} run ${source.last_run.status.toLowerCase()}.`);
+        }
+      } catch (pollError) { setError(pollError.message); }
+    }, 2000);
+    return () => window.clearInterval(timer);
+  }, [running, apiClient]);
+  async function run(source) {
+    setRunning({ sourceKey: source.key, runId: null });
+    setError(""); setNotice("");
+    try {
+      const result = await apiClient(`/admin/sources/${source.key}/run`, { method: "POST" });
+      setRunning({ sourceKey: source.key, runId: result.run_id });
+      await load();
+    } catch (runError) { setRunning(null); setError(runError.message); }
+  }
+  if (loading) return <LoadingState label="Loading sources" />;
+  return <section>
+    <div className="page-heading"><div><p className="eyebrow">Collection operations</p><h1>Sources</h1><p className="muted">Monitor configured collectors and start bounded manual runs.</p></div><RefreshButton busy={refreshing} onClick={load} /></div>
+    {notice && <div className="notice" role="status">{notice}</div>}{error && <ErrorState message={error} onRetry={load} />}
+    <div className="sources-grid">{sources.map((source) => {
+      const active = running?.sourceKey === source.key;
+      const summary = source.last_summary || {};
+      return <article className="panel source-card" key={source.key}>
+        <div className="source-card-heading"><div><p className="eyebrow">{source.key}</p><h2>{source.display_name}</h2><p className="muted">Provider: {source.provider}</p></div><Badge tone={source.schedule_state === "ENABLED" ? "approved" : "neutral"}>{source.schedule_state}</Badge></div>
+        <dl className="source-meta"><div><dt>Schedule</dt><dd>{source.schedule_expression}</dd></div><div><dt>Last status</dt><dd>{source.last_status || "No persisted run yet"}</dd></div><div><dt>Last attempt</dt><dd>{formatDate(source.last_attempt_at, true)}</dd></div><div><dt>Last successful</dt><dd>{formatDate(source.last_success_at, true)}</dd></div></dl>
+        {source.last_run && <><h3>Last result</h3><div className="source-counts"><span>Fetched <strong>{summary.records_fetched || 0}</strong></span><span>Matched <strong>{summary.candidates_matched || 0}</strong></span><span>Queued <strong>{summary.signals_queued || 0}</strong></span><span>Excluded <strong>{summary.excluded || 0}</strong></span><span>Duplicates <strong>{summary.duplicates || 0}</strong></span><span>Errors <strong>{summary.errors || 0}</strong></span></div><p className="muted small-text">{titleCase(source.last_run.invocation_source)} run</p></>}
+        {source.last_error && <div className="notice error-state">{source.last_error.category}: {source.last_error.message}</div>}
+        <button className="button primary" onClick={() => run(source)} disabled={Boolean(running)}>{active ? "Run in progress…" : "Run now"}</button>
+        {source.recent_runs?.length > 0 && <details className="source-history"><summary>Recent runs ({source.recent_runs.length})</summary>{source.recent_runs.map((item) => <div className="source-history-row" key={item.id}><span>{formatDate(item.started_at, true)} · {titleCase(item.invocation_source)}</span><Badge tone={item.status === "SUCCESS" ? "approved" : item.status === "FAILED" ? "rejected" : "pending"}>{item.status}</Badge></div>)}</details>}
+      </article>;
+    })}</div>
+  </section>;
 }
 
 export function Dashboard({ apiClient, onNavigate }) {
@@ -499,6 +558,6 @@ export default function App() {
   const detailMode = detailMatch?.[1] === "inbox" ? "inbox" : "history";
   const detailNotice = new URLSearchParams(listQuery).get("notice") || "";
   return <Shell user={auth.user} onLogout={auth.logout} onNavigate={navigate} currentPath={path}>
-    {detailMatch ? <SignalDetail signalId={detailMatch[2]} apiClient={apiClient} queueMode={detailMode === "inbox"} initialNotice={detailNotice} onBack={() => navigate(detailMode === "inbox" ? "/inbox" : "/history")} onReviewed={({ message, nextId }) => navigate(nextId ? `/inbox/${nextId}?notice=${encodeURIComponent(message)}` : `/inbox?notice=${encodeURIComponent(message)}`)} /> : opportunityMatch ? <OpportunityDetail opportunityId={opportunityMatch[1]} apiClient={apiClient} onBack={() => navigate("/opportunities")} /> : route === "/inbox" ? <ReviewInboxPage apiClient={apiClient} onNavigate={navigate} initialQuery={listQuery} /> : route === "/history" ? <ReviewedSignalsPage apiClient={apiClient} onNavigate={navigate} initialQuery={listQuery} /> : route === "/opportunities" ? <OpportunitiesPage apiClient={apiClient} onNavigate={navigate} /> : <Dashboard apiClient={apiClient} onNavigate={navigate} />}
+    {detailMatch ? <SignalDetail signalId={detailMatch[2]} apiClient={apiClient} queueMode={detailMode === "inbox"} initialNotice={detailNotice} onBack={() => navigate(detailMode === "inbox" ? "/inbox" : "/history")} onReviewed={({ message, nextId }) => navigate(nextId ? `/inbox/${nextId}?notice=${encodeURIComponent(message)}` : `/inbox?notice=${encodeURIComponent(message)}`)} /> : opportunityMatch ? <OpportunityDetail opportunityId={opportunityMatch[1]} apiClient={apiClient} onBack={() => navigate("/opportunities")} /> : route === "/inbox" ? <ReviewInboxPage apiClient={apiClient} onNavigate={navigate} initialQuery={listQuery} /> : route === "/history" ? <ReviewedSignalsPage apiClient={apiClient} onNavigate={navigate} initialQuery={listQuery} /> : route === "/opportunities" ? <OpportunitiesPage apiClient={apiClient} onNavigate={navigate} /> : route === "/sources" ? <SourcesPage apiClient={apiClient} /> : <Dashboard apiClient={apiClient} onNavigate={navigate} />}
   </Shell>;
 }

@@ -45,6 +45,16 @@ resource "aws_iam_role_policy" "lambda_application" {
         Effect   = "Allow"
         Action   = ["bedrock:InvokeModel"]
         Resource = local.ai_invoke_resources
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["dynamodb:Query"]
+        Resource = aws_dynamodb_table.source_runs.arn
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["lambda:InvokeFunction"]
+        Resource = [aws_lambda_function.planning_collector.arn, aws_lambda_function.recruitment_collector.arn]
       }
     ]
   })

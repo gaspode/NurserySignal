@@ -1,7 +1,7 @@
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { Dashboard, LoginPage, OpportunitiesPage, ReviewInboxPage, ReviewedSignalsPage, SignalDetail } from "./App.jsx";
+import { Dashboard, LoginPage, OpportunitiesPage, ReviewInboxPage, ReviewedSignalsPage, SignalDetail, SourcesPage } from "./App.jsx";
 
 const pendingItem = {
   id: "signal-1",
@@ -157,6 +157,21 @@ describe("admin frontend", () => {
     expect(screen.getByText("AI confidence")).toBeInTheDocument();
     expect(screen.getByText("Explicit new childcare provision.")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();
+  });
+
+  it("shows collector status and starts a bounded manual source run", async () => {
+    const planning = { key: "planning", display_name: "Planning applications", provider: "Plota", schedule_state: "ENABLED", schedule_expression: "rate(1 day)", last_status: "SUCCESS", last_summary: { records_fetched: 4, candidates_matched: 1, signals_queued: 1, excluded: 3, duplicates: 0, errors: 0 }, last_run: { id: "run-1", status: "SUCCESS", invocation_source: "scheduled", started_at: "2026-09-26T18:00:00Z" }, recent_runs: [] };
+    const recruitment = { key: "recruitment", display_name: "Recruitment vacancies", provider: "GOV.UK Apprenticeships", schedule_state: "ENABLED", schedule_expression: "rate(1 day)", recent_runs: [] };
+    const apiClient = vi.fn()
+      .mockResolvedValueOnce({ items: [planning, recruitment] })
+      .mockResolvedValueOnce({ run_id: "run-2", status: "RUNNING" })
+      .mockResolvedValueOnce({ items: [{ ...planning, last_run: { id: "run-2", status: "SUCCESS", invocation_source: "manual", started_at: "2026-09-26T19:00:00Z" }, last_status: "SUCCESS" }, recruitment] });
+    render(<SourcesPage apiClient={apiClient} />);
+    expect(await screen.findByRole("heading", { name: "Sources" })).toBeInTheDocument();
+    expect(screen.getByText("Planning applications")).toBeInTheDocument();
+    await userEvent.click(screen.getAllByRole("button", { name: "Run now" })[0]);
+    expect(apiClient).toHaveBeenCalledWith("/admin/sources/planning/run", { method: "POST" });
+    expect(await screen.findByText("Run in progress…")).toBeInTheDocument();
   });
 
   it("shows recruitment role, setting, routine relevance and change evidence", async () => {

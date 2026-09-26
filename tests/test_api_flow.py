@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from decimal import Decimal
+from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 from app.authorization import normalized_groups
@@ -131,6 +132,63 @@ def test_admin_list_passes_bounded_text_search(monkeypatch) -> None:
     response = handler(event("/admin/signals", query={"q": "nursery planning ref"}), None)
     assert response["statusCode"] == 200
     assert captured["search"] == "nursery planning ref"
+
+
+def test_sources_status_is_admin_only_and_includes_recent_runs(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "app.handler.list_runs",
+        lambda settings, source_key, limit=10: [{
+            "id": "run-1", "status": "SUCCESS", "started_at": "2026-09-26T18:00:00Z",
+            "completed_at": "2026-09-26T18:00:02Z", "invocation_source": "scheduled",
+            "counts": {"records_fetched": 4}, "parameters": {},
+        }],
+    )
+    admin_claims = {**CLAIMS, "cognito:groups": ["NurserySignalAdmins"]}
+    response = handler(event("/admin/sources", claims=admin_claims), None)
+    assert response["statusCode"] == 200
+    body = json.loads(response["body"])
+    assert {item["key"] for item in body["items"]} == {"planning", "recruitment"}
+    assert body["items"][0]["last_run"]["status"] == "SUCCESS"
+    assert handler(event("/admin/sources"), None)["statusCode"] == 403
+
+
+def test_source_manual_run_uses_fixed_bounds_and_exact_lambda(monkeypatch) -> None:
+    settings = SimpleNamespace(
+        environment="test",
+        admin_group="NurserySignalAdmins",
+        source_runs_table_name=None,
+        planning_collector_function_name="nurserysignal-prod-planning-collector",
+        recruitment_collector_function_name="nurserysignal-prod-recruitment-collector",
+    )
+    monkeypatch.setattr("app.handler.Settings.from_env", lambda: settings)
+    monkeypatch.setattr(
+        "app.handler.start_run", lambda *args, **kwargs: ("run-1", "2026-09-26T19:00:00Z")
+    )
+    monkeypatch.setattr("app.handler.record_admin_audit", lambda *args, **kwargs: "audit-1")
+    calls = []
+
+    class FakeLambda:
+        def invoke(self, **kwargs):
+            calls.append(kwargs)
+            return {"StatusCode": 202}
+
+    monkeypatch.setattr("app.handler.boto3.client", lambda name: FakeLambda())
+    response = handler(
+        event(
+            "/admin/sources/planning/run",
+            "POST",
+            body=json.dumps({"max_records": 999999, "function_name": "evil"}),
+            claims={**CLAIMS, "cognito:groups": ["NurserySignalAdmins"]},
+        ),
+        None,
+    )
+    assert response["statusCode"] == 202
+    assert calls[0]["FunctionName"] == settings.planning_collector_function_name
+    payload = json.loads(calls[0]["Payload"])
+    assert payload == {
+        "source": "manual", "lookback_days": 2, "max_records": 100,
+        "page_size": 25, "run_id": "run-1", "run_started_at": "2026-09-26T19:00:00Z",
+    }
 
 
 def test_admin_detail_and_review_actions(monkeypatch) -> None:

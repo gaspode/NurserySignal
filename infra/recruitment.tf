@@ -30,7 +30,8 @@ resource "aws_iam_role_policy" "recruitment_collector_application" {
     Version = "2012-10-17"
     Statement = [
       { Effect = "Allow", Action = ["secretsmanager:GetSecretValue"], Resource = aws_secretsmanager_secret.recruitment_provider.arn },
-      { Effect = "Allow", Action = ["sqs:SendMessage"], Resource = aws_sqs_queue.ingestion.arn }
+      { Effect = "Allow", Action = ["sqs:SendMessage"], Resource = aws_sqs_queue.ingestion.arn },
+      { Effect = "Allow", Action = ["dynamodb:PutItem", "dynamodb:UpdateItem"], Resource = aws_dynamodb_table.source_runs.arn }
     ]
   })
 }
@@ -51,6 +52,7 @@ resource "aws_lambda_function" "recruitment_collector" {
       INGESTION_QUEUE_URL             = aws_sqs_queue.ingestion.url
       RECRUITMENT_PROVIDER_SECRET_ARN = aws_secretsmanager_secret.recruitment_provider.arn
       RECRUITMENT_PROVIDER_BASE_URL   = "https://api.apprenticeships.education.gov.uk/vacancies"
+      SOURCE_RUNS_TABLE_NAME          = aws_dynamodb_table.source_runs.name
     }
   }
   depends_on = [aws_cloudwatch_log_group.recruitment_collector]
