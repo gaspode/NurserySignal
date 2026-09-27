@@ -21,8 +21,43 @@ function forgetRememberedUser(config) {
   if (hasAuthConfig(config)) window.sessionStorage.removeItem(rememberedUserKey(config));
 }
 
+function cognitoStorageKeys(config, username) {
+  const prefix = `CognitoIdentityServiceProvider.${config.clientId}`;
+  return [
+    `${prefix}.LastAuthUser`,
+    `${prefix}.${username}.idToken`,
+    `${prefix}.${username}.accessToken`,
+    `${prefix}.${username}.refreshToken`,
+    `${prefix}.${username}.clockDrift`,
+    `${prefix}.${username}.userData`,
+    `${prefix}.${username}.deviceKey`,
+    `${prefix}.${username}.randomPasswordKey`,
+    `${prefix}.${username}.deviceGroupKey`,
+  ];
+}
+
+export function migrateLegacyCognitoStorage(config = appConfig) {
+  if (!hasAuthConfig(config)) return;
+  const rememberedUsername = window.sessionStorage.getItem(rememberedUserKey(config));
+  const sdkLastUserKey = `CognitoIdentityServiceProvider.${config.clientId}.LastAuthUser`;
+  const legacyUsername = window.localStorage.getItem(sdkLastUserKey);
+  if (!legacyUsername) return;
+
+  const keys = cognitoStorageKeys(config, legacyUsername);
+  if (rememberedUsername === legacyUsername) {
+    for (const key of keys) {
+      const value = window.localStorage.getItem(key);
+      if (value !== null && window.sessionStorage.getItem(key) === null) {
+        window.sessionStorage.setItem(key, value);
+      }
+    }
+  }
+  for (const key of keys) window.localStorage.removeItem(key);
+}
+
 export function createUserPool(config = appConfig) {
   if (!hasAuthConfig(config)) return null;
+  migrateLegacyCognitoStorage(config);
   return new CognitoUserPool({
     UserPoolId: config.userPoolId,
     ClientId: config.clientId,
@@ -108,7 +143,7 @@ export function AuthProvider({ children, config = appConfig }) {
           reject(new Error("Authentication is not configured for this deployment."));
           return;
         }
-        const cognitoUser = new CognitoUser({ Username: email, Pool: pool });
+        const cognitoUser = new CognitoUser({ Username: email, Pool: pool, Storage: window.sessionStorage });
         const details = new AuthenticationDetails({ Username: email, Password: password });
         setAuthError("");
         setPasswordChallenge(null);

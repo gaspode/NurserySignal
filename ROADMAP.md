@@ -188,6 +188,7 @@ Run the bounded opportunity-creation recalculation against production data, revi
 - Routed bounded admin collector runs through private SQS command queues so the VPC-attached admin API can trigger collectors reliably without NAT or a fixed-cost Lambda interface endpoint.
 - Made the selected SignalHub vertical an explicit, validated backend scope for review/history, opportunities, unmatched signals, Match Review, organisations, sources and overview counts; `ALL` remains an explicit admin aggregation mode and disabled verticals cannot become working contexts.
 - Shared table row actions now use an accessible viewport-aware portal so operator menus remain usable inside horizontally scrollable admin tables.
+- Cognito login and restoration now use the same tab-scoped storage, so ordinary page reloads preserve valid sessions without extending authentication beyond the browser tab.
 
 ## Phase 9 — CareSignal planning and recruitment — ACTIVE
 

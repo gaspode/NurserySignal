@@ -1,7 +1,7 @@
 import { act, cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { AuthProvider, useAuth } from "./auth.js";
+import { AuthProvider, migrateLegacyCognitoStorage, useAuth } from "./auth.js";
 import { LoginPage } from "./App.jsx";
 
 const state = vi.hoisted(() => ({
@@ -26,19 +26,49 @@ vi.mock("amazon-cognito-identity-js", () => ({
     getCurrentUser() {
       return state.currentUser;
     }
+
+    getClientId() {
+      return this.config.ClientId;
+    }
   },
   CognitoUser: class {
-    constructor({ Username }) {
+    constructor({ Username, Pool, Storage }) {
       this.username = Username;
+      this.pool = Pool;
+      this.storage = Storage || window.localStorage;
       state.latestUser = this;
     }
 
+    cacheSession() {
+      const prefix = `CognitoIdentityServiceProvider.${this.pool.getClientId()}`;
+      this.storage.setItem(`${prefix}.LastAuthUser`, this.username);
+      this.storage.setItem(`${prefix}.${this.username}.idToken`, "test-token");
+      this.storage.setItem(`${prefix}.${this.username}.accessToken`, "test-access-token");
+      this.storage.setItem(`${prefix}.${this.username}.refreshToken`, "test-refresh-token");
+    }
+
     authenticateUser(_details, callbacks) {
-      state.authenticationCallbacks = callbacks;
+      state.authenticationCallbacks = {
+        ...callbacks,
+        onSuccess: (authenticatedSession) => {
+          this.cacheSession();
+          callbacks.onSuccess(authenticatedSession);
+        },
+      };
     }
 
     completeNewPasswordChallenge(password, attributes, callbacks) {
-      state.completionCallbacks = { password, attributes, callbacks };
+      state.completionCallbacks = {
+        password,
+        attributes,
+        callbacks: {
+          ...callbacks,
+          onSuccess: (authenticatedSession) => {
+            this.cacheSession();
+            callbacks.onSuccess(authenticatedSession);
+          },
+        },
+      };
     }
 
     getUsername() {
@@ -46,7 +76,10 @@ vi.mock("amazon-cognito-identity-js", () => ({
     }
 
     getSession(callback) {
-      callback(state.sessionError, state.sessionError ? null : session);
+      const idTokenKey = `CognitoIdentityServiceProvider.${this.pool.getClientId()}.${this.username}.idToken`;
+      const missingSession = !this.storage.getItem(idTokenKey);
+      const error = state.sessionError || (missingSession ? new Error("missing session") : null);
+      callback(error, error ? null : session);
     }
 
     signOut() {}
@@ -109,6 +142,7 @@ describe("Cognito authentication", () => {
 
   beforeEach(() => {
     window.sessionStorage.clear();
+    window.localStorage.clear();
     state.currentUser = null;
     state.latestUser = null;
     state.authenticationCallbacks = null;
@@ -134,8 +168,38 @@ describe("Cognito authentication", () => {
 
   it("reconstructs the current user from its same-tab marker when the SDK marker is missing", async () => {
     window.sessionStorage.setItem("NurserySignal.client-example.LastAuthUser", "staff@example.com");
+    window.sessionStorage.setItem("CognitoIdentityServiceProvider.client-example.staff@example.com.idToken", "test-token");
     renderAuth();
     expect(await screen.findByText("Authenticated")).toBeInTheDocument();
+  });
+
+  it("stores login tokens in sessionStorage so a same-tab reload can restore them", async () => {
+    const view = renderAuth();
+    await submitCredentials();
+    await act(async () => state.authenticationCallbacks.onSuccess(session));
+    expect(window.sessionStorage.getItem("CognitoIdentityServiceProvider.client-example.LastAuthUser")).toBe("staff@example.com");
+    expect(window.sessionStorage.getItem("CognitoIdentityServiceProvider.client-example.staff@example.com.idToken")).toBe("test-token");
+    expect(window.localStorage.getItem("CognitoIdentityServiceProvider.client-example.LastAuthUser")).toBeNull();
+
+    view.unmount();
+    renderAuth();
+    expect(await screen.findByText("Authenticated")).toBeInTheDocument();
+  });
+
+  it("migrates only a remembered same-tab legacy Cognito session to sessionStorage", () => {
+    const prefix = "CognitoIdentityServiceProvider.client-example";
+    window.sessionStorage.setItem("NurserySignal.client-example.LastAuthUser", "staff@example.com");
+    window.localStorage.setItem(`${prefix}.LastAuthUser`, "staff@example.com");
+    window.localStorage.setItem(`${prefix}.staff@example.com.idToken`, "legacy-id-token");
+    window.localStorage.setItem(`${prefix}.staff@example.com.refreshToken`, "legacy-refresh-token");
+
+    migrateLegacyCognitoStorage(config);
+
+    expect(window.sessionStorage.getItem(`${prefix}.LastAuthUser`)).toBe("staff@example.com");
+    expect(window.sessionStorage.getItem(`${prefix}.staff@example.com.idToken`)).toBe("legacy-id-token");
+    expect(window.sessionStorage.getItem(`${prefix}.staff@example.com.refreshToken`)).toBe("legacy-refresh-token");
+    expect(window.localStorage.getItem(`${prefix}.LastAuthUser`)).toBeNull();
+    expect(window.localStorage.getItem(`${prefix}.staff@example.com.idToken`)).toBeNull();
   });
 
   it("returns to login when the restored Cognito session is invalid", async () => {
