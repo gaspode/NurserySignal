@@ -330,7 +330,20 @@ Implementation status:
   historically reconstructable planning/recruitment coverage; no case was incorrectly counted as
   a miss and recall, precision, lead time, organisation/site accuracy and review burden therefore
   remain unmeasurable.
-- The measured blocker is historical source coverage, not evidence for a Site/Event/probabilistic
-  redesign. Next build a small, provenance-safe historical planning/recruitment corpus for these
-  labelled outcomes (or accumulate dated snapshots prospectively), then rerun the same benchmark
-  before choosing a matching architecture change or extending the framework to NurserySignal.
+- Researched all 21 labelled outcomes against preserved evidence, bounded historical Plota search
+  and date-verifiable official planning/recruitment records. Corpus `care-historical-research-v1`
+  retains four eligible planning items and two recruitment items across five cases; one planning
+  item is deliberately outside the unchanged 365-day replay window. Two same-provider planning
+  candidates were excluded because different site/local-authority evidence made the case link weak.
+- The first corpus-backed production replay made four cases usable: three were detected (75%
+  recall), with planning producing all three discoveries and a 290-day median lead time. The one
+  missed case had two official new-home recruitment adverts whose generic Support Worker/Team
+  Leader titles the current deterministic policy ignored. Precision remains unmeasurable because
+  the benchmark has no reliable negative cases; no duplicate or incorrect merge was observed.
+- Existing immutable evidence already preserves dated planning revisions, vacancy payloads,
+  Companies House retrieval revisions and Ofsted register/report revisions. The historic gap is
+  pre-SignalHub source coverage rather than destructive overwriting of current records.
+- Current evidence does not justify a Site/Event/probabilistic redesign: only four of 21 outcomes
+  are replayable. The next priority is stronger prospective source retention/coverage and a narrow,
+  independently validated CareSignal recruitment-context improvement before rerunning this fixed
+  benchmark and extending it to NurserySignal.
