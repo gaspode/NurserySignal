@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any
 from uuid import UUID
@@ -10,6 +10,16 @@ from uuid import UUID
 import boto3
 
 from app.authorization import normalized_groups
+from app.backtest_repository import (
+    CARE_BENCHMARK_VERSION,
+    backtesting_summary,
+    compare_backtest_runs,
+    execute_backtest,
+    get_backtest_run,
+    labelled_decisions,
+    seed_care_ofsted_benchmark,
+)
+from app.backtesting import BacktestBounds
 from app.care_backfill import backfill_care_from_stored_evidence
 from app.config import Settings
 from app.db import check_connection
@@ -166,6 +176,18 @@ def _query(event: dict[str, Any], name: str) -> str | None:
 
 
 def _admin_path(path: str) -> tuple[str, str | None]:
+    if path == "/admin/backtesting":
+        return "backtesting-list", None
+    if path == "/admin/backtesting/seed":
+        return "backtesting-seed", None
+    if path == "/admin/backtesting/run":
+        return "backtesting-run", None
+    if path == "/admin/backtesting/compare":
+        return "backtesting-compare", None
+    if path == "/admin/backtesting/labels":
+        return "backtesting-labels", None
+    if path.startswith("/admin/backtesting/runs/"):
+        return "backtesting-detail", path[len("/admin/backtesting/runs/") :]
     if path == "/admin/verticals":
         return "vertical-list", None
     if path == "/admin/organisations":
@@ -287,6 +309,90 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             return auth_error
         action, signal_id = _admin_path(path)
         try:
+            if action == "backtesting-list" and method == "GET":
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                return _response(
+                    200,
+                    backtesting_summary(
+                        settings,
+                        vertical=validate_vertical_filter(_query(event, "vertical")),
+                        benchmark_version=_query(event, "benchmark_version"),
+                    ),
+                )
+            if action == "backtesting-detail" and method == "GET" and signal_id:
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                detail = get_backtest_run(settings, str(UUID(signal_id)))
+                return _response(200, detail) if detail else _response(404, {"error": "not_found"})
+            if action == "backtesting-seed" and method == "POST":
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                payload = parse_json_payload(_raw_body(event))
+                vertical = str(payload.get("vertical") or "CHILDRENS_HOME")
+                if vertical != "CHILDRENS_HOME":
+                    raise ValueError("initial benchmark seeding supports CareSignal only")
+                actor = str(claims.get("sub") or claims.get("username") or "unknown")
+                return _response(
+                    200,
+                    seed_care_ofsted_benchmark(
+                        settings,
+                        actor=actor,
+                        benchmark_version=str(
+                            payload.get("benchmark_version") or CARE_BENCHMARK_VERSION
+                        ),
+                        limit=min(max(int(payload.get("limit", 30)), 1), 30),
+                    ),
+                )
+            if action == "backtesting-run" and method == "POST":
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                payload = parse_json_payload(_raw_body(event))
+                vertical = validate_vertical_filter(payload.get("vertical") or "CHILDRENS_HOME")
+                if vertical == ALL_VERTICALS:
+                    raise ValueError("backtest runs require one enabled vertical")
+                bounds = BacktestBounds.from_values(
+                    as_of=payload.get("as_of") or datetime.now(UTC).isoformat(),
+                    lookback_days=payload.get("lookback_days", 365),
+                    max_cases=payload.get("max_cases", 30),
+                    max_signals=payload.get("max_signals", 500),
+                )
+                actor = str(claims.get("sub") or claims.get("username") or "unknown")
+                return _response(
+                    200,
+                    execute_backtest(
+                        settings,
+                        actor=actor,
+                        benchmark_version=str(
+                            payload.get("benchmark_version") or CARE_BENCHMARK_VERSION
+                        ),
+                        vertical=vertical,
+                        bounds=bounds,
+                    ),
+                )
+            if action == "backtesting-compare" and method == "GET":
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                left = str(UUID(str(_query(event, "left"))))
+                right = str(UUID(str(_query(event, "right"))))
+                return _response(200, compare_backtest_runs(settings, left, right))
+            if action == "backtesting-labels" and method == "GET":
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                return _response(
+                    200,
+                    labelled_decisions(
+                        settings,
+                        vertical=validate_vertical_filter(_query(event, "vertical")),
+                        limit=min(max(int(_query(event, "limit") or "100"), 1), 500),
+                    ),
+                )
             if action == "vertical-list" and method == "GET":
                 admin_error = _require_admin(claims, settings)
                 if admin_error:

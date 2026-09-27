@@ -13,7 +13,7 @@ export function restoredVertical(storage = window.sessionStorage) {
 
 export function verticalScopedPath(requestPath, vertical) {
   const [pathname, queryString] = requestPath.split("?", 2);
-  if (!["/admin/signals", "/admin/opportunities", "/admin/match-review", "/admin/organisations", "/admin/sources"].includes(pathname)) return requestPath;
+  if (!["/admin/signals", "/admin/opportunities", "/admin/match-review", "/admin/organisations", "/admin/sources", "/admin/backtesting"].includes(pathname)) return requestPath;
   const params = new URLSearchParams(queryString || "");
   params.set("vertical", vertical);
   return `${pathname}?${params.toString()}`;
@@ -244,6 +244,7 @@ function Shell({ user, onLogout, onNavigate, currentPath, vertical, onVerticalCh
           <button className={route.startsWith("/match-review") ? "nav-link active" : "nav-link"} onClick={() => onNavigate("/match-review")}>Match Review</button>
           <button className={route.startsWith("/sources") ? "nav-link active" : "nav-link"} onClick={() => onNavigate("/sources")}>Sources</button>
           <button className={route.startsWith("/organisations") ? "nav-link active" : "nav-link"} onClick={() => onNavigate("/organisations")}>Organisations</button>
+          <button className={route.startsWith("/backtesting") ? "nav-link active" : "nav-link"} onClick={() => onNavigate("/backtesting")}>Backtesting</button>
         </nav>
         <div className="sidebar-bottom">
           <span className="connection-dot" /> Production workspace
@@ -877,6 +878,93 @@ export function SignalDetail({ signalId, apiClient, onBack, queueMode = false, u
 function DetailPanel({ title, children }) { return <section className="panel detail-panel"><h2>{title}</h2>{children}</section>; }
 function Field({ label, value }) { return <div className="field"><dt>{label}</dt><dd>{value || "—"}</dd></div>; }
 
+function metricPercent(value) {
+  return value == null ? "Not measurable" : `${Math.round(Number(value) * 100)}%`;
+}
+
+export function BacktestingPage({ apiClient, selectedVertical = "CHILDRENS_HOME" }) {
+  const benchmarkVertical = selectedVertical === "NURSERY" ? "NURSERY" : "CHILDRENS_HOME";
+  const [summary, setSummary] = useState(null);
+  const [detail, setDetail] = useState(null);
+  const [comparison, setComparison] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [asOf, setAsOf] = useState(() => new Date().toISOString().slice(0, 10));
+  const load = async () => {
+    setError("");
+    try {
+      const value = await apiClient("/admin/backtesting");
+      setSummary(value);
+      if (value.runs?.[0]?.id) setDetail(await apiClient(`/admin/backtesting/runs/${value.runs[0].id}`));
+      else setDetail(null);
+      if (value.runs?.[1]?.id) setComparison(await apiClient(`/admin/backtesting/compare?left=${value.runs[1].id}&right=${value.runs[0].id}`));
+      else setComparison(null);
+    } catch (loadError) { setError(loadError.message || "Backtesting data could not be loaded."); }
+  };
+  useEffect(() => { load(); }, [apiClient]);
+
+  async function seed() {
+    setBusy(true); setError(""); setNotice("");
+    try {
+      const value = await apiClient("/admin/backtesting/seed", {
+        method: "POST",
+        body: JSON.stringify({ vertical: "CHILDRENS_HOME", benchmark_version: "care-ofsted-v1", limit: 30 }),
+      });
+      setNotice(`Benchmark ready: ${value.inserted} cases added and ${value.existing} already present.`);
+      await load();
+    } catch (seedError) { setError(seedError.message || "Benchmark cases could not be seeded."); }
+    finally { setBusy(false); }
+  }
+
+  async function run() {
+    setBusy(true); setError(""); setNotice("");
+    try {
+      const value = await apiClient("/admin/backtesting/run", {
+        method: "POST",
+        body: JSON.stringify({
+          vertical: benchmarkVertical,
+          benchmark_version: benchmarkVertical === "CHILDRENS_HOME" ? "care-ofsted-v1" : "nursery-outcomes-v1",
+          as_of: `${asOf}T23:59:59Z`,
+          lookback_days: 365,
+          max_cases: 30,
+          max_signals: 500,
+        }),
+      });
+      setNotice(value.idempotent ? "Identical bounded run reused reproducibly." : "Bounded historical replay completed.");
+      await load();
+      setDetail(value);
+    } catch (runError) { setError(runError.message || "Backtest could not be completed."); }
+    finally { setBusy(false); }
+  }
+
+  const metrics = detail?.metrics || summary?.runs?.[0]?.metrics || {};
+  const contribution = detail?.source_contribution || summary?.runs?.[0]?.source_contribution || {};
+  return <section>
+    <div className="page-heading"><div><p className="eyebrow">Evaluation</p><h1>Historical Backtesting</h1><p className="muted">CareSignal-first, point-in-time replay. Benchmark truth is kept separate from historical inputs.</p></div><RefreshButton busy={busy} onClick={load} /></div>
+    {notice && <div className="notice" role="status">{notice}</div>}
+    {error && <ErrorState message={error} />}
+    <div className="panel backtest-controls"><div><strong>Bounded replay</strong><p className="muted">Ofsted registration defines the outcome and is excluded from pre-registration input.</p></div><label>As of<input type="date" aria-label="Backtest as of" value={asOf} onChange={(event) => setAsOf(event.target.value)} /></label>{benchmarkVertical === "CHILDRENS_HOME" && <button className="button secondary" disabled={busy} onClick={seed}>Seed verified outcomes</button>}<button className="button primary" disabled={busy} onClick={run}>{busy ? "Running…" : "Run benchmark"}</button></div>
+    {!summary && !error && <LoadingState label="Loading benchmark" />}
+    <div className="metric-grid">
+      <article className="metric-card"><span>Usable cases</span><strong>{metrics.cases_usable ?? "—"}</strong><small>{metrics.cases_excluded ?? 0} excluded honestly</small></article>
+      <article className="metric-card"><span>Recall</span><strong>{metricPercent(metrics.recall)}</strong><small>{metrics.detected_cases ?? 0} detected</small></article>
+      <article className="metric-card"><span>Precision</span><strong>{metricPercent(metrics.precision)}</strong><small>{metrics.unlabelled_opportunities ?? 0} unlabelled, not assumed false</small></article>
+      <article className="metric-card"><span>Median lead time</span><strong>{metrics.lead_time_days?.median == null ? "—" : `${metrics.lead_time_days.median} days`}</strong><small>p25 {metrics.lead_time_days?.p25 ?? "—"} · p75 {metrics.lead_time_days?.p75 ?? "—"}</small></article>
+      <article className="metric-card"><span>Organisation accuracy</span><strong>{metricPercent(metrics.organisation_accuracy)}</strong><small>Operator identity measured separately</small></article>
+      <article className="metric-card"><span>Site accuracy</span><strong>{metricPercent(metrics.site_accuracy)}</strong><small>No inferred redacted locations</small></article>
+    </div>
+    {detail && <>
+      <div className="dashboard-grid">
+        <div className="panel"><h2>Source contribution</h2>{["planning", "recruitment"].map((source) => <div className="field" key={source}><dt>{titleCase(source)}</dt><dd>{contribution[source]?.first_discoveries ?? 0} first · {contribution[source]?.corroborations ?? 0} corroborations · {contribution[source]?.missed ?? 0} missed</dd></div>)}<div className="field"><dt>Combined</dt><dd>{contribution.combined?.found_by_either ?? 0} found · {contribution.combined?.neither_detected ?? 0} neither source</dd></div></div>
+        <div className="panel"><h2>Run provenance</h2><Field label="Benchmark" value={detail.benchmark_version} /><Field label="Engine" value={detail.engine_version} /><Field label="Status" value={<Badge>{detail.status}</Badge>} /><Field label="As of" value={formatDate(detail.as_of, true)} /><Field label="Review burden" value={`${metrics.reviews_per_genuine_opportunity ?? "—"} per genuine opportunity`} /></div>
+      </div>
+      {comparison && <div className="panel"><h2>Latest run comparison</h2><p className="muted">Measured deltas only; positive does not automatically mean better.</p><div className="source-counts"><span>Recall <strong>{comparison.delta?.recall ?? "—"}</strong></span><span>Precision <strong>{comparison.delta?.precision ?? "—"}</strong></span><span>Median lead time <strong>{comparison.delta?.median_lead_time_days ?? "—"} days</strong></span><span>Organisation <strong>{comparison.delta?.organisation_accuracy ?? "—"}</strong></span><span>Site <strong>{comparison.delta?.site_accuracy ?? "—"}</strong></span><span>Review burden <strong>{comparison.delta?.reviews_per_genuine_opportunity ?? "—"}</strong></span></div></div>}
+      <div className="panel"><h2>Case results</h2><div className="table-wrap"><table><thead><tr><th>Outcome</th><th>Provider</th><th>Result</th><th>First source</th><th>Lead time</th><th>Organisation</th><th>Site/project</th><th>Reviews</th></tr></thead><tbody>{(detail.case_results || []).map((item) => <tr key={item.benchmark_case_uuid}><td><strong>{item.outcome_type}</strong><span className="cell-subtitle">{formatDate(item.outcome_date)} · {item.known_regulatory_id || "—"}</span></td><td>{item.known_operator || "—"}<span className="cell-subtitle">{item.known_location || "—"}</span></td><td>{item.usable ? <Badge tone={item.detected ? "approved" : "pending"}>{item.detected ? "Detected" : "Missed"}</Badge> : <Badge>Excluded</Badge>}<span className="cell-subtitle">{item.exclusion_reason || (item.opportunity_created ? "Opportunity created" : "No opportunity")}</span></td><td>{titleCase(item.first_source)}</td><td>{item.lead_time_days == null ? "—" : `${item.lead_time_days} days`}</td><td>{titleCase(item.organisation_resolution)}</td><td>{titleCase(item.site_resolution)}</td><td>{item.review_items}</td></tr>)}</tbody></table></div></div>
+    </>}
+  </section>;
+}
+
 export default function App() {
   const auth = useAuth();
   const path = useHashLocation();
@@ -901,6 +989,6 @@ export default function App() {
   const detailNotice = new URLSearchParams(listQuery).get("notice") || "";
   const showVertical = vertical === "ALL";
   return <Shell user={auth.user} onLogout={auth.logout} onNavigate={navigate} currentPath={path} vertical={vertical} onVerticalChange={onVerticalChange}>
-    {detailMatch ? <SignalDetail key={vertical} signalId={detailMatch[2]} apiClient={scopedApiClient} queueMode={detailMode === "inbox"} unmatchedMode={detailMode === "unmatched"} initialNotice={detailNotice} onBack={() => navigate(detailMode === "inbox" ? "/inbox" : detailMode === "unmatched" ? "/unmatched" : "/history")} onReviewed={({ message, nextId }) => navigate(nextId ? `/inbox/${nextId}?notice=${encodeURIComponent(message)}` : `/inbox?notice=${encodeURIComponent(message)}`)} /> : opportunityMatch ? <OpportunityDetail key={vertical} opportunityId={opportunityMatch[1]} apiClient={scopedApiClient} onBack={() => navigate("/opportunities")} /> : route === "/inbox" ? <ReviewInboxPage key={vertical} apiClient={scopedApiClient} onNavigate={navigate} initialQuery={listQuery} showVertical={showVertical} /> : route === "/history" ? <ReviewedSignalsPage key={vertical} apiClient={scopedApiClient} onNavigate={navigate} initialQuery={listQuery} showVertical={showVertical} /> : route === "/unmatched" ? <UnmatchedSignalsPage key={vertical} apiClient={scopedApiClient} onNavigate={navigate} initialQuery={listQuery} showVertical={showVertical} /> : route === "/match-review" ? <MatchReviewPage key={vertical} apiClient={scopedApiClient} onNavigate={navigate} showVertical={showVertical} /> : route === "/opportunities" ? <OpportunitiesPage key={vertical} apiClient={scopedApiClient} onNavigate={navigate} showVertical={showVertical} /> : route === "/sources" ? <SourcesPage key={vertical} apiClient={scopedApiClient} selectedVertical={vertical} /> : route === "/organisations" ? <OrganisationsPage key={vertical} apiClient={scopedApiClient} /> : <Dashboard key={vertical} apiClient={scopedApiClient} onNavigate={navigate} />}
+    {detailMatch ? <SignalDetail key={vertical} signalId={detailMatch[2]} apiClient={scopedApiClient} queueMode={detailMode === "inbox"} unmatchedMode={detailMode === "unmatched"} initialNotice={detailNotice} onBack={() => navigate(detailMode === "inbox" ? "/inbox" : detailMode === "unmatched" ? "/unmatched" : "/history")} onReviewed={({ message, nextId }) => navigate(nextId ? `/inbox/${nextId}?notice=${encodeURIComponent(message)}` : `/inbox?notice=${encodeURIComponent(message)}`)} /> : opportunityMatch ? <OpportunityDetail key={vertical} opportunityId={opportunityMatch[1]} apiClient={scopedApiClient} onBack={() => navigate("/opportunities")} /> : route === "/inbox" ? <ReviewInboxPage key={vertical} apiClient={scopedApiClient} onNavigate={navigate} initialQuery={listQuery} showVertical={showVertical} /> : route === "/history" ? <ReviewedSignalsPage key={vertical} apiClient={scopedApiClient} onNavigate={navigate} initialQuery={listQuery} showVertical={showVertical} /> : route === "/unmatched" ? <UnmatchedSignalsPage key={vertical} apiClient={scopedApiClient} onNavigate={navigate} initialQuery={listQuery} showVertical={showVertical} /> : route === "/match-review" ? <MatchReviewPage key={vertical} apiClient={scopedApiClient} onNavigate={navigate} showVertical={showVertical} /> : route === "/opportunities" ? <OpportunitiesPage key={vertical} apiClient={scopedApiClient} onNavigate={navigate} showVertical={showVertical} /> : route === "/sources" ? <SourcesPage key={vertical} apiClient={scopedApiClient} selectedVertical={vertical} /> : route === "/organisations" ? <OrganisationsPage key={vertical} apiClient={scopedApiClient} /> : route === "/backtesting" ? <BacktestingPage key={vertical} apiClient={scopedApiClient} selectedVertical={vertical} /> : <Dashboard key={vertical} apiClient={scopedApiClient} onNavigate={navigate} />}
   </Shell>;
 }

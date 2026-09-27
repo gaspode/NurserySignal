@@ -1,7 +1,7 @@
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { Dashboard, LoginPage, MatchReviewPage, OpportunitiesPage, OpportunityDetail, OrganisationsPage, ReviewInboxPage, ReviewedSignalsPage, SignalDetail, SourcesPage, UnmatchedSignalsPage, restoredVertical, verticalScopedPath } from "./App.jsx";
+import { BacktestingPage, Dashboard, LoginPage, MatchReviewPage, OpportunitiesPage, OpportunityDetail, OrganisationsPage, ReviewInboxPage, ReviewedSignalsPage, SignalDetail, SourcesPage, UnmatchedSignalsPage, restoredVertical, verticalScopedPath } from "./App.jsx";
 
 const pendingItem = {
   id: "signal-1",
@@ -653,5 +653,39 @@ describe("admin frontend", () => {
     await screen.findByRole("button", { name: "Re-evaluate stored planning" });
     await userEvent.click(screen.getByRole("button", { name: "Re-evaluate stored planning" }));
     expect(screen.getByRole("dialog")).toHaveTextContent("does not call Plota");
+  });
+
+  it("renders CareSignal historical metrics and starts only a bounded replay", async () => {
+    const summary = {
+      benchmarks: [{ benchmark_version: "care-ofsted-v1", vertical: "CHILDRENS_HOME", case_count: 24, from_date: "2025-01-01", to_date: "2026-09-01" }],
+      runs: [],
+      engine_version: "historical-replay-v1",
+    };
+    const completed = {
+      id: "run-1",
+      status: "SUCCESS",
+      benchmark_version: "care-ofsted-v1",
+      engine_version: "historical-replay-v1",
+      as_of: "2026-09-27T23:59:59Z",
+      idempotent: false,
+      metrics: { cases_usable: 3, cases_excluded: 21, detected_cases: 2, recall: 0.6667, precision: null, unlabelled_opportunities: 1, lead_time_days: { median: 120, p25: 90, p75: 150 }, organisation_accuracy: 0.5, site_accuracy: null, reviews_per_genuine_opportunity: 0.5 },
+      source_contribution: { planning: { first_discoveries: 1, corroborations: 0, missed: 2 }, recruitment: { first_discoveries: 1, corroborations: 1, missed: 1 }, combined: { found_by_either: 2, neither_detected: 1 } },
+      case_results: [{ benchmark_case_uuid: "case-1", outcome_type: "REGISTERED", outcome_date: "2026-09-01", known_regulatory_id: "2766766", known_operator: "Oaktree Childcare Ltd", known_location: "Lancashire", usable: true, detected: true, opportunity_created: true, first_source: "planning", lead_time_days: 120, organisation_resolution: "STRONG", site_resolution: "UNRESOLVED_NO_SITE_TRUTH", review_items: 0 }],
+    };
+    const apiClient = vi.fn()
+      .mockResolvedValueOnce(summary)
+      .mockResolvedValueOnce(completed)
+      .mockResolvedValueOnce(summary);
+    render(<BacktestingPage apiClient={apiClient} selectedVertical="CHILDRENS_HOME" />);
+    expect(await screen.findByRole("heading", { name: "Historical Backtesting" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Run benchmark" }));
+    expect(apiClient).toHaveBeenCalledWith("/admin/backtesting/run", {
+      method: "POST",
+      body: expect.stringContaining('"max_cases":30'),
+    });
+    expect(await screen.findByText("67%")).toBeInTheDocument();
+    expect(screen.getAllByText("Not measurable")).toHaveLength(2);
+    expect(screen.getByText("Oaktree Childcare Ltd")).toBeInTheDocument();
+    expect(screen.getByText("21 excluded honestly")).toBeInTheDocument();
   });
 });

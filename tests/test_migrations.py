@@ -24,6 +24,7 @@ def test_initial_migration_exists_and_contains_provenance_tables() -> None:
             "0016_regulatory_and_organisation_enrichment.sql",
             "0017_organisation_review_evidence.sql",
             "0018_ofsted_urn_enrichment.sql",
+            "0019_historical_backtesting.sql",
         ]
     sql = "\n".join(path.read_text(encoding="utf-8") for path in files)
     tables = (
@@ -57,6 +58,11 @@ def test_initial_migration_exists_and_contains_provenance_tables() -> None:
     assert "candidate_fingerprint" in sql
     assert "CREATE TABLE IF NOT EXISTS ofsted_urn_enrichments" in sql
     assert "provider_registered_address" in sql
+    assert "CREATE TABLE IF NOT EXISTS benchmark_cases" in sql
+    assert "CREATE TABLE IF NOT EXISTS backtest_runs" in sql
+    assert "CREATE TABLE IF NOT EXISTS backtest_case_results" in sql
+    assert "CREATE OR REPLACE VIEW backtest_labelled_decisions" in sql
+    assert "truth_role', 'OUTCOME_ONLY'" in sql
 
 
 def test_ai_review_insert_has_one_value_placeholder_per_column() -> None:

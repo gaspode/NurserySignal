@@ -250,7 +250,7 @@ Initial validation gate passed:
 - keep both sources manual-only while regulatory matching quality is assessed, then decide a
   cadence aligned with Ofsted's publication frequency and the 30-day company-profile cache.
 
-## Phase 11 — Historical backtesting and architecture evidence — NEXT
+## Phase 11 — Historical backtesting and architecture evidence — ACTIVE
 
 Before adding more collectors or undertaking a substantial matching/data-model redesign, build a
 historical backtesting framework that measures how well SignalHub could actually have discovered
@@ -313,3 +313,18 @@ Revised sequencing:
 2. Build and run historical backtesting.
 3. Use measured results to prioritise data-model/matching architecture changes.
 4. Only then add further collectors where the backtest demonstrates a coverage or lead-time gap.
+
+Implementation status:
+- Added isolated, versioned benchmark/run/result storage and a CareSignal-first replay engine that
+  reuses production vertical classification, opportunity-creation and deterministic match logic.
+- Ofsted registration is outcome truth only and is never exposed to pre-registration replay.
+  Planning uses preserved publication/application provenance, Recruitment uses vacancy publication,
+  and Companies House contributes only identity fields after recorded retrieval/incorporation.
+- Cases without case-linked historical evidence are excluded unless complete source coverage is
+  explicitly proven; unmatched generated opportunities remain unlabelled rather than being assumed
+  false, and precision remains unavailable without reliable negative labels.
+- Added bounded administrator seeding/runs, reproducible fingerprints, run comparison, labelled
+  admin-decision export and a SignalHub Backtesting view with per-case/source metrics.
+- Initial CareSignal outcome corpus is capped at 30 authoritative 2025–2026 Ofsted registrations.
+  Production replay metrics and the evidence-based next architecture recommendation remain the
+  active validation gate.

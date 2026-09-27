@@ -306,6 +306,74 @@ def test_care_backfill_is_admin_only_and_bounded(monkeypatch) -> None:
     assert denied["statusCode"] == 403
 
 
+def test_historical_backtest_is_admin_only_and_bounded(monkeypatch) -> None:
+    captured = {}
+
+    def fake_execute(settings, **kwargs):
+        captured.update(kwargs)
+        return {"id": "run-1", "status": "SUCCESS", "metrics": {}}
+
+    monkeypatch.setattr("app.handler.execute_backtest", fake_execute)
+    response = handler(
+        event(
+            "/admin/backtesting/run",
+            "POST",
+            body=json.dumps(
+                {
+                    "vertical": "CHILDRENS_HOME",
+                    "benchmark_version": "care-ofsted-v1",
+                    "as_of": "2026-09-27T23:59:59Z",
+                    "lookback_days": 999,
+                    "max_cases": 999,
+                    "max_signals": 9999,
+                }
+            ),
+            claims={"sub": "staff", "cognito:groups": ["NurserySignalAdmins"]},
+        ),
+        None,
+    )
+    assert response["statusCode"] == 200
+    assert captured["vertical"] == "CHILDRENS_HOME"
+    assert captured["bounds"].lookback_days == 365
+    assert captured["bounds"].max_cases == 50
+    assert captured["bounds"].max_signals == 1000
+
+    denied = handler(
+        event(
+            "/admin/backtesting/run",
+            "POST",
+            body=json.dumps({"vertical": "CHILDRENS_HOME", "as_of": "2026-09-27"}),
+            claims={"sub": "staff", "cognito:groups": ["Other"]},
+        ),
+        None,
+    )
+    assert denied["statusCode"] == 403
+
+
+def test_backtest_rejects_all_verticals_and_invalid_dates(monkeypatch) -> None:
+    admin = {"sub": "staff", "cognito:groups": ["NurserySignalAdmins"]}
+    all_verticals = handler(
+        event(
+            "/admin/backtesting/run",
+            "POST",
+            body=json.dumps({"vertical": "ALL", "as_of": "2026-09-27"}),
+            claims=admin,
+        ),
+        None,
+    )
+    assert all_verticals["statusCode"] == 400
+    invalid_date = handler(
+        event(
+            "/admin/backtesting/run",
+            "POST",
+            body=json.dumps({"vertical": "CHILDRENS_HOME", "as_of": "not-a-date"}),
+            claims=admin,
+        ),
+        None,
+    )
+    assert invalid_date["statusCode"] == 400
+
+
 def test_sources_status_is_admin_only_and_includes_recent_runs(monkeypatch) -> None:
     monkeypatch.setattr(
         "app.handler.list_runs",

@@ -67,6 +67,16 @@ SIC codes. Ambiguous name searches use a separate Organisation Review queue. Off
 is not collected. See `docs/ofsted-companies-house.md` for source, privacy and credential
 details.
 
+### Historical backtesting
+
+SignalHub includes an administrator-only, non-destructive historical replay framework. The first
+version uses bounded CareSignal Ofsted registrations as outcome truth while excluding Ofsted from
+all pre-registration inputs. It reuses the deployed vertical classification and opportunity
+policies against only point-in-time planning/recruitment evidence, and admits Companies House
+identity only when its recorded retrieval/incorporation dates make it historically safe. Results
+and per-case timelines are isolated from production state and identical run parameters are
+idempotent. See `docs/historical-backtesting.md` for availability rules and limitations.
+
 ### Recruitment and opportunities
 
 The first recruitment provider is the documented GOV.UK Find an Apprenticeship
