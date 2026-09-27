@@ -298,6 +298,33 @@ def test_collector_queues_only_candidates_and_reports_counts(monkeypatch) -> Non
         ]
 
 
+def test_shared_planning_collector_honours_requested_vertical(monkeypatch) -> None:
+    queued = []
+
+    class FakeProvider:
+        def applications(self, query):
+            yield record("Change of use from dwelling to a children's home for two children")
+
+    monkeypatch.setattr(
+        "app.collector.send_ingestion_message", lambda settings, message: queued.append(message)
+    )
+    settings = Settings(ingestion_queue_url="https://sqs.example/ingestion")
+    counts = collect_planning(
+        settings,
+        {
+            "from_date": "2026-09-23",
+            "to_date": "2026-09-24",
+            "source": "manual",
+            "verticals": ["CHILDRENS_HOME"],
+        },
+        FakeProvider(),
+    )
+    assert counts["care_matched"] == 1
+    assert counts["nursery_matched"] == 0
+    assert len(queued) == 1
+    assert queued[0].signal["vertical"] == "CHILDRENS_HOME"
+
+
 def test_provider_invalid_shape_is_rejected() -> None:
     class InvalidResponse(FakeResponse):
         def read(self) -> bytes:

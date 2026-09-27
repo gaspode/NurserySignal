@@ -19,8 +19,18 @@ from app.planning import (
 from app.queueing import SignalIngestionMessage, send_ingestion_message
 from app.secrets import provider_api_key_from_secret
 from app.source_runs import finish_run, safe_failure, start_run
+from app.verticals import CHILDRENS_HOME, NURSERY, VERTICAL_REGISTRY, validate_vertical
 
 logger = configure_logging()
+
+
+def _requested_verticals(event: dict[str, Any]) -> tuple[str, ...]:
+    requested = event.get("verticals")
+    if requested is None:
+        return tuple(key for key, item in VERTICAL_REGISTRY.items() if item.enabled)
+    if not isinstance(requested, list) or not requested:
+        raise ValueError("verticals must be a non-empty list")
+    return tuple(dict.fromkeys(validate_vertical(str(value)) for value in requested))
 
 
 def collect_planning(
@@ -30,6 +40,7 @@ def collect_planning(
 ) -> dict[str, int]:
     event = event or {}
     query = PlanningQuery.from_event(event)
+    requested_verticals = _requested_verticals(event)
     source = str(event.get("source", "manual"))[:32]
     lookback_days = min(max(int(event.get("lookback_days", 2)), 1), 31)
     care_max_records = min(max(int(event.get("care_max_records", 50)), 1), 100)
@@ -95,10 +106,10 @@ def collect_planning(
                 nursery_decision: CandidateDecision = candidate_decision(record)
                 care_decision = classify_care_planning(record)
                 signals = []
-                if nursery_decision.matched:
+                if NURSERY in requested_verticals and nursery_decision.matched:
                     signals.append(planning_signal(record, nursery_decision))
                     counts["nursery_matched"] += 1
-                if care_decision.matched:
+                if CHILDRENS_HOME in requested_verticals and care_decision.matched:
                     signals.append(care_planning_signal(record, care_decision))
                     counts["care_matched"] += 1
                 if not signals:

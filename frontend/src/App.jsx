@@ -3,6 +3,20 @@ import { useApi } from "./api.js";
 import { displayAttributeName, useAuth } from "./auth.js";
 
 const PAGE_SIZE = 10;
+const ACTIVE_VERTICALS = new Set(["ALL", "NURSERY", "CHILDRENS_HOME"]);
+
+export function restoredVertical(storage = window.sessionStorage) {
+  const stored = storage.getItem("signalhub.vertical") || "NURSERY";
+  return ACTIVE_VERTICALS.has(stored) ? stored : "NURSERY";
+}
+
+export function verticalScopedPath(requestPath, vertical) {
+  const [pathname, queryString] = requestPath.split("?", 2);
+  if (!["/admin/signals", "/admin/opportunities", "/admin/match-review", "/admin/organisations", "/admin/sources"].includes(pathname)) return requestPath;
+  const params = new URLSearchParams(queryString || "");
+  params.set("vertical", vertical);
+  return `${pathname}?${params.toString()}`;
+}
 
 function useHashLocation() {
   const [location, setLocation] = useState(() => window.location.hash.slice(1) || "/");
@@ -245,7 +259,7 @@ function Shell({ user, onLogout, onNavigate, currentPath, vertical, onVerticalCh
   );
 }
 
-export function SourcesPage({ apiClient }) {
+export function SourcesPage({ apiClient, selectedVertical = "NURSERY" }) {
   const [sources, setSources] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -260,7 +274,7 @@ export function SourcesPage({ apiClient }) {
     catch (loadError) { setError({ title: "Sources unavailable", message: loadError.message || "The source status could not be loaded." }); }
     finally { setLoading(false); setRefreshing(false); }
   };
-  useEffect(() => { load({ initial: true }); }, []);
+  useEffect(() => { load({ initial: true }); }, [apiClient]);
   useEffect(() => {
     if (!running) return undefined;
     const timer = window.setInterval(async () => {
@@ -280,7 +294,10 @@ export function SourcesPage({ apiClient }) {
     setRunning({ sourceKey: source.key, runId: null });
     setError(null); setNotice("");
     try {
-      const result = await apiClient(`/admin/sources/${source.key}/run`, { method: "POST" });
+      const result = await apiClient(`/admin/sources/${source.key}/run`, {
+        method: "POST",
+        body: JSON.stringify({ vertical: selectedVertical }),
+      });
       setRunning({ sourceKey: source.key, runId: result.run_id });
       await load();
     } catch (runError) {
@@ -331,7 +348,7 @@ export function OrganisationsPage({ apiClient }) {
   const [items, setItems] = useState(null);
   const [error, setError] = useState("");
   const load = async () => { try { setItems((await apiClient("/admin/organisations?limit=100")).items || []); } catch (loadError) { setError(loadError.message); } };
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); }, [apiClient]);
   if (error) return <ErrorState message={error} onRetry={load} />;
   if (!items) return <LoadingState label="Loading organisations" />;
   return <section><div className="page-heading"><div><p className="eyebrow">Shared identity</p><h1>Organisations</h1><p className="muted">Organisations may operate across verticals; signals and opportunities remain isolated by vertical.</p></div><RefreshButton onClick={load} /></div>{items.length === 0 ? <div className="state-card"><strong>No organisations found.</strong></div> : <div className="table-wrap"><table><thead><tr><th>Organisation</th><th>Vertical</th><th>Signals</th><th>Opportunities</th></tr></thead><tbody>{items.map((item) => <tr key={`${item.vertical}-${item.name}`}><td><strong>{item.name}</strong></td><td><Badge>{verticalName(item.vertical)}</Badge></td><td>{item.signal_count}</td><td>{item.opportunity_count}</td></tr>)}</tbody></table></div>}</section>;
@@ -347,18 +364,21 @@ export function Dashboard({ apiClient, onNavigate }) {
     else setRefreshing(true);
     setError("");
     try {
-      const [pending, approved, rejected, recent] = await Promise.all([
+      const [pending, approved, rejected, recent, opportunities, unmatched, matchReview] = await Promise.all([
         apiClient("/admin/signals?review_status=PENDING&limit=1"),
         apiClient("/admin/signals?review_status=APPROVED&limit=1"),
         apiClient("/admin/signals?review_status=REJECTED&limit=1"),
         apiClient("/admin/signals?limit=100"),
+        apiClient("/admin/opportunities?limit=1&offset=0"),
+        apiClient("/admin/signals?unmatched=true&limit=1&offset=0"),
+        apiClient("/admin/match-review?limit=1&offset=0"),
       ]);
       const sourceCounts = recent.items.reduce((counts, item) => {
         counts[item.source_type] = (counts[item.source_type] || 0) + 1;
         return counts;
       }, {});
       const falsePositives = recent.items.filter(isFalsePositive).length;
-      setData({ pending: pending.total, approved: approved.total, rejected: rejected.total, recent: recent.items.length, falsePositives, sourceCounts });
+      setData({ pending: pending.total, approved: approved.total, rejected: rejected.total, recent: recent.items.length, falsePositives, sourceCounts, opportunities: opportunities.total, unmatched: unmatched.total, matchReview: matchReview.total });
     } catch (loadError) {
       setError(loadError.message);
     } finally {
@@ -366,7 +386,7 @@ export function Dashboard({ apiClient, onNavigate }) {
       else setRefreshing(false);
     }
   };
-  useEffect(() => { load({ initial: true }); }, []);
+  useEffect(() => { load({ initial: true }); }, [apiClient]);
   return (
     <section>
       <div className="page-heading"><div><p className="eyebrow">Operations overview</p><h1>Signal review desk</h1><p className="muted">Triage incoming signals and preserve the evidence trail across active verticals.</p></div><div className="page-actions"><RefreshButton busy={refreshing} onClick={() => load()} /><button className="button primary" onClick={() => onNavigate("/inbox")}>Review inbox</button></div></div>
@@ -378,6 +398,9 @@ export function Dashboard({ apiClient, onNavigate }) {
           <Metric label="Approved" value={data.approved} tone="green" onClick={() => onNavigate("/history?review_status=APPROVED")} />
           <Metric label="Rejected" value={data.rejected} tone="red" onClick={() => onNavigate("/history?review_status=REJECTED")} />
           <Metric label="Likely false positives" value={data.falsePositives} tone="slate" onClick={() => onNavigate("/history?review_status=REJECTED")} />
+          <Metric label="Opportunities" value={data.opportunities} tone="green" onClick={() => onNavigate("/opportunities")} />
+          <Metric label="Unmatched signals" value={data.unmatched} tone="amber" onClick={() => onNavigate("/unmatched")} />
+          <Metric label="Match review" value={data.matchReview} tone="slate" onClick={() => onNavigate("/match-review")} />
         </div>
         <div className="dashboard-grid">
           <section className="panel"><div className="panel-heading"><h2>Recent signals</h2><button className="text-button" onClick={() => onNavigate("/history")}>View history</button></div><p className="large-number">{data.recent}</p><p className="muted">signals available in the latest review window</p></section>
@@ -445,7 +468,7 @@ function OpportunityRecalculateTool({ apiClient, onComplete }) {
   return <><button className="button secondary" onClick={() => { setError(""); setOpen(true); }}>Recalculate opportunities</button>{open && <ConfirmationModal title="Recalculate opportunities?" message="Up to 100 stored planning and recruitment signals will be re-evaluated from preserved evidence. Review history and source evidence remain intact." confirmLabel="Recalculate" busy={busy} error={displayError} onCancel={() => setOpen(false)} onConfirm={recalculate} />}</>;
 }
 
-function SignalListPage({ apiClient, onNavigate, initialQuery = "", mode }) {
+function SignalListPage({ apiClient, onNavigate, initialQuery = "", mode, showVertical = false }) {
   const [filters, setFilters] = useState(() => {
     return initialFilters(initialQuery, mode);
   });
@@ -473,7 +496,7 @@ function SignalListPage({ apiClient, onNavigate, initialQuery = "", mode }) {
       else setRefreshing(false);
     }
   };
-  useEffect(() => { load({ initial: true }); }, [query]);
+  useEffect(() => { load({ initial: true }); }, [query, apiClient]);
   useEffect(() => { setSelectedIds(new Set()); }, [query]);
   function updateFilter(name, value) { setPage(0); setFilters((current) => ({ ...current, [name]: value })); }
   function toggleSelected(signalId) {
@@ -535,7 +558,7 @@ function SignalListPage({ apiClient, onNavigate, initialQuery = "", mode }) {
       {error && <ErrorState message={error} onRetry={load} />}
       {!loading && !error && result?.items.length === 0 && <div className="state-card"><strong>{inbox ? "Inbox clear" : unmatched ? "No unmatched signals" : "No reviewed signals match these filters."}</strong><p className="muted">{inbox ? "There are no pending signals waiting for review." : "Try changing the search or filters."}</p></div>}
       {!loading && !error && result?.items.length > 0 && <>
-        <div className="table-wrap"><table><thead><tr>{inbox && <th><input type="checkbox" aria-label="Select all signals" checked={result.items.every((item) => selectedIds.has(item.id))} onChange={() => toggleAll(result.items)} /></th>}<th>Discovered</th><th>Signal</th><th>Source</th><th>Location / operator</th><th>Candidate</th><th>Rule confidence</th><th>AI shadow</th><th>Review</th>{inbox && <th>⋯</th>}</tr></thead><tbody>{result.items.map((item) => <SignalRow key={item.id} item={item} inbox={inbox} selected={selectedIds.has(item.id)} onSelect={() => toggleSelected(item.id)} onReview={reviewOne} onClick={() => onNavigate(`/${inbox ? "inbox" : unmatched ? "unmatched" : "history"}/${item.id}`)} />)}</tbody></table></div>
+        <div className="table-wrap"><table><thead><tr>{inbox && <th><input type="checkbox" aria-label="Select all signals" checked={result.items.every((item) => selectedIds.has(item.id))} onChange={() => toggleAll(result.items)} /></th>}{showVertical && <th>Vertical</th>}<th>Discovered</th><th>Signal</th><th>Source</th><th>Location / operator</th><th>Candidate</th><th>Rule confidence</th><th>AI shadow</th><th>Review</th>{inbox && <th>⋯</th>}</tr></thead><tbody>{result.items.map((item) => <SignalRow key={item.id} item={item} inbox={inbox} showVertical={showVertical} selected={selectedIds.has(item.id)} onSelect={() => toggleSelected(item.id)} onReview={reviewOne} onClick={() => onNavigate(`/${inbox ? "inbox" : unmatched ? "unmatched" : "history"}/${item.id}`)} />)}</tbody></table></div>
         <div className="pagination"><span>Page {page + 1} of {totalPages}</span><div><button className="button secondary" disabled={page === 0} onClick={() => setPage((current) => current - 1)}>Previous</button><button className="button secondary" disabled={page + 1 >= totalPages} onClick={() => setPage((current) => current + 1)}>Next</button></div></div>
       </>}
       {bulkAction && <ConfirmationModal title={`${bulkAction === "approve" ? "Approve" : "Reject"} selected signals?`} message={`This will ${bulkAction} ${selectedIds.size} pending signal${selectedIds.size === 1 ? "" : "s"}.`} confirmLabel={bulkAction === "approve" ? "Approve selected" : "Reject selected"} danger={bulkAction === "reject"} busy={bulkBusy} onCancel={() => setBulkAction(null)} onConfirm={reviewBulk} />}
@@ -548,24 +571,24 @@ export function ReviewedSignalsPage(props) { return <SignalListPage {...props} m
 export function UnmatchedSignalsPage(props) { return <SignalListPage {...props} mode="unmatched" />; }
 export function SignalsPage(props) { return <ReviewInboxPage {...props} />; }
 
-export function MatchReviewPage({ apiClient, onNavigate }) {
+export function MatchReviewPage({ apiClient, onNavigate, showVertical = false }) {
   const [result, setResult] = useState(null); const [error, setError] = useState(""); const [busy, setBusy] = useState("");
   const load = async () => { try { setResult(await apiClient("/admin/match-review?limit=50&offset=0")); } catch (e) { setError(e.message); } };
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); }, [apiClient]);
   async function resolve(id, action) { setBusy(id); try { await apiClient(`/admin/match-review/${id}/${action}`, { method: "POST" }); await load(); } catch (e) { setError(e.message); } finally { setBusy(""); } }
   if (error) return <ErrorState message={error} onRetry={load} />;
-  return <section><div className="page-heading"><div><p className="eyebrow">Grouping decisions</p><h1>Match Review</h1><p className="muted">Review uncertain system suggestions before they join an opportunity.</p></div><RefreshButton onClick={load} /></div>{!result && <LoadingState label="Loading match review" />}{result?.items?.length === 0 && <div className="state-card"><strong>No uncertain matches.</strong><p className="muted">Conservative automatic matching has no suggestions waiting.</p></div>}{result?.items?.map((item) => <article className="panel match-review-card" key={item.id}><div><Badge>{verticalName(item.vertical)}</Badge> <Badge>{titleCase(item.outcome)}</Badge><h2>{item.signal_title}</h2><p className="muted">Possible match: {item.opportunity_name}</p><p>{item.reason}</p><span className="cell-subtitle">{Math.round((item.confidence || 0) * 100)}% confidence · {formatDate(item.created_at)}</span></div><div className="review-actions"><button className="button approve" disabled={busy === item.id} onClick={() => resolve(item.id, "link")}>Link</button><button className="button reject" disabled={busy === item.id} onClick={() => resolve(item.id, "reject")}>Reject</button><button className="button ghost" onClick={() => onNavigate(`/history/${item.signal_id}`)}>View signal</button><button className="button ghost" onClick={() => onNavigate(`/opportunities/${item.opportunity_id}`)}>View opportunity</button></div></article>)}</section>;
+  return <section><div className="page-heading"><div><p className="eyebrow">Grouping decisions</p><h1>Match Review</h1><p className="muted">Review uncertain system suggestions before they join an opportunity.</p></div><RefreshButton onClick={load} /></div>{!result && <LoadingState label="Loading match review" />}{result?.items?.length === 0 && <div className="state-card"><strong>No uncertain matches.</strong><p className="muted">Conservative automatic matching has no suggestions waiting.</p></div>}{result?.items?.map((item) => <article className="panel match-review-card" key={item.id}><div>{showVertical && <><Badge>{verticalName(item.vertical)}</Badge>{" "}</>}<Badge>{titleCase(item.outcome)}</Badge><h2>{item.signal_title}</h2><p className="muted">Possible match: {item.opportunity_name}</p><p>{item.reason}</p><span className="cell-subtitle">{Math.round((item.confidence || 0) * 100)}% confidence · {formatDate(item.created_at)}</span></div><div className="review-actions"><button className="button approve" disabled={busy === item.id} onClick={() => resolve(item.id, "link")}>Link</button><button className="button reject" disabled={busy === item.id} onClick={() => resolve(item.id, "reject")}>Reject</button><button className="button ghost" onClick={() => onNavigate(`/history/${item.signal_id}`)}>View signal</button><button className="button ghost" onClick={() => onNavigate(`/opportunities/${item.opportunity_id}`)}>View opportunity</button></div></article>)}</section>;
 }
 
-export function OpportunitiesPage({ apiClient, onNavigate }) {
+export function OpportunitiesPage({ apiClient, onNavigate, showVertical = false }) {
   const [result, setResult] = useState(null); const [notice, setNotice] = useState("");
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const load = async () => { setLoading(true); setError(""); try { const params = new URLSearchParams({ limit: PAGE_SIZE, offset: page * PAGE_SIZE }); if (search) params.set("q", search); setResult(await apiClient(`/admin/opportunities?${params}`)); } catch (e) { setError(e.message); } finally { setLoading(false); } };
-  useEffect(() => { load(); }, [page]);
-  return <section><div className="page-heading"><div><p className="eyebrow">Commercial evidence</p><h1>Opportunities</h1><p className="muted">Facilities supported by one or more independent signals.</p></div><div className="page-actions"><RefreshButton busy={loading} onClick={load} /><OpportunityRecalculateTool apiClient={apiClient} onComplete={async (message) => { setNotice(message); await load(); }} /></div></div>{notice && <div className="notice" role="status">{notice}</div>}<div className="filter-bar"><label>Search<input aria-label="Search opportunities" type="search" value={search} onChange={(event) => setSearch(event.target.value)} onKeyDown={(event) => event.key === "Enter" && (setPage(0), load())} placeholder="Name or explanation…" /></label><button className="button secondary" onClick={() => { setSearch(""); setPage(0); }}>Reset</button></div>{error && <ErrorState message={error} onRetry={load} />}{loading && !result && <LoadingState label="Loading opportunities" />}{result?.items?.length === 0 && <div className="state-card"><strong>No opportunities yet.</strong><p className="muted">Opportunities appear after signals are enriched.</p></div>}{result?.items?.length > 0 && <><div className="table-wrap"><table><thead><tr><th>Vertical</th><th>Opportunity</th><th>Change type</th><th>Lifecycle</th><th>Confidence</th><th>Linked signals</th><th>Why created</th></tr></thead><tbody>{result.items.map((item) => <tr className="clickable-row" key={item.id} onClick={() => onNavigate(`/opportunities/${item.id}`)}><td><Badge>{verticalName(item.vertical)}</Badge></td><td><strong>{item.name}</strong><span className="cell-subtitle">{titleCase(item.event_type)}</span></td><td><Badge>{titleCase(item.change_type || "OTHER_CHANGE")}</Badge></td><td><Badge>{titleCase(item.lifecycle_stage)}</Badge></td><td>{Math.round((item.confidence || 0) * 100)}%</td><td>{item.signal_count}</td><td>{item.creation_reason || item.stage_reason || "—"}</td></tr>)}</tbody></table></div><div className="pagination"><span>Page {page + 1} of {Math.max(1, Math.ceil(result.total / PAGE_SIZE))}</span><div><button className="button secondary" disabled={page === 0} onClick={() => setPage((value) => value - 1)}>Previous</button><button className="button secondary" disabled={(page + 1) * PAGE_SIZE >= result.total} onClick={() => setPage((value) => value + 1)}>Next</button></div></div></>}</section>;
+  useEffect(() => { load(); }, [page, apiClient]);
+  return <section><div className="page-heading"><div><p className="eyebrow">Commercial evidence</p><h1>Opportunities</h1><p className="muted">Facilities supported by one or more independent signals.</p></div><div className="page-actions"><RefreshButton busy={loading} onClick={load} /><OpportunityRecalculateTool apiClient={apiClient} onComplete={async (message) => { setNotice(message); await load(); }} /></div></div>{notice && <div className="notice" role="status">{notice}</div>}<div className="filter-bar"><label>Search<input aria-label="Search opportunities" type="search" value={search} onChange={(event) => setSearch(event.target.value)} onKeyDown={(event) => event.key === "Enter" && (setPage(0), load())} placeholder="Name or explanation…" /></label><button className="button secondary" onClick={() => { setSearch(""); setPage(0); }}>Reset</button></div>{error && <ErrorState message={error} onRetry={load} />}{loading && !result && <LoadingState label="Loading opportunities" />}{result?.items?.length === 0 && <div className="state-card"><strong>No opportunities yet.</strong><p className="muted">Opportunities appear after signals are enriched.</p></div>}{result?.items?.length > 0 && <><div className="table-wrap"><table><thead><tr>{showVertical && <th>Vertical</th>}<th>Opportunity</th><th>Change type</th><th>Lifecycle</th><th>Confidence</th><th>Linked signals</th><th>Why created</th></tr></thead><tbody>{result.items.map((item) => <tr className="clickable-row" key={item.id} onClick={() => onNavigate(`/opportunities/${item.id}`)}>{showVertical && <td><Badge>{verticalName(item.vertical)}</Badge></td>}<td><strong>{item.name}</strong><span className="cell-subtitle">{titleCase(item.event_type)}</span></td><td><Badge>{titleCase(item.change_type || "OTHER_CHANGE")}</Badge></td><td><Badge>{titleCase(item.lifecycle_stage)}</Badge></td><td>{Math.round((item.confidence || 0) * 100)}%</td><td>{item.signal_count}</td><td>{item.creation_reason || item.stage_reason || "—"}</td></tr>)}</tbody></table></div><div className="pagination"><span>Page {page + 1} of {Math.max(1, Math.ceil(result.total / PAGE_SIZE))}</span><div><button className="button secondary" disabled={page === 0} onClick={() => setPage((value) => value - 1)}>Previous</button><button className="button secondary" disabled={(page + 1) * PAGE_SIZE >= result.total} onClick={() => setPage((value) => value + 1)}>Next</button></div></div></>}</section>;
 }
 
 export function OpportunityDetail({ opportunityId, apiClient, onBack }) {
@@ -578,14 +601,14 @@ export function OpportunityDetail({ opportunityId, apiClient, onBack }) {
   return <section><button className="back-link" onClick={onBack}>← Back to Opportunities</button><div className="page-heading"><div><p className="eyebrow">Opportunity evidence</p><h1>{opportunity.name}</h1><p className="muted">{titleCase(opportunity.change_type || "OTHER_CHANGE")} · {titleCase(opportunity.lifecycle_stage)} · {Math.round((opportunity.confidence || 0) * 100)}% opportunity confidence</p></div><Badge>{titleCase(opportunity.lifecycle_stage)}</Badge></div>{notice && <div className="notice" role="status">{notice}</div>}<div className="panel"><h2>Opportunity basis</h2><p>{opportunity.creation_reason || "Created from preserved signal evidence."}</p><p className="muted">{activeSignalCount} active linked signal{activeSignalCount === 1 ? "" : "s"} support this opportunity. Historical inactive relationships remain visible below.</p></div><div className="panel"><h2>Evidence timeline</h2>{opportunity.signals.map((signal) => <article className="timeline-item" key={signal.id}><div><input type="checkbox" aria-label={`Select ${signal.title} for split`} checked={selected.has(signal.id)} onChange={() => setSelected((current) => { const next = new Set(current); next.has(signal.id) ? next.delete(signal.id) : next.add(signal.id); return next; })} /> <Badge>{titleCase(signal.source_type)}</Badge><strong>{signal.title}</strong><span className="cell-subtitle">{formatDate(signal.discovered_at)} · Rule confidence {signal.rule_confidence == null ? "—" : `${Math.round(signal.rule_confidence * 100)}%`} · {signal.relationship_created_by || "SYSTEM"} · {signal.relationship_status}</span></div><p className="muted">{signal.match_reason === "initial signal" ? "Initial signal established this opportunity." : signal.match_reason || signal.provenance?.reason || "Relationship provenance unavailable."}</p><button className="button ghost" onClick={() => window.location.hash = `/history/${signal.id}`}>Open signal</button><button className="button ghost" onClick={() => setModal({ kind: "unlink", signalId: signal.id })}>Unlink</button>{signal.ai_status === "SUCCEEDED" && <span className="cell-subtitle">AI shadow: {titleCase(signal.ai_recommendation)} · {Math.round(signal.ai_confidence * 100)}%</span>}</article>)}{selected.size > 0 && <button className="button secondary" onClick={() => setModal({ kind: "split" })}>Split selected signals</button>}</div><div className="panel"><h2>Manual correction</h2><p className="muted">Manual links are authoritative and preserve the original relationship history.</p><div className="inline-form"><input aria-label="Signal ID to link" placeholder="Signal ID to link" value={signalToLink} onChange={(event) => setSignalToLink(event.target.value)} /><button className="button secondary" disabled={!signalToLink} onClick={() => action("link", { signal_id: signalToLink })}>Link signal</button></div><div className="inline-form"><input aria-label="Target opportunity ID" placeholder="Target opportunity ID" value={mergeTarget} onChange={(event) => setMergeTarget(event.target.value)} /><button className="button secondary" disabled={!mergeTarget} onClick={() => setModal({ kind: "merge" })}>Merge into target</button></div></div><div className="panel"><h2>Latest stage explanation</h2><p>{opportunity.stage_reason || "No separate stage update explanation."}</p><pre>{JSON.stringify(opportunity.confidence_breakdown || {}, null, 2)}</pre></div>{modal?.kind === "unlink" && <ConfirmationModal title="Unlink signal?" message="The relationship will be marked rejected and preserved in the audit history." confirmLabel="Unlink" danger={busy} busy={busy} onCancel={() => setModal(null)} onConfirm={() => action("unlink", { signal_id: modal.signalId })} />}{modal?.kind === "merge" && <ConfirmationModal title="Merge opportunities?" message="The source opportunity and its active links will be preserved in history and attached to the target." confirmLabel="Merge" danger={busy} busy={busy} onCancel={() => setModal(null)} onConfirm={() => action("merge", { target_opportunity_id: mergeTarget })} />}{modal?.kind === "split" && <ConfirmationModal title="Split selected signals?" message="Selected links will be preserved and moved to a new opportunity." confirmLabel="Split" danger={busy} busy={busy} onCancel={() => setModal(null)} onConfirm={() => action("split", { signal_ids: [...selected] })} />}</section>;
 }
 
-function SignalRow({ item, onClick, inbox, selected, onSelect, onReview }) {
+function SignalRow({ item, onClick, inbox, showVertical, selected, onSelect, onReview }) {
   const council = item.metadata?.council;
   const recruitmentFacts = item.extracted_facts || {};
   const aiLabel = item.ai_status === "SUCCEEDED" && item.ai_recommendation
     ? `${titleCase(item.ai_recommendation)} · ${Math.round(item.ai_confidence * 100)}%`
     : item.ai_status === "FAILED" ? "Unavailable" : "—";
   return <tr className={isFalsePositive(item) ? "false-positive-row" : "clickable-row"} onClick={onClick} tabIndex="0" onKeyDown={(event) => event.key === "Enter" && onClick()}>
-    {inbox && <td onClick={(event) => event.stopPropagation()}><input type="checkbox" aria-label={`Select ${item.title}`} checked={selected} onChange={onSelect} /></td>}<td className="nowrap">{formatDate(item.discovered_at)}</td><td><strong>{item.title}</strong><span className="cell-subtitle">{item.external_id}</span></td><td><Badge>{titleCase(item.source_type)}</Badge>{item.source_type === "recruitment" && <span className="cell-subtitle">{titleCase(recruitmentFacts.recruitment_relevance || "—")}</span>}</td><td>{council || item.organisation_hint || "—"}<span className="cell-subtitle">{item.location_hint || "—"}</span></td><td><strong>{titleCase(item.event_type)}</strong><span className="cell-subtitle">{item.source_type === "recruitment" ? `${titleCase(recruitmentFacts.recruitment_role_category)} · Change ${titleCase(recruitmentFacts.commercial_change_evidence)}` : titleCase(item.lifecycle_stage)}</span>{isFalsePositive(item) && <span className="false-label">Likely false positive</span>}</td><td>{item.confidence == null ? "—" : `${Math.round(item.confidence * 100)}%`}</td><td><span className="cell-subtitle">AI shadow</span>{aiLabel}</td><td><Badge tone={reviewTone(item.review_status)}>{item.review_status || "PROCESSING"}</Badge></td>{inbox && <td className="row-actions" onClick={(event) => event.stopPropagation()}><RowActions item={item} onClick={onClick} onReview={onReview} /></td>}
+    {inbox && <td onClick={(event) => event.stopPropagation()}><input type="checkbox" aria-label={`Select ${item.title}`} checked={selected} onChange={onSelect} /></td>}{showVertical && <td><Badge>{verticalName(item.vertical)}</Badge></td>}<td className="nowrap">{formatDate(item.discovered_at)}</td><td><strong>{item.title}</strong><span className="cell-subtitle">{item.external_id}</span></td><td><Badge>{titleCase(item.source_type)}</Badge>{item.source_type === "recruitment" && <span className="cell-subtitle">{titleCase(recruitmentFacts.recruitment_relevance || "—")}</span>}</td><td>{council || item.organisation_hint || "—"}<span className="cell-subtitle">{item.location_hint || "—"}</span></td><td><strong>{titleCase(item.event_type)}</strong><span className="cell-subtitle">{item.source_type === "recruitment" ? `${titleCase(recruitmentFacts.recruitment_role_category)} · Change ${titleCase(recruitmentFacts.commercial_change_evidence)}` : titleCase(item.lifecycle_stage)}</span>{isFalsePositive(item) && <span className="false-label">Likely false positive</span>}</td><td>{item.confidence == null ? "—" : `${Math.round(item.confidence * 100)}%`}</td><td><span className="cell-subtitle">AI shadow</span>{aiLabel}</td><td><Badge tone={reviewTone(item.review_status)}>{item.review_status || "PROCESSING"}</Badge></td>{inbox && <td className="row-actions" onClick={(event) => event.stopPropagation()}><RowActions item={item} onClick={onClick} onReview={onReview} /></td>}
   </tr>;
 }
 
@@ -695,21 +718,15 @@ export default function App() {
   const auth = useAuth();
   const path = useHashLocation();
   const apiClient = useMemo(() => useApi(auth.getToken, auth.logout), [auth.getToken, auth.logout]);
-  const [vertical, setVertical] = useState(() => window.sessionStorage.getItem("signalhub.vertical") || "NURSERY");
+  const [vertical, setVertical] = useState(() => restoredVertical());
   const onVerticalChange = useCallback((value) => {
     setVertical(value);
     window.sessionStorage.setItem("signalhub.vertical", value);
   }, []);
   const scopedApiClient = useMemo(() => async (requestPath, options = {}) => {
     const method = String(options.method || "GET").toUpperCase();
-    if (method !== "GET" || vertical === "ALL") return apiClient(requestPath, options);
-    const [pathname, queryString] = requestPath.split("?", 2);
-    if (!["/admin/signals", "/admin/opportunities", "/admin/match-review", "/admin/organisations"].includes(pathname)) {
-      return apiClient(requestPath, options);
-    }
-    const params = new URLSearchParams(queryString || "");
-    params.set("vertical", vertical);
-    return apiClient(`${pathname}?${params.toString()}`, options);
+    if (method !== "GET") return apiClient(requestPath, options);
+    return apiClient(verticalScopedPath(requestPath, vertical), options);
   }, [apiClient, vertical]);
   if (auth.loading) return <div className="app-loading"><span className="spinner" /> Checking session…</div>;
   if (!auth.user) return <LoginPage onLogin={auth.login} authError={auth.authError} configured={auth.configured} passwordChallenge={auth.passwordChallenge} onCompleteNewPassword={auth.completeNewPassword} onCancelPasswordChallenge={auth.cancelPasswordChallenge} />;
@@ -719,7 +736,8 @@ export default function App() {
   const opportunityMatch = route.match(/^\/opportunities\/([^/?#]+)/);
   const detailMode = detailMatch?.[1] === "inbox" ? "inbox" : detailMatch?.[1] === "unmatched" ? "unmatched" : "history";
   const detailNotice = new URLSearchParams(listQuery).get("notice") || "";
+  const showVertical = vertical === "ALL";
   return <Shell user={auth.user} onLogout={auth.logout} onNavigate={navigate} currentPath={path} vertical={vertical} onVerticalChange={onVerticalChange}>
-    {detailMatch ? <SignalDetail signalId={detailMatch[2]} apiClient={scopedApiClient} queueMode={detailMode === "inbox"} unmatchedMode={detailMode === "unmatched"} initialNotice={detailNotice} onBack={() => navigate(detailMode === "inbox" ? "/inbox" : detailMode === "unmatched" ? "/unmatched" : "/history")} onReviewed={({ message, nextId }) => navigate(nextId ? `/inbox/${nextId}?notice=${encodeURIComponent(message)}` : `/inbox?notice=${encodeURIComponent(message)}`)} /> : opportunityMatch ? <OpportunityDetail opportunityId={opportunityMatch[1]} apiClient={scopedApiClient} onBack={() => navigate("/opportunities")} /> : route === "/inbox" ? <ReviewInboxPage apiClient={scopedApiClient} onNavigate={navigate} initialQuery={listQuery} /> : route === "/history" ? <ReviewedSignalsPage apiClient={scopedApiClient} onNavigate={navigate} initialQuery={listQuery} /> : route === "/unmatched" ? <UnmatchedSignalsPage apiClient={scopedApiClient} onNavigate={navigate} initialQuery={listQuery} /> : route === "/match-review" ? <MatchReviewPage apiClient={scopedApiClient} onNavigate={navigate} /> : route === "/opportunities" ? <OpportunitiesPage apiClient={scopedApiClient} onNavigate={navigate} /> : route === "/sources" ? <SourcesPage apiClient={scopedApiClient} /> : route === "/organisations" ? <OrganisationsPage apiClient={scopedApiClient} /> : <Dashboard apiClient={scopedApiClient} onNavigate={navigate} />}
+    {detailMatch ? <SignalDetail key={vertical} signalId={detailMatch[2]} apiClient={scopedApiClient} queueMode={detailMode === "inbox"} unmatchedMode={detailMode === "unmatched"} initialNotice={detailNotice} onBack={() => navigate(detailMode === "inbox" ? "/inbox" : detailMode === "unmatched" ? "/unmatched" : "/history")} onReviewed={({ message, nextId }) => navigate(nextId ? `/inbox/${nextId}?notice=${encodeURIComponent(message)}` : `/inbox?notice=${encodeURIComponent(message)}`)} /> : opportunityMatch ? <OpportunityDetail key={vertical} opportunityId={opportunityMatch[1]} apiClient={scopedApiClient} onBack={() => navigate("/opportunities")} /> : route === "/inbox" ? <ReviewInboxPage key={vertical} apiClient={scopedApiClient} onNavigate={navigate} initialQuery={listQuery} showVertical={showVertical} /> : route === "/history" ? <ReviewedSignalsPage key={vertical} apiClient={scopedApiClient} onNavigate={navigate} initialQuery={listQuery} showVertical={showVertical} /> : route === "/unmatched" ? <UnmatchedSignalsPage key={vertical} apiClient={scopedApiClient} onNavigate={navigate} initialQuery={listQuery} showVertical={showVertical} /> : route === "/match-review" ? <MatchReviewPage key={vertical} apiClient={scopedApiClient} onNavigate={navigate} showVertical={showVertical} /> : route === "/opportunities" ? <OpportunitiesPage key={vertical} apiClient={scopedApiClient} onNavigate={navigate} showVertical={showVertical} /> : route === "/sources" ? <SourcesPage key={vertical} apiClient={scopedApiClient} selectedVertical={vertical} /> : route === "/organisations" ? <OrganisationsPage key={vertical} apiClient={scopedApiClient} /> : <Dashboard key={vertical} apiClient={scopedApiClient} onNavigate={navigate} />}
   </Shell>;
 }

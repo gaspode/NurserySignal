@@ -1,7 +1,7 @@
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { Dashboard, LoginPage, MatchReviewPage, OpportunitiesPage, OpportunityDetail, ReviewInboxPage, ReviewedSignalsPage, SignalDetail, SourcesPage, UnmatchedSignalsPage } from "./App.jsx";
+import { Dashboard, LoginPage, MatchReviewPage, OpportunitiesPage, OpportunityDetail, ReviewInboxPage, ReviewedSignalsPage, SignalDetail, SourcesPage, UnmatchedSignalsPage, restoredVertical, verticalScopedPath } from "./App.jsx";
 
 const pendingItem = {
   id: "signal-1",
@@ -222,7 +222,10 @@ describe("admin frontend", () => {
     expect(await screen.findByRole("heading", { name: "Sources" })).toBeInTheDocument();
     expect(screen.getByText("Planning applications")).toBeInTheDocument();
     await userEvent.click(screen.getAllByRole("button", { name: "Run now" })[0]);
-    expect(apiClient).toHaveBeenCalledWith("/admin/sources/planning/run", { method: "POST" });
+    expect(apiClient).toHaveBeenCalledWith("/admin/sources/planning/run", {
+      method: "POST",
+      body: JSON.stringify({ vertical: "NURSERY" }),
+    });
     expect(await screen.findByText("Run in progress…")).toBeInTheDocument();
   });
 
@@ -326,7 +329,10 @@ describe("admin frontend", () => {
       .mockResolvedValueOnce({ total: 2 })
       .mockResolvedValueOnce({ total: 3 })
       .mockResolvedValueOnce({ total: 4 })
-      .mockResolvedValueOnce(listResult([pendingItem]));
+      .mockResolvedValueOnce(listResult([pendingItem]))
+      .mockResolvedValueOnce({ total: 5 })
+      .mockResolvedValueOnce({ total: 6 })
+      .mockResolvedValueOnce({ total: 7 });
     const onNavigate = vi.fn();
     render(<Dashboard apiClient={apiClient} onNavigate={onNavigate} />);
     await screen.findByText("Pending review");
@@ -341,11 +347,9 @@ describe("admin frontend", () => {
     let callCount = 0;
     const apiClient = vi.fn(() => {
       callCount += 1;
-      if (callCount === 5) return new Promise((resolve) => { resolveFirstRefresh = resolve; });
-      if (callCount % 4 === 1) return Promise.resolve({ total: 2 });
-      if (callCount % 4 === 2) return Promise.resolve({ total: 3 });
-      if (callCount % 4 === 3) return Promise.resolve({ total: 4 });
-      return Promise.resolve(listResult([pendingItem]));
+      if (callCount === 8) return new Promise((resolve) => { resolveFirstRefresh = resolve; });
+      if (callCount % 7 === 4) return Promise.resolve(listResult([pendingItem]));
+      return Promise.resolve({ total: callCount % 7 || 7 });
     });
     const onNavigate = vi.fn();
     render(<Dashboard apiClient={apiClient} onNavigate={onNavigate} />);
@@ -355,7 +359,34 @@ describe("admin frontend", () => {
     expect(onNavigate).not.toHaveBeenCalled();
     resolveFirstRefresh({ total: 2 });
     await waitFor(() => expect(screen.getByRole("button", { name: "Refresh data" })).not.toBeDisabled());
-    expect(apiClient).toHaveBeenCalledTimes(8);
+    expect(apiClient).toHaveBeenCalledTimes(14);
+  });
+
+  it("reloads the review inbox when the vertical-scoped API client changes", async () => {
+    const nursery = { ...pendingItem, vertical: "NURSERY" };
+    const care = { ...pendingItem, id: "care-1", vertical: "CHILDRENS_HOME", title: "New children's home" };
+    const nurseryClient = vi.fn().mockResolvedValue(listResult([nursery]));
+    const careClient = vi.fn().mockResolvedValue(listResult([care]));
+    const view = render(<ReviewInboxPage apiClient={nurseryClient} onNavigate={vi.fn()} />);
+    expect(await screen.findByText(nursery.title)).toBeInTheDocument();
+    view.rerender(<ReviewInboxPage apiClient={careClient} onNavigate={vi.fn()} />);
+    expect(await screen.findByText(care.title)).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText(nursery.title)).not.toBeInTheDocument());
+  });
+
+  it("shows vertical labels for all-vertical signal queues", async () => {
+    const nursery = { ...pendingItem, vertical: "NURSERY" };
+    const care = { ...pendingItem, id: "care-1", vertical: "CHILDRENS_HOME", title: "New children's home" };
+    render(<ReviewInboxPage apiClient={vi.fn().mockResolvedValue(listResult([nursery, care]))} onNavigate={vi.fn()} showVertical />);
+    expect(await screen.findByText("NurserySignal")).toBeInTheDocument();
+    expect(screen.getByText("CareSignal")).toBeInTheDocument();
+  });
+
+  it("preserves valid vertical selection and rejects disabled stored contexts", () => {
+    expect(restoredVertical({ getItem: () => "CHILDRENS_HOME" })).toBe("CHILDRENS_HOME");
+    expect(restoredVertical({ getItem: () => "DENTAL" })).toBe("NURSERY");
+    expect(verticalScopedPath("/admin/signals?review_status=PENDING", "NURSERY")).toContain("vertical=NURSERY");
+    expect(verticalScopedPath("/admin/opportunities?limit=10", "ALL")).toContain("vertical=ALL");
   });
 
   it("refreshes the pending inbox without changing its pagination state or navigation", async () => {

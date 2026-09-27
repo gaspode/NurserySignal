@@ -19,7 +19,13 @@ from app.db import connection
 from app.ingestion import NormalizedSignal
 from app.queueing import EnrichmentMessage, send_enrichment_message
 from app.recruitment import recruitment_record_from_signal
-from app.verticals import NURSERY, policy_for, validate_vertical
+from app.verticals import (
+    ALL_VERTICALS,
+    NURSERY,
+    policy_for,
+    validate_vertical,
+    validate_vertical_filter,
+)
 
 
 def record_admin_audit(
@@ -402,11 +408,12 @@ def list_signals(
     opportunity_decision: str | None = None,
     vertical: str | None = None,
 ) -> dict[str, Any]:
+    vertical = validate_vertical_filter(vertical)
     clauses = ["TRUE"]
     params: list[Any] = []
-    if vertical and vertical.upper() != "ALL":
+    if vertical != ALL_VERTICALS:
         clauses.append("rs.vertical = %s")
-        params.append(validate_vertical(vertical))
+        params.append(vertical)
     if review_status:
         if review_status == "REVIEWED":
             clauses.append("se.review_status IN ('APPROVED', 'REJECTED')")
@@ -1776,11 +1783,12 @@ def list_opportunities(
     settings: Settings, *, limit: int, offset: int, search: str | None = None,
     vertical: str | None = None,
 ) -> dict[str, Any]:
+    vertical = validate_vertical_filter(vertical)
     clauses = ["TRUE"]
     params: list[Any] = []
-    if vertical and vertical.upper() != "ALL":
+    if vertical != ALL_VERTICALS:
         clauses.append("o.vertical = %s")
-        params.append(validate_vertical(vertical))
+        params.append(vertical)
     if search:
         clauses.append(
             "(o.name ILIKE %s OR COALESCE(o.creation_reason, '') ILIKE %s "
@@ -1839,11 +1847,12 @@ def list_organisations(
     settings: Settings, *, limit: int, offset: int, vertical: str | None = None
 ) -> dict[str, Any]:
     """Show shared organisation identities with vertical-scoped activity."""
+    vertical = validate_vertical_filter(vertical)
     clauses = ["TRUE"]
     params: list[Any] = []
-    if vertical and vertical.upper() != "ALL":
+    if vertical != ALL_VERTICALS:
         clauses.append("activity.vertical = %s")
-        params.append(validate_vertical(vertical))
+        params.append(vertical)
     where = " AND ".join(clauses)
     with connection(settings) as conn:
         rows = conn.execute(
@@ -2004,11 +2013,12 @@ def _cleanup_match_reviews(
 def list_match_reviews(
     settings: Settings, *, limit: int, offset: int, vertical: str | None = None
 ) -> dict[str, Any]:
+    vertical = validate_vertical_filter(vertical)
     vertical_clause = ""
     params: list[Any] = []
-    if vertical and vertical.upper() != "ALL":
+    if vertical != ALL_VERTICALS:
         vertical_clause = " AND mr.vertical = %s"
-        params.append(validate_vertical(vertical))
+        params.append(vertical)
     with connection(settings) as conn:
         total = conn.execute(
             f"""SELECT count(*)

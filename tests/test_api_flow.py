@@ -121,7 +121,7 @@ def test_admin_list_filters_and_paginates(monkeypatch) -> None:
         "unmatched_only": False,
             "include_excluded": False,
             "opportunity_decision": None,
-            "vertical": None,
+            "vertical": "NURSERY",
     }
 
 
@@ -180,6 +180,65 @@ def test_admin_list_passes_bounded_text_search(monkeypatch) -> None:
     response = handler(event("/admin/signals", query={"q": "nursery planning ref"}), None)
     assert response["statusCode"] == 200
     assert captured["search"] == "nursery planning ref"
+
+
+def test_admin_lists_validate_and_forward_vertical_scope(monkeypatch) -> None:
+    captured = {}
+
+    def fake_list(settings, **kwargs):
+        captured.update(kwargs)
+        return {"items": [], "total": 0}
+
+    monkeypatch.setattr("app.handler.list_signals", fake_list)
+    response = handler(
+        event("/admin/signals", query={"vertical": "CHILDRENS_HOME"}), None
+    )
+    assert response["statusCode"] == 200
+    assert captured["vertical"] == "CHILDRENS_HOME"
+
+    response = handler(event("/admin/signals", query={"vertical": "ALL"}), None)
+    assert response["statusCode"] == 200
+    assert captured["vertical"] == "ALL"
+
+    assert handler(event("/admin/signals", query={"vertical": "UNKNOWN"}), None)[
+        "statusCode"
+    ] == 400
+    assert handler(event("/admin/signals", query={"vertical": "DENTAL"}), None)[
+        "statusCode"
+    ] == 400
+
+
+def test_admin_work_queues_forward_same_validated_vertical(monkeypatch) -> None:
+    admin_claims = {**CLAIMS, "cognito:groups": ["NurserySignalAdmins"]}
+    captured = {}
+
+    monkeypatch.setattr(
+        "app.handler.list_opportunities",
+        lambda settings, **kwargs: captured.setdefault("opportunities", kwargs)
+        or {"items": [], "total": 0},
+    )
+    monkeypatch.setattr(
+        "app.handler.list_match_reviews",
+        lambda settings, **kwargs: captured.setdefault("match_review", kwargs)
+        or {"items": [], "total": 0},
+    )
+    monkeypatch.setattr(
+        "app.handler.list_organisations",
+        lambda settings, **kwargs: captured.setdefault("organisations", kwargs)
+        or {"items": []},
+    )
+
+    for path, key in (
+        ("/admin/opportunities", "opportunities"),
+        ("/admin/match-review", "match_review"),
+        ("/admin/organisations", "organisations"),
+    ):
+        response = handler(
+            event(path, query={"vertical": "CHILDRENS_HOME"}, claims=admin_claims),
+            None,
+        )
+        assert response["statusCode"] == 200
+        assert captured[key]["vertical"] == "CHILDRENS_HOME"
 
 
 def test_opportunity_recalculate_requires_admin_and_is_bounded(monkeypatch) -> None:
@@ -310,6 +369,7 @@ def test_source_manual_run_uses_fixed_bounds_and_exact_lambda(monkeypatch) -> No
             "max_records": 100,
             "care_max_records": 50,
             "page_size": 25,
+        "verticals": ["NURSERY"],
         "run_id": "run-1",
         "run_started_at": "2026-09-26T19:00:00Z",
     }

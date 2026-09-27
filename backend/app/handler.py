@@ -39,7 +39,7 @@ from app.service import EnrichmentQueueError, SignalConflictError, ingest_signal
 from app.shadow_review import reevaluate_ai_shadow
 from app.source_runs import finish_run, list_runs, start_run
 from app.storage import EvidencePersistenceError, presigned_evidence_url
-from app.verticals import registry_payload
+from app.verticals import ALL_VERTICALS, registry_payload, validate_vertical_filter
 
 logger = configure_logging()
 
@@ -266,15 +266,21 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                         settings,
                         limit=limit,
                         offset=offset,
-                        vertical=_query(event, "vertical"),
+                        vertical=validate_vertical_filter(_query(event, "vertical")),
                     ),
                 )
             if action == "source-list" and method == "GET":
                 admin_error = _require_admin(claims, settings)
                 if admin_error:
                     return admin_error
+                vertical = validate_vertical_filter(_query(event, "vertical"))
                 sources = []
                 for source_key, definition in SOURCE_DEFINITIONS.items():
+                    if (
+                        vertical != ALL_VERTICALS
+                        and vertical not in definition["supported_verticals"]
+                    ):
+                        continue
                     runs = list_runs(settings, source_key, limit=10)
                     latest = runs[0] if runs else None
                     successful = next((run for run in runs if run.get("status") == "SUCCESS"), None)
@@ -315,7 +321,17 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 queue_url = getattr(settings, definition["queue_setting"])
                 if not queue_url:
                     return _response(503, {"error": "collector_not_configured"})
+                raw_payload = _raw_body(event)
+                payload_body = parse_json_payload(raw_payload) if raw_payload else {}
+                vertical = validate_vertical_filter(payload_body.get("vertical"))
+                if (
+                    vertical != ALL_VERTICALS
+                    and vertical not in definition["supported_verticals"]
+                ):
+                    raise ValueError("source does not support vertical")
                 parameters = dict(definition["default_parameters"])
+                if vertical != ALL_VERTICALS:
+                    parameters["verticals"] = [vertical]
                 run_id, started_at = start_run(
                     settings,
                     source_key=signal_id,
@@ -484,7 +500,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                         settings,
                         limit=limit,
                         offset=offset,
-                        vertical=_query(event, "vertical"),
+                        vertical=validate_vertical_filter(_query(event, "vertical")),
                     ),
                 )
             if (
@@ -596,7 +612,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                         unmatched_only=_query(event, "unmatched") == "true",
                         include_excluded=_query(event, "include_excluded") == "true",
                         opportunity_decision=_query(event, "opportunity_decision"),
-                        vertical=_query(event, "vertical"),
+                        vertical=validate_vertical_filter(_query(event, "vertical")),
                     ),
                 )
             if action == "opportunity-list" and method == "GET":
@@ -612,7 +628,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                         limit=limit,
                         offset=offset,
                         search=_query(event, "q"),
-                        vertical=_query(event, "vertical"),
+                        vertical=validate_vertical_filter(_query(event, "vertical")),
                     ),
                 )
             if action == "opportunity-recalculate" and method == "POST":

@@ -40,6 +40,11 @@ def validate_vertical(value: str | None, *, allow_all: bool = False) -> str:
     return vertical
 
 
+def validate_vertical_filter(value: str | None) -> str:
+    """Validate an admin list scope; omitted scopes remain NurserySignal-safe."""
+    return validate_vertical(value or NURSERY, allow_all=True)
+
+
 def registry_payload() -> list[dict[str, Any]]:
     return [
         {"key": item.key, "display_name": item.display_name, "enabled": item.enabled}

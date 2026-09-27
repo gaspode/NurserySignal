@@ -184,6 +184,7 @@ Run the bounded opportunity-creation recalculation against production data, revi
 - Refactored existing NurserySignal classification through the Nursery vertical policy boundary while preserving its current collectors and review semantics.
 - Added the shared SignalHub admin shell/selector and an initial cross-vertical Organisations view; customer-facing CareSignal/DentalSignal products and collectors remain deferred.
 - Routed bounded admin collector runs through private SQS command queues so the VPC-attached admin API can trigger collectors reliably without NAT or a fixed-cost Lambda interface endpoint.
+- Made the selected SignalHub vertical an explicit, validated backend scope for review/history, opportunities, unmatched signals, Match Review, organisations, sources and overview counts; `ALL` remains an explicit admin aggregation mode and disabled verticals cannot become working contexts.
 
 ## Phase 9 — CareSignal planning and recruitment — ACTIVE
 
