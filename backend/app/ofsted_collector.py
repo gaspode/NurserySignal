@@ -62,7 +62,6 @@ def collect_ofsted(settings: Settings, event: dict[str, Any] | None = None) -> d
                     "raw_provider_record": {
                         **record.raw,
                         "dataset_url": settings.ofsted_data_url,
-                        "retrieved_at": retrieved_at.isoformat(),
                     },
                 },
                 separators=(",", ":"),

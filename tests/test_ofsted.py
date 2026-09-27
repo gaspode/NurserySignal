@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import zipfile
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 from app.care import enrich_care_signal
+from app.config import Settings
 from app.ofsted import OfstedQuery, ofsted_signal, records_from_ods
+from app.ofsted_collector import collect_ofsted
 
 
 def _ods(path: Path) -> None:
@@ -126,3 +128,43 @@ def test_ofsted_is_supporting_regulatory_evidence_not_a_new_opportunity() -> Non
         "SUPPORT_EXISTING_ONLY"
     )
     assert candidate["extracted_facts"]["likely_false_positive"] is False
+
+
+def test_ofsted_repeated_collection_keeps_provider_evidence_stable(
+    tmp_path: Path, monkeypatch
+) -> None:
+    path = tmp_path / "register.ods"
+    _ods(path)
+    records = list(
+        records_from_ods(
+            path,
+            OfstedQuery(max_records=1, registered_since_days=365, active_only=True),
+            today=date(2025, 9, 30),
+        )
+    )
+    queued = []
+
+    def download(_url: str) -> Path:
+        copy = tmp_path / f"register-{len(queued)}.ods"
+        _ods(copy)
+        return copy
+
+    monkeypatch.setattr("app.ofsted_collector.download_register", download)
+    monkeypatch.setattr("app.ofsted_collector.records_from_ods", lambda *_: iter(records))
+    monkeypatch.setattr(
+        "app.ofsted_collector.send_ingestion_message",
+        lambda _settings, message: queued.append(message),
+    )
+
+    settings = Settings(
+        ingestion_queue_url="https://sqs.example/ingestion",
+        ofsted_data_url="https://example.test/ofsted.ods",
+    )
+    collect_ofsted(settings, {"source": "manual", "max_records": 1})
+    collect_ofsted(settings, {"source": "manual", "max_records": 1})
+
+    assert len(queued) == 2
+    assert queued[0].raw_provider_record == queued[1].raw_provider_record
+    assert "retrieved_at" not in queued[0].raw_provider_record
+    assert queued[0].raw_provider_record["dataset_url"] == settings.ofsted_data_url
+    assert datetime.fromisoformat(queued[0].signal["discovered_at"]).tzinfo == UTC
