@@ -228,6 +228,9 @@ Validation gate:
 - Officer/director history is deliberately not collected because it is unnecessary for the
   current entity-resolution purpose.
 - Both sources remain bounded and manual-only while production accuracy is assessed.
+- Initial production validation ingested 10 current Ofsted children’s-home register records.
+  No opportunities were auto-linked from redacted site data, queues drained cleanly, and an
+  unchanged repeat now creates no additional evidence or enrichment work.
 
 Validation gate:
 - configure the Companies House API key privately and inspect a small bounded set of existing
