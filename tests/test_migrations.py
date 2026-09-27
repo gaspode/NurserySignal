@@ -19,12 +19,12 @@ def test_initial_migration_exists_and_contains_provenance_tables() -> None:
         "0011_opportunity_creation_policy.sql",
         "0012_opportunity_reason_separation.sql",
         "0013_canonical_match_review_cleanup.sql",
-            "0014_signalhub_verticals.sql",
-            "0015_caresignal_activation.sql",
-            "0016_regulatory_and_organisation_enrichment.sql",
-            "0017_organisation_review_evidence.sql",
-            "0018_ofsted_urn_enrichment.sql",
-            "0019_historical_backtesting.sql",
+        "0014_signalhub_verticals.sql",
+        "0015_caresignal_activation.sql",
+        "0016_regulatory_and_organisation_enrichment.sql",
+        "0017_organisation_review_evidence.sql",
+        "0018_ofsted_urn_enrichment.sql",
+        "0019_historical_backtesting.sql",
         ]
     sql = "\n".join(path.read_text(encoding="utf-8") for path in files)
     tables = (
@@ -63,6 +63,7 @@ def test_initial_migration_exists_and_contains_provenance_tables() -> None:
     assert "CREATE TABLE IF NOT EXISTS backtest_case_results" in sql
     assert "CREATE OR REPLACE VIEW backtest_labelled_decisions" in sql
     assert "truth_role', 'OUTCOME_ONLY'" in sql
+    assert "'ofsted:' || (rs.metadata->>'ofsted_urn')" in sql
 
 
 def test_ai_review_insert_has_one_value_placeholder_per_column() -> None:

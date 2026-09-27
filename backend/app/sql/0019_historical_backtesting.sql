@@ -123,7 +123,7 @@ INSERT INTO benchmark_cases (
     provenance, label_confidence, notes
 )
 SELECT
-    'ofsted:' || rs.metadata->>'ofsted_urn',
+    'ofsted:' || (rs.metadata->>'ofsted_urn'),
     'care-ofsted-v1',
     'CHILDRENS_HOME',
     rs.organisation_hint,
