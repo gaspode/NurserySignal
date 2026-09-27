@@ -340,10 +340,25 @@ Implementation status:
   missed case had two official new-home recruitment adverts whose generic Support Worker/Team
   Leader titles the current deterministic policy ignored. Precision remains unmeasurable because
   the benchmark has no reliable negative cases; no duplicate or incorrect merge was observed.
+- CareSignal recruitment policy `care-deterministic-v2` now permits generic Support Worker/Team
+  Leader roles when the preserved advert body independently establishes a children's-home setting,
+  and treats only explicit new-home, opening, acquisition or registration-stage context as material
+  change. Established-home, adult-care and weak generic “new opportunity” wording remain protected.
+- Replaying the unchanged corpus and canonical 365-day window after that refinement made all four
+  usable cases detectable (100% recall) and moved median lead time from 290 to 248.5 days. The
+  Cumulus/Birch House case is now discovered from recruitment 97 days before registration. Its two
+  same-home adverts create one duplicate replay opportunity, exposing a bounded grouping weakness;
+  no incorrect merge or review item was generated.
+- A read-only preview of all four current stored CareSignal recruitment records left all four as
+  `RELEVANT_ROUTINE` and changed none, providing no evidence of broad routine-role inflation.
+- Read-only lookback sensitivity produced 4 usable/4 detected at 365 days, and 5 usable/5 detected
+  at both 450 and 540 days. The sole additional case is the known planning item 372 days before
+  registration; the canonical window remains 365 days.
 - Existing immutable evidence already preserves dated planning revisions, vacancy payloads,
   Companies House retrieval revisions and Ofsted register/report revisions. The historic gap is
   pre-SignalHub source coverage rather than destructive overwriting of current records.
-- Current evidence does not justify a Site/Event/probabilistic redesign: only four of 21 outcomes
-  are replayable. The next priority is stronger prospective source retention/coverage and a narrow,
-  independently validated CareSignal recruitment-context improvement before rerunning this fixed
-  benchmark and extending it to NurserySignal.
+- Current evidence still does not justify a Site/Event/probabilistic redesign: only four of 21
+  outcomes are replayable at the canonical window (five at wider windows). The next priority remains
+  stronger prospective source coverage and more labelled outcomes. Track the exact-workplace
+  duplicate exposed by the two Birch House adverts, but do not widen automatic site matching from
+  one case; rerun this fixed benchmark as coverage grows before extending it to NurserySignal.
