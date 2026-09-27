@@ -325,6 +325,12 @@ Implementation status:
   false, and precision remains unavailable without reliable negative labels.
 - Added bounded administrator seeding/runs, reproducible fingerprints, run comparison, labelled
   admin-decision export and a SignalHub Backtesting view with per-case/source metrics.
-- Initial CareSignal outcome corpus is capped at 30 authoritative 2025–2026 Ofsted registrations.
-  Production replay metrics and the evidence-based next architecture recommendation remain the
-  active validation gate.
+- First production run (`care-ofsted-v1`, 365-day lookback) attempted 21 authoritative 2025
+  registrations. All 21 were excluded because the current archive has no case-linked,
+  historically reconstructable planning/recruitment coverage; no case was incorrectly counted as
+  a miss and recall, precision, lead time, organisation/site accuracy and review burden therefore
+  remain unmeasurable.
+- The measured blocker is historical source coverage, not evidence for a Site/Event/probabilistic
+  redesign. Next build a small, provenance-safe historical planning/recruitment corpus for these
+  labelled outcomes (or accumulate dated snapshots prospectively), then rerun the same benchmark
+  before choosing a matching architecture change or extending the framework to NurserySignal.
