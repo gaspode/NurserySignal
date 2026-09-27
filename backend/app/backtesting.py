@@ -12,7 +12,7 @@ from typing import Any
 from app.correlation import classify_match, compatible_names, normalize_identity
 from app.verticals import policy_for, validate_vertical
 
-BACKTEST_ENGINE_VERSION = "historical-replay-v1"
+BACKTEST_ENGINE_VERSION = "historical-replay-v1.1"
 POSITIVE_OUTCOMES = {"OPENED", "REGISTERED", "EXPANDED", "RELOCATED"}
 NEGATIVE_OUTCOMES = {"DID_NOT_OPEN", "ABANDONED"}
 _POSTCODE = re.compile(r"\b([A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2})\b", re.IGNORECASE)
@@ -460,7 +460,14 @@ def replay_case(
             key: value.isoformat() if value else None for key, value in source_dates.items()
         },
         "timeline": timeline,
-        "generated_opportunities": opportunities,
+        "generated_opportunities": [
+            {
+                **item,
+                "created_at": item["created_at"].isoformat(),
+                "latest_at": item["latest_at"].isoformat(),
+            }
+            for item in opportunities
+        ],
         "confidence_metrics": {
             "event_confidence": max((item["event_confidence"] for item in matching), default=None),
             "match_confidence": max(

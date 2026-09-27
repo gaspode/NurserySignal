@@ -232,7 +232,9 @@ def execute_backtest(
     )
     with connection(settings) as conn:
         existing = conn.execute(
-            "SELECT id FROM backtest_runs WHERE run_fingerprint = %s", (fingerprint,)
+            """SELECT id FROM backtest_runs
+               WHERE run_fingerprint = %s AND status IN ('RUNNING', 'SUCCESS')""",
+            (fingerprint,),
         ).fetchone()
     if existing:
         detail = get_backtest_run(settings, str(existing[0]))
@@ -321,7 +323,9 @@ def execute_backtest(
     if row is None:
         with connection(settings) as conn:
             row = conn.execute(
-                "SELECT id FROM backtest_runs WHERE run_fingerprint = %s", (fingerprint,)
+                """SELECT id FROM backtest_runs
+                   WHERE run_fingerprint = %s AND status IN ('RUNNING', 'SUCCESS')""",
+                (fingerprint,),
             ).fetchone()
         return {**(get_backtest_run(settings, str(row[0])) or {}), "idempotent": True}
     run_id = str(row[0])

@@ -26,6 +26,7 @@ def test_initial_migration_exists_and_contains_provenance_tables() -> None:
         "0018_ofsted_urn_enrichment.sql",
         "0019_historical_backtesting.sql",
         "0020_historical_research_corpus.sql",
+        "0021_backtest_failed_retry.sql",
     ]
     sql = "\n".join(path.read_text(encoding="utf-8") for path in files)
     tables = (
@@ -67,6 +68,7 @@ def test_initial_migration_exists_and_contains_provenance_tables() -> None:
     assert "'ofsted:' || (rs.metadata->>'ofsted_urn')" in sql
     assert "CREATE TABLE IF NOT EXISTS historical_research_records" in sql
     assert "CREATE TABLE IF NOT EXISTS benchmark_case_research" in sql
+    assert "backtest_runs_active_fingerprint_idx" in sql
 
 
 def test_ai_review_insert_has_one_value_placeholder_per_column() -> None:

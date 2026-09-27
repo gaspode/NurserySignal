@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 
 from app.backtesting import (
@@ -168,6 +169,8 @@ def test_planning_finds_case_before_recruitment_and_sources_are_explainable() ->
     assert metrics["recall"] == 1.0
     assert sources["planning"]["first_discoveries"] == 1
     assert sources["recruitment"]["corroborations"] == 1
+    # Persisted case results are JSONB-safe; datetime objects must not escape replay.
+    json.dumps(result)
 
 
 def test_operator_name_alone_does_not_claim_a_redacted_site_outcome() -> None:
