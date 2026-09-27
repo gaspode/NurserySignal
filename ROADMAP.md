@@ -231,11 +231,12 @@ Validation gate:
 - Initial production validation ingested 10 current Ofsted children’s-home register records.
   No opportunities were auto-linked from redacted site data, queues drained cleanly, and an
   unchanged repeat now creates no additional evidence or enrichment work.
+- Initial Companies House validation resolved 8 of 10 stored CareSignal organisation names
+  through strong official legal-name matches and held 2 ambiguous results for admin review.
+  Repeating those two candidates preserved 10 evidence objects and the existing review items.
 
-Validation gate:
-- configure the Companies House API key privately and inspect a small bounded set of existing
-  CareSignal operators;
-- run a bounded Ofsted current/recent sample and manually inspect every automatic match and
-  Match Review suggestion;
-- verify regulatory lifecycle changes, idempotency, source health and queue/DLQ state;
-- decide polling cadence only after observing official publication frequency and match quality.
+Initial validation gate passed:
+- credentials, bounded source runs, idempotency, source health and queue/DLQ state are verified;
+- two ambiguous Companies House candidates remain for explicit admin review;
+- keep both sources manual-only while regulatory matching quality is assessed, then decide a
+  cadence aligned with Ofsted's publication frequency and the 30-day company-profile cache.
