@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import timedelta
 from typing import Any
 
 from psycopg.types.json import Jsonb
@@ -14,6 +15,12 @@ from app.backtesting import (
 )
 from app.config import Settings
 from app.db import connection
+from app.historical_corpus import parsed_datetime
+from app.historical_research_repository import (
+    historical_corpus_inputs,
+    historical_research_summary,
+    latest_historical_corpus,
+)
 from app.repository import record_admin_audit
 from app.verticals import ALL_VERTICALS, CHILDRENS_HOME, validate_vertical, validate_vertical_filter
 
@@ -213,8 +220,15 @@ def execute_backtest(
     vertical = validate_vertical(vertical)
     if not benchmark_version or len(benchmark_version) > 80:
         raise ValueError("invalid benchmark_version")
+    corpus = latest_historical_corpus(
+        settings, benchmark_version=benchmark_version, vertical=vertical
+    )
+    corpus_version = corpus["corpus_version"] if corpus else None
     fingerprint = run_fingerprint(
-        benchmark_version=benchmark_version, vertical=vertical, bounds=bounds
+        benchmark_version=benchmark_version,
+        vertical=vertical,
+        bounds=bounds,
+        corpus_version=corpus_version,
     )
     with connection(settings) as conn:
         existing = conn.execute(
@@ -235,10 +249,53 @@ def execute_backtest(
     if not cases:
         raise ValueError("benchmark version has no cases for this vertical")
     signals, company_evidence = _input_rows(settings, vertical=vertical, cases=cases, bounds=bounds)
+    corpus_links: dict[str, list[str]] = {}
+    if corpus:
+        corpus_signals, corpus_links = historical_corpus_inputs(
+            settings,
+            research_run_id=corpus["research_run_id"],
+            cases=cases,
+            max_signals=bounds.max_signals,
+        )
+        # Prefer the curated point-in-time snapshot if the same upstream record is
+        # also present in the live immutable evidence store.
+        combined: dict[tuple[str, str], dict[str, Any]] = {
+            (str(item.get("source_type")), str(item.get("external_id"))): item
+            for item in corpus_signals
+        }
+        for item in signals:
+            combined.setdefault((str(item.get("source_type")), str(item.get("external_id"))), item)
+        signals = list(combined.values())[: bounds.max_signals]
+
+        corpus_by_id = {
+            str(item.get("id", "")).removeprefix("historical:"): item for item in corpus_signals
+        }
+        for case in cases:
+            outcome_at = parsed_datetime(case.get("outcome_date"))
+            if outcome_at is None:
+                continue
+            start_at = outcome_at - timedelta(days=bounds.lookback_days)
+            linked = [
+                corpus_by_id[record_id]
+                for record_id in corpus_links.get(str(case["id"]), [])
+                if record_id in corpus_by_id
+            ]
+            has_window_coverage = any(
+                (available := parsed_datetime(item.get("discovered_at"))) is not None
+                and start_at <= available <= min(outcome_at, bounds.as_of)
+                for item in linked
+            )
+            if has_window_coverage:
+                case["provenance"] = {
+                    **(case.get("provenance") or {}),
+                    "source_coverage_complete": True,
+                    "coverage_basis": "CURATED_HISTORICAL_CORPUS",
+                }
     params = {
         "lookback_days": bounds.lookback_days,
         "max_cases": bounds.max_cases,
         "max_signals": bounds.max_signals,
+        "corpus_version": corpus_version,
         "outcome_source_mode": "OFSTED_OUTCOME_ONLY"
         if vertical == CHILDRENS_HOME
         else "SOURCE_SPECIFIC",
@@ -247,8 +304,8 @@ def execute_backtest(
         row = conn.execute(
             """INSERT INTO backtest_runs (
                    run_fingerprint, benchmark_version, engine_version, vertical,
-                   as_of, status, parameters
-               ) VALUES (%s, %s, %s, %s, %s, 'RUNNING', %s)
+                   as_of, status, parameters, corpus_version
+               ) VALUES (%s, %s, %s, %s, %s, 'RUNNING', %s, %s)
                ON CONFLICT (run_fingerprint) DO NOTHING RETURNING id""",
             (
                 fingerprint,
@@ -257,6 +314,7 @@ def execute_backtest(
                 vertical,
                 bounds.as_of,
                 Jsonb(params),
+                corpus_version,
             ),
         ).fetchone()
         conn.commit()
@@ -352,7 +410,7 @@ def get_backtest_run(settings: Settings, run_id: str) -> dict[str, Any] | None:
         row = conn.execute(
             """SELECT id, benchmark_version, engine_version, vertical, as_of, status,
                       parameters, metrics, source_contribution, failure_category,
-                      failure_message, started_at, completed_at
+                      failure_message, started_at, completed_at, corpus_version
                FROM backtest_runs WHERE id = %s""",
             (run_id,),
         ).fetchone()
@@ -417,6 +475,7 @@ def get_backtest_run(settings: Settings, run_id: str) -> dict[str, Any] | None:
         "failure_message",
         "started_at",
         "completed_at",
+        "corpus_version",
     )
     return {
         **dict(zip(run_fields, row)),
@@ -451,6 +510,13 @@ def backtesting_summary(
                 ORDER BY started_at DESC LIMIT 20""",
             params,
         ).fetchall()
+    research = None
+    if vertical_filter != ALL_VERTICALS:
+        research = historical_research_summary(
+            settings,
+            benchmark_version=benchmark_version or CARE_BENCHMARK_VERSION,
+            vertical=vertical_filter,
+        )
     return {
         "benchmarks": [
             {
@@ -484,6 +550,7 @@ def backtesting_summary(
         ],
         "default_benchmark_version": CARE_BENCHMARK_VERSION,
         "engine_version": BACKTEST_ENGINE_VERSION,
+        "historical_research": research,
     }
 
 

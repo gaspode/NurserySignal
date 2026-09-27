@@ -23,6 +23,7 @@ from app.backtesting import BacktestBounds
 from app.care_backfill import backfill_care_from_stored_evidence
 from app.config import Settings
 from app.db import check_connection
+from app.historical_research_repository import import_bundled_historical_corpus
 from app.ingestion import NormalizedSignal
 from app.logging import configure_logging
 from app.repository import (
@@ -180,6 +181,8 @@ def _admin_path(path: str) -> tuple[str, str | None]:
         return "backtesting-list", None
     if path == "/admin/backtesting/seed":
         return "backtesting-seed", None
+    if path == "/admin/backtesting/research/import":
+        return "backtesting-research-import", None
     if path == "/admin/backtesting/run":
         return "backtesting-run", None
     if path == "/admin/backtesting/compare":
@@ -346,6 +349,15 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                         ),
                         limit=min(max(int(payload.get("limit", 30)), 1), 30),
                     ),
+                )
+            if action == "backtesting-research-import" and method == "POST":
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                actor = str(claims.get("sub") or claims.get("username") or "unknown")
+                return _response(
+                    200,
+                    import_bundled_historical_corpus(settings, actor=actor),
                 )
             if action == "backtesting-run" and method == "POST":
                 admin_error = _require_admin(claims, settings)

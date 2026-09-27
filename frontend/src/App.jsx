@@ -938,14 +938,30 @@ export function BacktestingPage({ apiClient, selectedVertical = "CHILDRENS_HOME"
     finally { setBusy(false); }
   }
 
+  async function importResearch() {
+    setBusy(true); setError(""); setNotice("");
+    try {
+      const value = await apiClient("/admin/backtesting/research/import", { method: "POST" });
+      const corpus = value.summary || {};
+      setNotice(value.idempotent
+        ? "The reviewed historical corpus is already imported."
+        : `Historical corpus imported: ${corpus.accepted_planning_items || 0} planning and ${corpus.accepted_recruitment_items || 0} recruitment items.`);
+      await load();
+    } catch (importError) { setError(importError.message || "Historical research could not be imported."); }
+    finally { setBusy(false); }
+  }
+
   const metrics = detail?.metrics || summary?.runs?.[0]?.metrics || {};
   const contribution = detail?.source_contribution || summary?.runs?.[0]?.source_contribution || {};
+  const research = summary?.historical_research;
+  const researchMetrics = research?.summary || {};
   return <section>
     <div className="page-heading"><div><p className="eyebrow">Evaluation</p><h1>Historical Backtesting</h1><p className="muted">CareSignal-first, point-in-time replay. Benchmark truth is kept separate from historical inputs.</p></div><RefreshButton busy={busy} onClick={load} /></div>
     {notice && <div className="notice" role="status">{notice}</div>}
     {error && <ErrorState message={error} />}
-    <div className="panel backtest-controls"><div><strong>Bounded replay</strong><p className="muted">Ofsted registration defines the outcome and is excluded from pre-registration input.</p></div><label>As of<input type="date" aria-label="Backtest as of" value={asOf} onChange={(event) => setAsOf(event.target.value)} /></label>{benchmarkVertical === "CHILDRENS_HOME" && <button className="button secondary" disabled={busy} onClick={seed}>Seed verified outcomes</button>}<button className="button primary" disabled={busy} onClick={run}>{busy ? "Running…" : "Run benchmark"}</button></div>
+    <div className="panel backtest-controls"><div><strong>Bounded replay</strong><p className="muted">Ofsted registration defines the outcome and is excluded from pre-registration input.</p></div><label>As of<input type="date" aria-label="Backtest as of" value={asOf} onChange={(event) => setAsOf(event.target.value)} /></label>{benchmarkVertical === "CHILDRENS_HOME" && <button className="button secondary" disabled={busy} onClick={seed}>Seed verified outcomes</button>}{benchmarkVertical === "CHILDRENS_HOME" && <button className="button secondary" disabled={busy} onClick={importResearch}>Import researched corpus</button>}<button className="button primary" disabled={busy} onClick={run}>{busy ? "Running…" : "Run benchmark"}</button></div>
     {!summary && !error && <LoadingState label="Loading benchmark" />}
+    {research && <div className="panel"><div className="section-heading"><div><h2>Historical corpus</h2><p className="muted">{research.corpus_version} · official, date-verifiable evidence only</p></div><Badge>{researchMetrics.benchmark_cases || 0} researched</Badge></div><div className="source-counts"><span>Planning cases <strong>{researchMetrics.cases_with_planning || 0}</strong></span><span>Recruitment cases <strong>{researchMetrics.cases_with_recruitment || 0}</strong></span><span>Both <strong>{researchMetrics.cases_with_both || 0}</strong></span><span>Neither <strong>{researchMetrics.cases_with_neither || 0}</strong></span><span>Rejected candidates <strong>{researchMetrics.candidate_items_rejected || 0}</strong></span></div><div className="table-wrap"><table><thead><tr><th>Outcome</th><th>Provider</th><th>Planning</th><th>Recruitment</th><th>Research result</th></tr></thead><tbody>{(research.cases || []).map((item) => <tr key={item.benchmark_case_id}><td>{formatDate(item.outcome_date)}</td><td>{item.known_operator}</td><td>{item.eligible_planning || 0}</td><td>{item.eligible_recruitment || 0}</td><td>{item.records_accepted ? <Badge tone="approved">Replay evidence</Badge> : <Badge>Excluded</Badge>}<span className="cell-subtitle">{titleCase(item.not_found_reason) || item.notes || "No eligible evidence"}</span></td></tr>)}</tbody></table></div></div>}
     <div className="metric-grid">
       <article className="metric-card"><span>Usable cases</span><strong>{metrics.cases_usable ?? "—"}</strong><small>{metrics.cases_excluded ?? 0} excluded honestly</small></article>
       <article className="metric-card"><span>Recall</span><strong>{metricPercent(metrics.recall)}</strong><small>{metrics.detected_cases ?? 0} detected</small></article>
@@ -957,7 +973,7 @@ export function BacktestingPage({ apiClient, selectedVertical = "CHILDRENS_HOME"
     {detail && <>
       <div className="dashboard-grid">
         <div className="panel"><h2>Source contribution</h2>{["planning", "recruitment"].map((source) => <div className="field" key={source}><dt>{titleCase(source)}</dt><dd>{contribution[source]?.first_discoveries ?? 0} first · {contribution[source]?.corroborations ?? 0} corroborations · {contribution[source]?.missed ?? 0} missed</dd></div>)}<div className="field"><dt>Combined</dt><dd>{contribution.combined?.found_by_either ?? 0} found · {contribution.combined?.neither_detected ?? 0} neither source</dd></div></div>
-        <div className="panel"><h2>Run provenance</h2><Field label="Benchmark" value={detail.benchmark_version} /><Field label="Engine" value={detail.engine_version} /><Field label="Status" value={<Badge>{detail.status}</Badge>} /><Field label="As of" value={formatDate(detail.as_of, true)} /><Field label="Review burden" value={`${metrics.reviews_per_genuine_opportunity ?? "—"} per genuine opportunity`} /></div>
+        <div className="panel"><h2>Run provenance</h2><Field label="Benchmark" value={detail.benchmark_version} /><Field label="Corpus" value={detail.corpus_version} /><Field label="Engine" value={detail.engine_version} /><Field label="Status" value={<Badge>{detail.status}</Badge>} /><Field label="As of" value={formatDate(detail.as_of, true)} /><Field label="Review burden" value={`${metrics.reviews_per_genuine_opportunity ?? "—"} per genuine opportunity`} /></div>
       </div>
       {comparison && <div className="panel"><h2>Latest run comparison</h2><p className="muted">Measured deltas only; positive does not automatically mean better.</p><div className="source-counts"><span>Recall <strong>{comparison.delta?.recall ?? "—"}</strong></span><span>Precision <strong>{comparison.delta?.precision ?? "—"}</strong></span><span>Median lead time <strong>{comparison.delta?.median_lead_time_days ?? "—"} days</strong></span><span>Organisation <strong>{comparison.delta?.organisation_accuracy ?? "—"}</strong></span><span>Site <strong>{comparison.delta?.site_accuracy ?? "—"}</strong></span><span>Review burden <strong>{comparison.delta?.reviews_per_genuine_opportunity ?? "—"}</strong></span></div></div>}
       <div className="panel"><h2>Case results</h2><div className="table-wrap"><table><thead><tr><th>Outcome</th><th>Provider</th><th>Result</th><th>First source</th><th>Lead time</th><th>Organisation</th><th>Site/project</th><th>Reviews</th></tr></thead><tbody>{(detail.case_results || []).map((item) => <tr key={item.benchmark_case_uuid}><td><strong>{item.outcome_type}</strong><span className="cell-subtitle">{formatDate(item.outcome_date)} · {item.known_regulatory_id || "—"}</span></td><td>{item.known_operator || "—"}<span className="cell-subtitle">{item.known_location || "—"}</span></td><td>{item.usable ? <Badge tone={item.detected ? "approved" : "pending"}>{item.detected ? "Detected" : "Missed"}</Badge> : <Badge>Excluded</Badge>}<span className="cell-subtitle">{item.exclusion_reason || (item.opportunity_created ? "Opportunity created" : "No opportunity")}</span></td><td>{titleCase(item.first_source)}</td><td>{item.lead_time_days == null ? "—" : `${item.lead_time_days} days`}</td><td>{titleCase(item.organisation_resolution)}</td><td>{titleCase(item.site_resolution)}</td><td>{item.review_items}</td></tr>)}</tbody></table></div></div>

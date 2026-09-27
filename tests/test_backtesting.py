@@ -236,6 +236,36 @@ def test_same_backtest_parameters_have_stable_fingerprint() -> None:
     assert first == second
 
 
+def test_corpus_version_changes_backtest_fingerprint() -> None:
+    value = bounds()
+    without_corpus = run_fingerprint(
+        benchmark_version="care-ofsted-v1", vertical="CHILDRENS_HOME", bounds=value
+    )
+    with_corpus = run_fingerprint(
+        benchmark_version="care-ofsted-v1",
+        vertical="CHILDRENS_HOME",
+        bounds=value,
+        corpus_version="care-historical-research-v1",
+    )
+    assert without_corpus != with_corpus
+
+
+def test_complete_case_research_turns_a_classifier_miss_into_a_usable_miss() -> None:
+    irrelevant = {
+        **planning_signal(),
+        "title": "Retention of dwelling as C3 residential use",
+        "raw_text": "Retention of a dwellinghouse in Class C3 use.",
+    }
+    result = replay_case(
+        case(provenance={"source_coverage_complete": True}),
+        [irrelevant],
+        [],
+        bounds(),
+    )
+    assert result["usable"] is True
+    assert result["detected"] is False
+
+
 def test_run_comparison_reports_measured_deltas_without_judging_them() -> None:
     result = compare_metrics(
         {

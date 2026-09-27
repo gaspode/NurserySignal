@@ -138,7 +138,13 @@ def company_identity_available(evidence: dict[str, Any], as_of: datetime) -> dic
     }
 
 
-def run_fingerprint(*, benchmark_version: str, vertical: str, bounds: BacktestBounds) -> str:
+def run_fingerprint(
+    *,
+    benchmark_version: str,
+    vertical: str,
+    bounds: BacktestBounds,
+    corpus_version: str | None = None,
+) -> str:
     payload = {
         "engine": BACKTEST_ENGINE_VERSION,
         "benchmark_version": benchmark_version,
@@ -147,6 +153,7 @@ def run_fingerprint(*, benchmark_version: str, vertical: str, bounds: BacktestBo
         "lookback_days": bounds.lookback_days,
         "max_cases": bounds.max_cases,
         "max_signals": bounds.max_signals,
+        "corpus_version": corpus_version,
     }
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 

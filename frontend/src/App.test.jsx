@@ -688,4 +688,26 @@ describe("admin frontend", () => {
     expect(screen.getByText("Oaktree Childcare Ltd")).toBeInTheDocument();
     expect(screen.getByText("21 excluded honestly")).toBeInTheDocument();
   });
+
+  it("shows historical corpus coverage and imports the reviewed bounded manifest", async () => {
+    const summary = {
+      benchmarks: [{ benchmark_version: "care-ofsted-v1", vertical: "CHILDRENS_HOME", case_count: 21 }],
+      runs: [],
+      historical_research: {
+        corpus_version: "care-historical-research-v1",
+        summary: { benchmark_cases: 21, cases_with_planning: 4, cases_with_recruitment: 1, cases_with_both: 0, cases_with_neither: 16, candidate_items_rejected: 2 },
+        cases: [{ benchmark_case_id: "ofsted:2813382", known_operator: "KDB Care Ltd", outcome_date: "2025-01-14", eligible_planning: 1, eligible_recruitment: 0, records_accepted: 1 }],
+      },
+    };
+    const apiClient = vi.fn()
+      .mockResolvedValueOnce(summary)
+      .mockResolvedValueOnce({ idempotent: true, summary: summary.historical_research.summary })
+      .mockResolvedValueOnce(summary);
+    render(<BacktestingPage apiClient={apiClient} selectedVertical="CHILDRENS_HOME" />);
+    expect(await screen.findByText("care-historical-research-v1 · official, date-verifiable evidence only")).toBeInTheDocument();
+    expect(screen.getByText("KDB Care Ltd")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Import researched corpus" }));
+    expect(apiClient).toHaveBeenCalledWith("/admin/backtesting/research/import", { method: "POST" });
+    expect(await screen.findByText("The reviewed historical corpus is already imported.")).toBeInTheDocument();
+  });
 });

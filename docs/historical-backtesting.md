@@ -19,8 +19,32 @@ real miss.
 
 Runs are bounded to 50 cases, a 180–365 day lookback and 1,000 source records. The admin defaults
 are 30 cases, 365 days and 500 records. The replay is in-memory and writes only isolated backtest
-run/results tables. A fingerprint over engine version, benchmark version and parameters makes an
-identical run reproducible and idempotent.
+run/results tables. A fingerprint over engine version, benchmark version, corpus version and
+parameters makes an identical run reproducible and idempotent.
+
+## Curated historical research corpus
+
+`care-historical-research-v1` records the bounded research of all 21 `care-ofsted-v1` cases. The
+bundled, code-reviewed manifest records official sources searched, search strategy, accepted and
+rejected candidates, case-link confidence, earliest defensible public availability and explicit
+exclusion reasons. Only `VERIFIED_CASE_LINK` and `STRONG_CASE_LINK` evidence from an official,
+date-verifiable source is replay eligible. Possible links remain visible research notes.
+
+The corpus lives in evaluation-only tables. Importing it cannot create a live signal, opportunity,
+organisation resolution, review item or lifecycle transition. Benchmark outcome fields are not
+copied into replay records. The Ofsted URN, registration outcome and later provider enrichment
+remain in benchmark truth only.
+
+The current archive already preserves prospective replay state without another storage copy:
+
+- planning source documents and revisions retain immutable observed payloads;
+- recruitment source documents retain the published vacancy payload even after upstream expiry;
+- Companies House responses are content-versioned organisation evidence with retrieval dates;
+- Ofsted register and URN/report enrichment evidence is content-versioned with retrieval dates.
+
+This means the current retention gap is historic coverage from before SignalHub existed, not
+ongoing destructive overwrite. Mutable Companies House fields remain excluded unless their dated
+snapshot was actually retrieved before the replay cut-off.
 
 ## Historic availability rules
 
@@ -58,10 +82,11 @@ that architectural decision.
 
 - `GET /admin/backtesting?vertical=CHILDRENS_HOME`
 - `POST /admin/backtesting/seed` — bounded, idempotent Ofsted outcome seeding
+- `POST /admin/backtesting/research/import` — import the fixed, reviewed historical corpus
 - `POST /admin/backtesting/run` — bounded point-in-time replay
 - `GET /admin/backtesting/runs/{id}`
 - `GET /admin/backtesting/compare?left={id}&right={id}`
 - `GET /admin/backtesting/labels?vertical=CHILDRENS_HOME`
 
-All endpoints are administrator-only. Seeding and running are audited. No endpoint calls an
-external source or mutates production matching state.
+All endpoints are administrator-only. Seeding, corpus import and running are audited. No endpoint
+calls an external source or mutates production matching state.

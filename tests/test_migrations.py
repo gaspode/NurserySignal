@@ -25,7 +25,8 @@ def test_initial_migration_exists_and_contains_provenance_tables() -> None:
         "0017_organisation_review_evidence.sql",
         "0018_ofsted_urn_enrichment.sql",
         "0019_historical_backtesting.sql",
-        ]
+        "0020_historical_research_corpus.sql",
+    ]
     sql = "\n".join(path.read_text(encoding="utf-8") for path in files)
     tables = (
         "operators",
@@ -64,6 +65,8 @@ def test_initial_migration_exists_and_contains_provenance_tables() -> None:
     assert "CREATE OR REPLACE VIEW backtest_labelled_decisions" in sql
     assert "truth_role', 'OUTCOME_ONLY'" in sql
     assert "'ofsted:' || (rs.metadata->>'ofsted_urn')" in sql
+    assert "CREATE TABLE IF NOT EXISTS historical_research_records" in sql
+    assert "CREATE TABLE IF NOT EXISTS benchmark_case_research" in sql
 
 
 def test_ai_review_insert_has_one_value_placeholder_per_column() -> None:

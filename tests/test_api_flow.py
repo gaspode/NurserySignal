@@ -350,6 +350,38 @@ def test_historical_backtest_is_admin_only_and_bounded(monkeypatch) -> None:
     assert denied["statusCode"] == 403
 
 
+def test_historical_corpus_import_is_admin_only_and_uses_bundled_manifest(monkeypatch) -> None:
+    captured = {}
+
+    def fake_import(settings, **kwargs):
+        captured.update(kwargs)
+        return {"corpus_version": "care-historical-research-v1", "idempotent": False}
+
+    monkeypatch.setattr("app.handler.import_bundled_historical_corpus", fake_import)
+    response = handler(
+        event(
+            "/admin/backtesting/research/import",
+            "POST",
+            body="{}",
+            claims={"sub": "staff", "cognito:groups": ["NurserySignalAdmins"]},
+        ),
+        None,
+    )
+    assert response["statusCode"] == 200
+    assert captured == {"actor": "staff"}
+
+    denied = handler(
+        event(
+            "/admin/backtesting/research/import",
+            "POST",
+            body="{}",
+            claims={"sub": "staff", "cognito:groups": ["Other"]},
+        ),
+        None,
+    )
+    assert denied["statusCode"] == 403
+
+
 def test_backtest_rejects_all_verticals_and_invalid_dates(monkeypatch) -> None:
     admin = {"sub": "staff", "cognito:groups": ["NurserySignalAdmins"]}
     all_verticals = handler(
