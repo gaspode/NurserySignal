@@ -21,7 +21,7 @@ from app.logging import configure_logging
 logger = configure_logging()
 ALLOWED_RECOMMENDATIONS = {"APPROVE", "REJECT", "NEEDS_HUMAN"}
 RECRUITMENT_PROMPT_VERSION = "recruitment-shadow-v3"
-PLANNING_PROMPT_VERSION = "planning-shadow-v2"
+PLANNING_PROMPT_VERSION = "planning-shadow-v3"
 CARE_PLANNING_PROMPT_VERSION = "care-planning-shadow-v1"
 CARE_RECRUITMENT_PROMPT_VERSION = "care-recruitment-shadow-v1"
 RECRUITMENT_SYSTEM_PROMPT = """NurserySignal recruitment shadow review,
@@ -39,18 +39,30 @@ commercial_change_evidence as NONE, WEAK or STRONG. Return strict JSON only:
 {"recommendation":"APPROVE|REJECT|NEEDS_HUMAN","confidence":0.0,"reason":"brief reason",
 "recruitment_relevance":"RELEVANT_ROUTINE|RELEVANT_CHANGE|UNCERTAIN|IRRELEVANT",
 "commercial_change_evidence":"NONE|WEAK|STRONG"}."""
-PLANNING_SYSTEM_PROMPT = """NurserySignal planning shadow review, prompt version planning-shadow-v2.
-Answer ONLY: is this planning signal commercially relevant to a supplier serving UK
-nursery/early-years settings? APPROVE new nurseries, conversions to nursery/day
-nursery use, expansions or capacity increases, new nursery classrooms/buildings,
-additional provision, school-based nursery creation/expansion, planning responding to
-excess nursery demand, and material childcare alterations. REJECT horticultural,
-plant/tree nursery use, nursery only in an address/property name, incidental nearby
-nursery references, unrelated applications, or stale follow-up wording with no current
-commercial change. Use NEEDS_HUMAN for genuinely ambiguous or unclear operational
-wording. Classify planning_relevance as RELEVANT_CHANGE, RELEVANT_FOLLOWUP,
-RELEVANT_ROUTINE, UNCERTAIN or IRRELEVANT, and commercial_change_evidence as NONE,
-WEAK or STRONG. Do not emit recruitment_relevance. Return strict JSON only:
+PLANNING_SYSTEM_PROMPT = """NurserySignal planning shadow review, prompt version planning-shadow-v3.
+Answer ONLY: does this planning application provide credible evidence of new, expanded,
+relocated or materially changed UK nursery/early-years provision that would be
+commercially relevant to a supplier? The nursery does not need to be the primary subject
+of the application. A mixed-use, residential, commercial or school development that
+genuinely proposes a new nursery, day nursery, pre-school, early-years space or
+purpose-built childcare facility should normally be APPROVE even when most of the
+application concerns housing, infrastructure or other uses. Judge whether nursery
+provision is a real proposed component, not whether it dominates the application.
+APPROVE new nurseries, conversions to nursery/day-nursery use, expansions or capacity
+increases, new nursery classrooms/buildings, additional provision, school-based nursery
+creation/expansion, planning responding to excess nursery demand, and material childcare
+alterations. Examples include "90 dwellings and a new children's nursery", "mixed-use
+development including a day nursery", "new primary school and nursery provision", and
+"commercial development including a purpose-built childcare facility". REJECT
+horticultural/plant/tree nurseries, adult-care or children's-home uses, nursery only in an
+address/property name, a nearby existing nursery used as a landmark, traffic passing an
+existing nursery, former nursery premises being converted away from childcare, unrelated
+education with no early-years provision, or historical/reference-only mentions with no
+current nursery change. Use NEEDS_HUMAN when wording such as "nursery space" does not
+establish whether actual childcare provision is proposed. Classify planning_relevance as
+RELEVANT_CHANGE, RELEVANT_FOLLOWUP, RELEVANT_ROUTINE, UNCERTAIN or IRRELEVANT, and
+commercial_change_evidence as NONE, WEAK or STRONG. Do not infer unsupported capacity,
+operator, opening date or ownership. Do not emit recruitment_relevance. Return strict JSON only:
 {"recommendation":"APPROVE|REJECT|NEEDS_HUMAN","confidence":0.0,"reason":"brief reason",
 "planning_relevance":"RELEVANT_CHANGE|RELEVANT_FOLLOWUP|RELEVANT_ROUTINE|UNCERTAIN|IRRELEVANT",
 "commercial_change_evidence":"NONE|WEAK|STRONG"}."""

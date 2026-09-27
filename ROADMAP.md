@@ -77,6 +77,8 @@ The Nova Lite shadow integration uses the EU Bedrock inference profile (`eu.amaz
 
 The deployed shadow path also supports a bounded, administrator-only re-evaluation of stored signals, including reviewed history. It is idempotent for a model/prompt version and cannot change deterministic classification or human review state.
 
+NurserySignal planning uses `planning-shadow-v3`: genuine nursery provision inside a wider residential, mixed-use, commercial or school scheme remains commercially relevant even when nursery use is not the application's dominant component. Incidental, address-only, former-use and horticultural mentions remain excluded. Historical prompt results are preserved.
+
 Gate before any automated decision-making:
 - collect a meaningful reviewed sample across genuine, ambiguous and false-positive cases
 - measure agreement, high-confidence agreement, false-approve, false-reject and NEEDS_HUMAN rates

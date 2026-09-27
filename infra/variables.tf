@@ -72,7 +72,7 @@ variable "ai_prompt_version" {
 
 variable "ai_planning_prompt_version" {
   type        = string
-  default     = "planning-shadow-v2"
+  default     = "planning-shadow-v3"
   description = "Source-specific version of the planning shadow-review prompt."
 }
 

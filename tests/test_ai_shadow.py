@@ -180,7 +180,7 @@ def test_source_specific_prompts_do_not_cross_emit_semantics(monkeypatch):
     monkeypatch.setattr("app.ai_shadow.boto3.client", lambda *args, **kwargs: planning_client)
     evaluate_shadow(raw(), Settings())
     planning_prompt = planning_client.calls[0]["system"][0]["text"]
-    assert "planning-shadow-v2" in planning_prompt
+    assert "planning-shadow-v3" in planning_prompt
     assert "Do not emit recruitment_relevance" in planning_prompt
 
     recruitment_client = BedrockClient(recruitment_response())
@@ -189,6 +189,66 @@ def test_source_specific_prompts_do_not_cross_emit_semantics(monkeypatch):
     recruitment_prompt = recruitment_client.calls[0]["system"][0]["text"]
     assert "recruitment-shadow-v3" in recruitment_prompt
     assert recruitment_result["planning_relevance"] is None
+
+
+def test_planning_shadow_v3_explicitly_accepts_genuine_mixed_use_nursery_provision():
+    prompt = system_prompt_for("planning", "NURSERY")
+    normalized = " ".join(prompt.split())
+    assert "does not need to be the primary subject" in normalized
+    assert "90 dwellings and a new children's nursery" in normalized
+    assert "mixed-use development including a day nursery" in normalized
+    assert "new primary school and nursery provision" in normalized
+    assert "purpose-built childcare facility" in normalized
+    assert "nearby existing nursery used as a landmark" in normalized
+    assert "former nursery premises being converted away" in normalized
+    assert "nursery space" in normalized
+
+
+def test_earls_lane_mixed_use_response_uses_planning_semantics(monkeypatch):
+    mixed_use = raw()
+    mixed_use["title"] = (
+        "Reserved Matters application for 90 dwellings, children's nursery, "
+        "Earls Lane car park and associated infrastructure"
+    )
+    mixed_use["raw_text"] = mixed_use["title"]
+    client = BedrockClient(
+        {
+            "output": {
+                "message": {
+                    "content": [
+                        {
+                            "text": json.dumps(
+                                {
+                                    "recommendation": "APPROVE",
+                                    "confidence": 0.91,
+                                    "reason": (
+                                        "A new children's nursery is a genuine component "
+                                        "of the wider residential development."
+                                    ),
+                                    "planning_relevance": "RELEVANT_CHANGE",
+                                    "commercial_change_evidence": "STRONG",
+                                }
+                            )
+                        }
+                    ]
+                }
+            }
+        }
+    )
+    monkeypatch.setattr("app.ai_shadow.boto3.client", lambda *args, **kwargs: client)
+    result = evaluate_shadow(mixed_use, Settings())
+    assert result["prompt_version"] == "planning-shadow-v3"
+    assert result["recommendation"] == "APPROVE"
+    assert result["planning_relevance"] == "RELEVANT_CHANGE"
+    assert result["commercial_change_evidence"] == "STRONG"
+    assert result["recruitment_relevance"] is None
+    assert "recruitment shadow review" not in client.calls[0]["system"][0]["text"]
+
+
+def test_care_planning_prompt_is_unchanged_by_nursery_mixed_use_guidance():
+    prompt = system_prompt_for("planning", "CHILDRENS_HOME")
+    assert "care-planning-shadow-v1" in prompt
+    assert "90 dwellings and a new children's nursery" not in prompt
 
 
 def test_shadow_rejects_malformed_or_invalid_confidence(monkeypatch):

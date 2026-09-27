@@ -21,7 +21,7 @@ class Settings:
     ai_shadow_enabled: bool = False
     ai_model_id: str = "eu.amazon.nova-lite-v1:0"
     ai_prompt_version: str = "shadow-v3"
-    ai_planning_prompt_version: str = "planning-shadow-v2"
+    ai_planning_prompt_version: str = "planning-shadow-v3"
     ai_recruitment_prompt_version: str = "recruitment-shadow-v3"
     ai_care_planning_prompt_version: str = "care-planning-shadow-v1"
     ai_care_recruitment_prompt_version: str = "care-recruitment-shadow-v1"
@@ -54,7 +54,7 @@ class Settings:
             ai_model_id=os.getenv("AI_MODEL_ID", "eu.amazon.nova-lite-v1:0"),
             ai_prompt_version=os.getenv("AI_PROMPT_VERSION", "shadow-v3"),
             ai_planning_prompt_version=os.getenv(
-                "AI_PLANNING_PROMPT_VERSION", "planning-shadow-v2"
+                "AI_PLANNING_PROMPT_VERSION", "planning-shadow-v3"
             ),
             ai_recruitment_prompt_version=os.getenv(
                 "AI_RECRUITMENT_PROMPT_VERSION", "recruitment-shadow-v3"
