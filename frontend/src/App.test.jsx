@@ -92,6 +92,59 @@ describe("admin frontend", () => {
     expect(await screen.findByText("Inbox clear")).toBeInTheDocument();
   });
 
+  it("portals a bottom-row action menu outside the scrolling table and flips it above", async () => {
+    const apiClient = vi.fn().mockResolvedValue(listResult());
+    render(<ReviewInboxPage apiClient={apiClient} onNavigate={vi.fn()} />);
+    await screen.findByText(pendingItem.title);
+    const trigger = screen.getByRole("button", { name: `Actions for ${pendingItem.title}` });
+    vi.spyOn(trigger, "getBoundingClientRect").mockReturnValue({
+      top: 750, bottom: 780, left: 940, right: 980, width: 40, height: 30, x: 940, y: 750, toJSON: () => {},
+    });
+    Object.defineProperty(window, "innerHeight", { configurable: true, value: 800 });
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 1000 });
+
+    await userEvent.click(trigger);
+    const menu = await screen.findByRole("menu");
+    await waitFor(() => expect(menu).toHaveAttribute("data-placement", "top"));
+    expect(menu.parentElement).toBe(document.body);
+    expect(menu.closest(".table-wrap")).toBeNull();
+    expect(menu).toHaveStyle({ position: "fixed" });
+    expect(Number.parseFloat(menu.style.top)).toBeLessThan(750);
+    expect(Number.parseFloat(menu.style.left)).toBeGreaterThanOrEqual(8);
+  });
+
+  it("dismisses the row action menu on outside click and Escape", async () => {
+    const apiClient = vi.fn().mockResolvedValue(listResult());
+    render(<ReviewInboxPage apiClient={apiClient} onNavigate={vi.fn()} />);
+    await screen.findByText(pendingItem.title);
+    const trigger = screen.getByRole("button", { name: `Actions for ${pendingItem.title}` });
+
+    await userEvent.click(trigger);
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("heading", { name: "Review Inbox" }));
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+
+    await userEvent.click(trigger);
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+  });
+
+  it("supports keyboard navigation within the portalled row action menu", async () => {
+    const apiClient = vi.fn().mockResolvedValue(listResult());
+    render(<ReviewInboxPage apiClient={apiClient} onNavigate={vi.fn()} />);
+    await screen.findByText(pendingItem.title);
+    const trigger = screen.getByRole("button", { name: `Actions for ${pendingItem.title}` });
+    trigger.focus();
+    await userEvent.keyboard("{ArrowDown}");
+    expect(screen.getByRole("menuitem", { name: "Approve" })).toHaveFocus();
+    await userEvent.keyboard("{ArrowDown}");
+    expect(screen.getByRole("menuitem", { name: "Reject" })).toHaveFocus();
+    await userEvent.keyboard("{End}");
+    expect(screen.getByRole("menuitem", { name: "View" })).toHaveFocus();
+  });
+
   it("supports bounded bulk decisions with confirmation", async () => {
     const second = { ...pendingItem, id: "signal-2", title: "Second pending signal" };
     const apiClient = vi.fn()

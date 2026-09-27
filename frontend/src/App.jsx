@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useApi } from "./api.js";
 import { displayAttributeName, useAuth } from "./auth.js";
 
@@ -612,9 +613,121 @@ function SignalRow({ item, onClick, inbox, showVertical, selected, onSelect, onR
   </tr>;
 }
 
-function RowActions({ item, onClick, onReview }) {
+export function RowActionMenu({ label, actions }) {
   const [open, setOpen] = useState(false);
-  return <div className="row-actions-wrap"><button type="button" className="icon-button" aria-label={`Actions for ${item.title}`} aria-expanded={open} onClick={() => setOpen((value) => !value)}>⋯</button>{open && <div className="row-menu" role="menu"><button type="button" role="menuitem" onClick={() => onReview(item.id, "approve")}>Approve</button><button type="button" role="menuitem" onClick={() => onReview(item.id, "reject")}>Reject</button><button type="button" role="menuitem" onClick={onClick}>View</button></div>}</div>;
+  const [position, setPosition] = useState(null);
+  const triggerRef = useRef(null);
+  const menuRef = useRef(null);
+  const menuId = `row-menu-${useId()}`;
+
+  const close = useCallback((returnFocus = true) => {
+    setOpen(false);
+    setPosition(null);
+    if (returnFocus) triggerRef.current?.focus();
+  }, []);
+
+  const updatePosition = useCallback(() => {
+    if (!triggerRef.current || !menuRef.current) return;
+    const trigger = triggerRef.current.getBoundingClientRect();
+    const menu = menuRef.current.getBoundingClientRect();
+    const margin = 8;
+    const gap = 6;
+    const width = menu.width || 144;
+    const height = menu.height || 116;
+    const availableBelow = window.innerHeight - trigger.bottom - margin;
+    const placeAbove = availableBelow < height + gap && trigger.top >= height + gap + margin;
+    const top = placeAbove
+      ? Math.max(margin, trigger.top - height - gap)
+      : Math.min(trigger.bottom + gap, window.innerHeight - height - margin);
+    const left = Math.min(
+      Math.max(margin, trigger.right - width),
+      Math.max(margin, window.innerWidth - width - margin),
+    );
+    setPosition({ top, left, placement: placeAbove ? "top" : "bottom" });
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!open) return undefined;
+    updatePosition();
+    menuRef.current?.querySelector('[role="menuitem"]')?.focus();
+
+    const onPointerDown = (event) => {
+      if (!triggerRef.current?.contains(event.target) && !menuRef.current?.contains(event.target)) close(false);
+    };
+    const onKeyDown = (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        close();
+      }
+    };
+    window.addEventListener("resize", updatePosition);
+    window.addEventListener("scroll", updatePosition, true);
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("resize", updatePosition);
+      window.removeEventListener("scroll", updatePosition, true);
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [close, open, updatePosition]);
+
+  function onMenuKeyDown(event) {
+    const items = [...menuRef.current.querySelectorAll('[role="menuitem"]')];
+    const current = items.indexOf(document.activeElement);
+    let next = null;
+    if (event.key === "ArrowDown") next = items[(current + 1) % items.length];
+    if (event.key === "ArrowUp") next = items[(current - 1 + items.length) % items.length];
+    if (event.key === "Home") next = items[0];
+    if (event.key === "End") next = items.at(-1);
+    if (next) {
+      event.preventDefault();
+      next.focus();
+    }
+  }
+
+  const menu = open && createPortal(
+    <div
+      className="row-menu"
+      id={menuId}
+      role="menu"
+      ref={menuRef}
+      data-placement={position?.placement || "bottom"}
+      style={{ position: "fixed", top: position?.top ?? -9999, left: position?.left ?? -9999 }}
+      onKeyDown={onMenuKeyDown}
+    >
+      {actions.map((action) => <button type="button" role="menuitem" key={action.label} onClick={() => { close(false); action.onClick(); }}>{action.label}</button>)}
+    </div>,
+    document.body,
+  );
+
+  return <div className="row-actions-wrap">
+    <button
+      type="button"
+      className="icon-button"
+      ref={triggerRef}
+      aria-label={label}
+      aria-haspopup="menu"
+      aria-controls={open ? menuId : undefined}
+      aria-expanded={open}
+      onClick={() => setOpen((value) => !value)}
+      onKeyDown={(event) => {
+        if (!open && event.key === "ArrowDown") {
+          event.preventDefault();
+          setOpen(true);
+        }
+      }}
+    >⋯</button>
+    {menu}
+  </div>;
+}
+
+function RowActions({ item, onClick, onReview }) {
+  return <RowActionMenu label={`Actions for ${item.title}`} actions={[
+    { label: "Approve", onClick: () => onReview(item.id, "approve") },
+    { label: "Reject", onClick: () => onReview(item.id, "reject") },
+    { label: "View", onClick },
+  ]} />;
 }
 
 export function SignalDetail({ signalId, apiClient, onBack, queueMode = false, unmatchedMode = false, initialNotice = "", onReviewed }) {
