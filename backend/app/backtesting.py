@@ -12,7 +12,7 @@ from typing import Any
 from app.correlation import classify_match, compatible_names, normalize_identity
 from app.verticals import policy_for, validate_vertical
 
-BACKTEST_ENGINE_VERSION = "historical-replay-v1.1"
+BACKTEST_ENGINE_VERSION = "historical-replay-v1.2"
 POSITIVE_OUTCOMES = {"OPENED", "REGISTERED", "EXPANDED", "RELOCATED"}
 NEGATIVE_OUTCOMES = {"DID_NOT_OPEN", "ABANDONED"}
 _POSTCODE = re.compile(r"\b([A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2})\b", re.IGNORECASE)
@@ -33,13 +33,16 @@ class BacktestBounds:
         lookback_days: int = 365,
         max_cases: int = 30,
         max_signals: int = 500,
+        max_lookback_days: int = 365,
     ) -> BacktestBounds:
         parsed = _datetime(as_of)
         if parsed is None:
             raise ValueError("as_of must be an ISO date or timestamp")
         return cls(
             as_of=parsed,
-            lookback_days=min(max(int(lookback_days), 180), 365),
+            lookback_days=min(
+                max(int(lookback_days), 180), min(max(int(max_lookback_days), 365), 540)
+            ),
             max_cases=min(max(int(max_cases), 1), 50),
             max_signals=min(max(int(max_signals), 1), 1000),
         )
@@ -272,6 +275,8 @@ def replay_case(
     signals: list[dict[str, Any]],
     company_evidence: list[dict[str, Any]],
     bounds: BacktestBounds,
+    *,
+    case_signal_ids: set[str] | None = None,
 ) -> dict[str, Any]:
     """Replay one case without mutating production state or consulting current APIs."""
     vertical = validate_vertical(str(case["vertical"]))
@@ -309,7 +314,16 @@ def replay_case(
         postcode = _postcode(signal, candidate)
         identity = _identity(signal, candidate)
         confidence = float(candidate.get("confidence") or 0)
-        related_to_truth = _signal_relevance_to_truth(signal, candidate, case)
+        signal_id = str(signal.get("id") or "").removeprefix("historical:")
+        labelled_case_link = bool(case_signal_ids and signal_id in case_signal_ids)
+        # Curated VERIFIED/STRONG links are evaluation labels only. They are
+        # deliberately checked after classification and are never exposed to the
+        # vertical policy as replay input. This permits trading-name evidence to
+        # be scored against the known operator without leaking that identity into
+        # the historical decision.
+        related_to_truth = labelled_case_link or _signal_relevance_to_truth(
+            signal, candidate, case
+        )
         if related_to_truth and decision.decision != "IGNORE_FOR_OPPORTUNITY":
             relevant_sources.append((available_at, str(signal.get("source_type"))))
             resolution = _operator_resolution(signal, candidate, case)
@@ -380,7 +394,19 @@ def replay_case(
                 }
             )
 
-    matching = [opportunity for opportunity in opportunities if _matches_truth(opportunity, case)]
+    matching = [
+        opportunity
+        for opportunity in opportunities
+        if _matches_truth(opportunity, case)
+        or bool(
+            case_signal_ids
+            and {
+                str(signal_id).removeprefix("historical:")
+                for signal_id in opportunity.get("signals", [])
+            }
+            & case_signal_ids
+        )
+    ]
     first_relevant_at = min((value[0] for value in relevant_sources), default=None)
     coverage_complete = bool((case.get("provenance") or {}).get("source_coverage_complete"))
     if first_relevant_at is None and not coverage_complete:

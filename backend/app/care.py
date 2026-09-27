@@ -59,19 +59,51 @@ CARE_ROLE_PATTERNS = (
         r"\bchildren(?:['’]s|s)?\s+support\s+worker\b",
     ),
     ("childrens_home_manager", r"\bchildren(?:['’]s|s)?\s+home\s+manager\b"),
+    # Generic residential-care titles are meaningful only after the separate
+    # children's-home setting check succeeds. Keeping them here allows the
+    # advert body to establish the setting without making a bare Support
+    # Worker/Team Leader title a CareSignal candidate.
+    ("senior_support_worker", r"\bsenior\s+support\s+worker\b"),
+    ("support_worker", r"\bsupport\s+(?:staff|worker)\b"),
+    ("team_leader", r"\bteam\s+leader\b"),
 )
 CARE_RECRUITMENT_CHANGE = {
     "brand_new_home": r"\bbrand[- ]new\s+(?:children(?:['’]s|s)?\s+)?home\b",
     "new_childrens_home": r"\bnew\s+children(?:['’]s|s)?\s+home\b",
+    "new_residential_home": (
+        r"\b(?:brand[- ]new|new)\s+residential\s+"
+        r"(?:children(?:['’]s|s)?\s+)?home\b"
+    ),
+    "newly_opened_home": (
+        r"\bnewly\s+opened\s+(?:children(?:['’]s|s)?\s+|residential\s+)?home\b"
+    ),
     "opening_soon": r"\bopening\s+soon\b",
+    "preparing_to_open": (
+        r"\b(?:prepar(?:e|es|ing)|getting\s+ready)\s+to\s+open\b"
+        r"|\bdue\s+to\s+open\b"
+    ),
     "pre_registration": r"\bpre[- ]registration\b|\bthrough\s+(?:ofsted\s+)?registration\b",
+    "registration_stage": (
+        r"\b(?:going|lead(?:ing)?|support(?:ing)?|work(?:ing)?)\b.{0,35}"
+        r"\b(?:through\s+)?ofsted\s+registration\b"
+        r"|\bsupport\b.{0,25}\bregistration\s+process\b"
+    ),
     "launch_home": r"\b(?:launch|open|opening)\s+(?:our\s+|the\s+)?(?:new\s+)?home\b",
+    "founding_team": r"\bfounding\s+team\b.{0,80}\b(?:home|service)\b",
     "new_service": r"\bnew\s+service\b",
     "additional_home": (
         r"\b(?:first|second|third|additional|another)\s+"
         r"(?:children(?:['’]s|s)?\s+)?home\b"
     ),
-    "new_property": r"\bnewly\s+acquired\s+property\b",
+    "new_property": (
+        r"\bnewly\s+acquired\s+(?:home|property|premises)\b"
+        r"|\bacquired\s+(?:a\s+)?new\s+(?:home|property|premises)\b"
+    ),
+    "expanding_to_home": (
+        r"\bexpand(?:ing)?\s+(?:in)?to\s+(?:a\s+)?new\s+home\b"
+        r"|\bopening\s+another\s+home\b"
+    ),
+    "new_provision": r"\bnew\s+(?:residential\s+)?provision\b",
 }
 
 
@@ -276,7 +308,7 @@ def enrich_care_signal(raw: dict[str, Any]) -> dict[str, Any]:
         else "Relevant evidence supports an existing CareSignal opportunity only"
     )
     facts = {
-        "method": "care-deterministic-v1",
+        "method": "care-deterministic-v2",
         "classification": (
             "care-planning"
             if source_type == "planning"

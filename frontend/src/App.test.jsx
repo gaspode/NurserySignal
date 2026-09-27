@@ -674,8 +674,10 @@ describe("admin frontend", () => {
     };
     const apiClient = vi.fn()
       .mockResolvedValueOnce(summary)
+      .mockResolvedValueOnce({ evaluated: 0, counts: {}, changed_count: 0, changed: [] })
       .mockResolvedValueOnce(completed)
-      .mockResolvedValueOnce(summary);
+      .mockResolvedValueOnce(summary)
+      .mockResolvedValueOnce({ evaluated: 0, counts: {}, changed_count: 0, changed: [] });
     render(<BacktestingPage apiClient={apiClient} selectedVertical="CHILDRENS_HOME" />);
     expect(await screen.findByRole("heading", { name: "Historical Backtesting" })).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Run benchmark" }));
@@ -701,13 +703,43 @@ describe("admin frontend", () => {
     };
     const apiClient = vi.fn()
       .mockResolvedValueOnce(summary)
+      .mockResolvedValueOnce({ evaluated: 0, counts: {}, changed_count: 0, changed: [] })
       .mockResolvedValueOnce({ idempotent: true, summary: summary.historical_research.summary })
-      .mockResolvedValueOnce(summary);
+      .mockResolvedValueOnce(summary)
+      .mockResolvedValueOnce({ evaluated: 0, counts: {}, changed_count: 0, changed: [] });
     render(<BacktestingPage apiClient={apiClient} selectedVertical="CHILDRENS_HOME" />);
     expect(await screen.findByText("care-historical-research-v1 · official, date-verifiable evidence only")).toBeInTheDocument();
     expect(screen.getByText("KDB Care Ltd")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Import researched corpus" }));
     expect(apiClient).toHaveBeenCalledWith("/admin/backtesting/research/import", { method: "POST" });
     expect(await screen.findByText("The reviewed historical corpus is already imported.")).toBeInTheDocument();
+  });
+
+  it("shows the read-only recruitment preview and bounded lookback sensitivity", async () => {
+    const summary = { benchmarks: [], runs: [] };
+    const preview = {
+      evaluated: 25,
+      counts: { RELEVANT_CHANGE: 2, RELEVANT_ROUTINE: 8, UNCERTAIN: 1, IRRELEVANT: 14 },
+      changed_count: 1,
+      changed: [{ signal_id: "signal-1", title: "Support Worker", employer: "Example Care", location: "Nuneaton", previous_relevance: "IRRELEVANT", new_relevance: "RELEVANT_CHANGE", role_category: "support_worker", change_terms: ["new_residential_home"] }],
+    };
+    const sensitivity = {
+      runs: [365, 450, 540].map((lookback_days, index) => ({ lookback_days, metrics: { cases_usable: 4 + index, detected_cases: 4 + index, recall: 1, lead_time_days: { median: 193 + index } } })),
+    };
+    const apiClient = vi.fn()
+      .mockResolvedValueOnce(summary)
+      .mockResolvedValueOnce(preview)
+      .mockResolvedValueOnce(sensitivity)
+      .mockResolvedValueOnce(summary)
+      .mockResolvedValueOnce(preview);
+    render(<BacktestingPage apiClient={apiClient} selectedVertical="CHILDRENS_HOME" />);
+    expect(await screen.findByText("Support Worker")).toBeInTheDocument();
+    expect(screen.getByText("Read-only evaluation of the latest 25 stored CareSignal recruitment records.")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Compare lookbacks" }));
+    expect(apiClient).toHaveBeenCalledWith("/admin/backtesting/sensitivity", {
+      method: "POST",
+      body: expect.stringContaining('"max_signals":500'),
+    });
+    expect(await screen.findByText("450 days")).toBeInTheDocument();
   });
 });

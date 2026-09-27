@@ -350,6 +350,62 @@ def test_historical_backtest_is_admin_only_and_bounded(monkeypatch) -> None:
     assert denied["statusCode"] == 403
 
 
+def test_backtest_sensitivity_and_recruitment_preview_are_admin_only(monkeypatch) -> None:
+    sensitivity = {}
+
+    def fake_sensitivity(settings, **kwargs):
+        sensitivity.update(kwargs)
+        return {"runs": [], "read_only": True}
+
+    monkeypatch.setattr("app.handler.execute_backtest_sensitivity", fake_sensitivity)
+    monkeypatch.setattr(
+        "app.handler.evaluate_current_care_recruitment",
+        lambda settings, **kwargs: {
+            "evaluated": kwargs["limit"],
+            "counts": {},
+            "changed_count": 0,
+            "changed": [],
+        },
+    )
+    allowed_claims = {"sub": "staff", "cognito:groups": ["NurserySignalAdmins"]}
+    response = handler(
+        event(
+            "/admin/backtesting/sensitivity",
+            "POST",
+            body=json.dumps({"as_of": "2026-09-27", "max_cases": 999, "max_signals": 9999}),
+            claims=allowed_claims,
+        ),
+        None,
+    )
+    assert response["statusCode"] == 200
+    assert sensitivity["vertical"] == "CHILDRENS_HOME"
+    assert sensitivity["max_cases"] == 50
+    assert sensitivity["max_signals"] == 1000
+
+    preview = handler(
+        event(
+            "/admin/backtesting/recruitment-shadow",
+            "GET",
+            query={"limit": "999"},
+            claims=allowed_claims,
+        ),
+        None,
+    )
+    assert preview["statusCode"] == 200
+    assert json.loads(preview["body"])["evaluated"] == 250
+
+    denied = handler(
+        event(
+            "/admin/backtesting/sensitivity",
+            "POST",
+            body="{}",
+            claims={"sub": "staff", "cognito:groups": ["Other"]},
+        ),
+        None,
+    )
+    assert denied["statusCode"] == 403
+
+
 def test_historical_corpus_import_is_admin_only_and_uses_bundled_manifest(monkeypatch) -> None:
     captured = {}
 

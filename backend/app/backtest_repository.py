@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 from datetime import timedelta
 from typing import Any
 
@@ -13,6 +14,7 @@ from app.backtesting import (
     replay_case,
     run_fingerprint,
 )
+from app.care import classify_care_recruitment
 from app.config import Settings
 from app.db import connection
 from app.historical_corpus import parsed_datetime
@@ -21,10 +23,135 @@ from app.historical_research_repository import (
     historical_research_summary,
     latest_historical_corpus,
 )
+from app.recruitment import recruitment_record_from_signal
 from app.repository import record_admin_audit
 from app.verticals import ALL_VERTICALS, CHILDRENS_HOME, validate_vertical, validate_vertical_filter
 
 CARE_BENCHMARK_VERSION = "care-ofsted-v1"
+
+
+def evaluate_current_care_recruitment(
+    settings: Settings, *, limit: int = 100
+) -> dict[str, Any]:
+    """Compare current persisted facts with the latest policy without mutating them."""
+    limit = min(max(int(limit), 1), 250)
+    with connection(settings) as conn:
+        rows = conn.execute(
+            """SELECT rs.id, rs.schema_version, rs.source_type, rs.source_url,
+                      rs.external_id, rs.discovered_at, rs.title, rs.raw_text,
+                      rs.location_hint, rs.organisation_hint, rs.metadata, rs.vertical,
+                      rs.persisted_at, rs.created_at, se.extracted_facts
+               FROM raw_signals rs
+               LEFT JOIN signal_enrichments se ON se.raw_signal_id = rs.id
+               WHERE rs.vertical = 'CHILDRENS_HOME'
+                 AND rs.source_type = 'recruitment'
+               ORDER BY rs.discovered_at DESC, rs.id DESC
+               LIMIT %s""",
+            (limit,),
+        ).fetchall()
+    fields = (
+        "id",
+        "schema_version",
+        "source_type",
+        "source_url",
+        "external_id",
+        "discovered_at",
+        "title",
+        "raw_text",
+        "location_hint",
+        "organisation_hint",
+        "metadata",
+        "vertical",
+        "persisted_at",
+        "created_at",
+        "stored_facts",
+    )
+    counts: Counter[str] = Counter()
+    previous_counts: Counter[str] = Counter()
+    changed: list[dict[str, Any]] = []
+    for row in rows:
+        signal = dict(zip(fields, row))
+        result = classify_care_recruitment(recruitment_record_from_signal(signal))
+        relevance = str(result["relevance"])
+        counts[relevance] += 1
+        stored_facts = signal.get("stored_facts") or {}
+        stored_classification = (signal.get("metadata") or {}).get(
+            "care_recruitment_classification"
+        ) or {}
+        previous = str(
+            stored_facts.get("recruitment_relevance")
+            or stored_classification.get("relevance")
+            or "UNKNOWN"
+        )
+        previous_counts[previous] += 1
+        if previous != relevance:
+            changed.append(
+                {
+                    "signal_id": str(signal["id"]),
+                    "external_id": signal["external_id"],
+                    "title": signal["title"],
+                    "employer": signal["organisation_hint"],
+                    "location": signal["location_hint"],
+                    "previous_relevance": previous,
+                    "new_relevance": relevance,
+                    "role_category": result["role_category"],
+                    "change_terms": result["explicit_change_terms"],
+                }
+            )
+    return {
+        "evaluated": len(rows),
+        "previous_counts": dict(previous_counts),
+        "counts": {
+            value: counts[value]
+            for value in (
+                "RELEVANT_CHANGE",
+                "RELEVANT_ROUTINE",
+                "UNCERTAIN",
+                "IRRELEVANT",
+            )
+        },
+        "changed_count": len(changed),
+        "changed": changed,
+        "read_only": True,
+    }
+
+
+def execute_backtest_sensitivity(
+    settings: Settings,
+    *,
+    actor: str,
+    benchmark_version: str,
+    vertical: str,
+    as_of: str,
+    max_cases: int = 30,
+    max_signals: int = 500,
+) -> dict[str, Any]:
+    """Run the fixed corpus at bounded windows without changing the canonical default."""
+    runs = []
+    for lookback_days in (365, 450, 540):
+        result = execute_backtest(
+            settings,
+            actor=actor,
+            benchmark_version=benchmark_version,
+            vertical=vertical,
+            bounds=BacktestBounds.from_values(
+                as_of=as_of,
+                lookback_days=lookback_days,
+                max_cases=max_cases,
+                max_signals=max_signals,
+                max_lookback_days=540,
+            ),
+        )
+        runs.append(
+            {
+                "run_id": result["id"],
+                "lookback_days": lookback_days,
+                "idempotent": result.get("idempotent", False),
+                "metrics": result.get("metrics") or {},
+                "source_contribution": result.get("source_contribution") or {},
+            }
+        )
+    return {"benchmark_version": benchmark_version, "runs": runs, "read_only": True}
 
 
 def seed_care_ofsted_benchmark(
@@ -332,7 +459,16 @@ def execute_backtest(
         return {**(get_backtest_run(settings, str(row[0])) or {}), "idempotent": True}
     run_id = str(row[0])
     try:
-        results = [replay_case(case, signals, company_evidence, bounds) for case in cases]
+        results = [
+            replay_case(
+                case,
+                signals,
+                company_evidence,
+                bounds,
+                case_signal_ids=set(corpus_links.get(str(case["id"]), [])),
+            )
+            for case in cases
+        ]
         metrics, contribution = aggregate_results(results)
         with connection(settings) as conn:
             for result in results:
@@ -511,7 +647,7 @@ def backtesting_summary(
         ).fetchall()
         run_rows = conn.execute(
             f"""SELECT id, benchmark_version, engine_version, vertical, as_of, status,
-                       metrics, source_contribution, started_at, completed_at
+                       metrics, source_contribution, parameters, started_at, completed_at
                 FROM backtest_runs WHERE {where}
                 ORDER BY started_at DESC LIMIT 20""",
             params,
@@ -546,6 +682,7 @@ def backtesting_summary(
                         "status",
                         "metrics",
                         "source_contribution",
+                        "parameters",
                         "started_at",
                         "completed_at",
                     ),

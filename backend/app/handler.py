@@ -14,7 +14,9 @@ from app.backtest_repository import (
     CARE_BENCHMARK_VERSION,
     backtesting_summary,
     compare_backtest_runs,
+    evaluate_current_care_recruitment,
     execute_backtest,
+    execute_backtest_sensitivity,
     get_backtest_run,
     labelled_decisions,
     seed_care_ofsted_benchmark,
@@ -185,6 +187,10 @@ def _admin_path(path: str) -> tuple[str, str | None]:
         return "backtesting-research-import", None
     if path == "/admin/backtesting/run":
         return "backtesting-run", None
+    if path == "/admin/backtesting/sensitivity":
+        return "backtesting-sensitivity", None
+    if path == "/admin/backtesting/recruitment-shadow":
+        return "backtesting-recruitment-shadow", None
     if path == "/admin/backtesting/compare":
         return "backtesting-compare", None
     if path == "/admin/backtesting/labels":
@@ -374,18 +380,83 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                     max_signals=payload.get("max_signals", 500),
                 )
                 actor = str(claims.get("sub") or claims.get("username") or "unknown")
-                return _response(
-                    200,
-                    execute_backtest(
-                        settings,
-                        actor=actor,
-                        benchmark_version=str(
-                            payload.get("benchmark_version") or CARE_BENCHMARK_VERSION
-                        ),
-                        vertical=vertical,
-                        bounds=bounds,
+                result = execute_backtest(
+                    settings,
+                    actor=actor,
+                    benchmark_version=str(
+                        payload.get("benchmark_version") or CARE_BENCHMARK_VERSION
+                    ),
+                    vertical=vertical,
+                    bounds=bounds,
+                )
+                metrics = result.get("metrics") or {}
+                logger.info(
+                    "backtest_run_summary run_id=%s engine=%s lookback_days=%s "
+                    "usable=%s detected=%s recall=%s median_lead_days=%s idempotent=%s",
+                    result.get("id"),
+                    result.get("engine_version"),
+                    bounds.lookback_days,
+                    metrics.get("cases_usable"),
+                    metrics.get("detected_cases"),
+                    metrics.get("recall"),
+                    (metrics.get("lead_time_days") or {}).get("median"),
+                    result.get("idempotent", False),
+                )
+                return _response(200, result)
+            if action == "backtesting-sensitivity" and method == "POST":
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                payload = parse_json_payload(_raw_body(event))
+                vertical = validate_vertical_filter(payload.get("vertical") or "CHILDRENS_HOME")
+                if vertical != "CHILDRENS_HOME":
+                    raise ValueError("initial sensitivity analysis supports CareSignal only")
+                actor = str(claims.get("sub") or claims.get("username") or "unknown")
+                result = execute_backtest_sensitivity(
+                    settings,
+                    actor=actor,
+                    benchmark_version=str(
+                        payload.get("benchmark_version") or CARE_BENCHMARK_VERSION
+                    ),
+                    vertical=vertical,
+                    as_of=str(payload.get("as_of") or datetime.now(UTC).isoformat()),
+                    max_cases=min(max(int(payload.get("max_cases", 30)), 1), 50),
+                    max_signals=min(max(int(payload.get("max_signals", 500)), 1), 1000),
+                )
+                logger.info(
+                    "backtest_sensitivity_summary runs=%s",
+                    json.dumps(
+                        [
+                            {
+                                "lookback_days": item["lookback_days"],
+                                "usable": item["metrics"].get("cases_usable"),
+                                "detected": item["metrics"].get("detected_cases"),
+                                "recall": item["metrics"].get("recall"),
+                                "median_lead_days": (
+                                    item["metrics"].get("lead_time_days") or {}
+                                ).get("median"),
+                            }
+                            for item in result["runs"]
+                        ],
+                        separators=(",", ":"),
                     ),
                 )
+                return _response(200, result)
+            if action == "backtesting-recruitment-shadow" and method == "GET":
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                result = evaluate_current_care_recruitment(
+                    settings,
+                    limit=min(max(int(_query(event, "limit") or "100"), 1), 250),
+                )
+                logger.info(
+                    "care_recruitment_shadow_summary evaluated=%s counts=%s changed=%s",
+                    result["evaluated"],
+                    json.dumps(result["counts"], separators=(",", ":")),
+                    result["changed_count"],
+                )
+                return _response(200, result)
             if action == "backtesting-compare" and method == "GET":
                 admin_error = _require_admin(claims, settings)
                 if admin_error:

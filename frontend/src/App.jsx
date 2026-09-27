@@ -887,6 +887,8 @@ export function BacktestingPage({ apiClient, selectedVertical = "CHILDRENS_HOME"
   const [summary, setSummary] = useState(null);
   const [detail, setDetail] = useState(null);
   const [comparison, setComparison] = useState(null);
+  const [sensitivity, setSensitivity] = useState(null);
+  const [recruitmentShadow, setRecruitmentShadow] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -896,10 +898,13 @@ export function BacktestingPage({ apiClient, selectedVertical = "CHILDRENS_HOME"
     try {
       const value = await apiClient("/admin/backtesting");
       setSummary(value);
-      if (value.runs?.[0]?.id) setDetail(await apiClient(`/admin/backtesting/runs/${value.runs[0].id}`));
+      const canonicalRuns = (value.runs || []).filter((item) => !item.parameters || item.parameters.lookback_days === 365);
+      if (canonicalRuns[0]?.id) setDetail(await apiClient(`/admin/backtesting/runs/${canonicalRuns[0].id}`));
       else setDetail(null);
-      if (value.runs?.[1]?.id) setComparison(await apiClient(`/admin/backtesting/compare?left=${value.runs[1].id}&right=${value.runs[0].id}`));
+      if (canonicalRuns[1]?.id) setComparison(await apiClient(`/admin/backtesting/compare?left=${canonicalRuns[1].id}&right=${canonicalRuns[0].id}`));
       else setComparison(null);
+      if (benchmarkVertical === "CHILDRENS_HOME") setRecruitmentShadow(await apiClient("/admin/backtesting/recruitment-shadow?limit=100"));
+      else setRecruitmentShadow(null);
     } catch (loadError) { setError(loadError.message || "Backtesting data could not be loaded."); }
   };
   useEffect(() => { load(); }, [apiClient]);
@@ -951,6 +956,26 @@ export function BacktestingPage({ apiClient, selectedVertical = "CHILDRENS_HOME"
     finally { setBusy(false); }
   }
 
+  async function runSensitivity() {
+    setBusy(true); setError(""); setNotice("");
+    try {
+      const value = await apiClient("/admin/backtesting/sensitivity", {
+        method: "POST",
+        body: JSON.stringify({
+          vertical: "CHILDRENS_HOME",
+          benchmark_version: "care-ofsted-v1",
+          as_of: `${asOf}T23:59:59Z`,
+          max_cases: 30,
+          max_signals: 500,
+        }),
+      });
+      setSensitivity(value);
+      setNotice("Bounded 365/450/540-day sensitivity comparison completed.");
+      await load();
+    } catch (sensitivityError) { setError(sensitivityError.message || "Sensitivity comparison could not be completed."); }
+    finally { setBusy(false); }
+  }
+
   const metrics = detail?.metrics || summary?.runs?.[0]?.metrics || {};
   const contribution = detail?.source_contribution || summary?.runs?.[0]?.source_contribution || {};
   const research = summary?.historical_research;
@@ -959,7 +984,7 @@ export function BacktestingPage({ apiClient, selectedVertical = "CHILDRENS_HOME"
     <div className="page-heading"><div><p className="eyebrow">Evaluation</p><h1>Historical Backtesting</h1><p className="muted">CareSignal-first, point-in-time replay. Benchmark truth is kept separate from historical inputs.</p></div><RefreshButton busy={busy} onClick={load} /></div>
     {notice && <div className="notice" role="status">{notice}</div>}
     {error && <ErrorState message={error} />}
-    <div className="panel backtest-controls"><div><strong>Bounded replay</strong><p className="muted">Ofsted registration defines the outcome and is excluded from pre-registration input.</p></div><label>As of<input type="date" aria-label="Backtest as of" value={asOf} onChange={(event) => setAsOf(event.target.value)} /></label>{benchmarkVertical === "CHILDRENS_HOME" && <button className="button secondary" disabled={busy} onClick={seed}>Seed verified outcomes</button>}{benchmarkVertical === "CHILDRENS_HOME" && <button className="button secondary" disabled={busy} onClick={importResearch}>Import researched corpus</button>}<button className="button primary" disabled={busy} onClick={run}>{busy ? "Running…" : "Run benchmark"}</button></div>
+    <div className="panel backtest-controls"><div><strong>Bounded replay</strong><p className="muted">Ofsted registration defines the outcome and is excluded from pre-registration input.</p></div><label>As of<input type="date" aria-label="Backtest as of" value={asOf} onChange={(event) => setAsOf(event.target.value)} /></label>{benchmarkVertical === "CHILDRENS_HOME" && <button className="button secondary" disabled={busy} onClick={seed}>Seed verified outcomes</button>}{benchmarkVertical === "CHILDRENS_HOME" && <button className="button secondary" disabled={busy} onClick={importResearch}>Import researched corpus</button>}{benchmarkVertical === "CHILDRENS_HOME" && <button className="button secondary" disabled={busy} onClick={runSensitivity}>Compare lookbacks</button>}<button className="button primary" disabled={busy} onClick={run}>{busy ? "Running…" : "Run benchmark"}</button></div>
     {!summary && !error && <LoadingState label="Loading benchmark" />}
     {research && <div className="panel"><div className="section-heading"><div><h2>Historical corpus</h2><p className="muted">{research.corpus_version} · official, date-verifiable evidence only</p></div><Badge>{researchMetrics.benchmark_cases || 0} researched</Badge></div><div className="source-counts"><span>Planning cases <strong>{researchMetrics.cases_with_planning || 0}</strong></span><span>Recruitment cases <strong>{researchMetrics.cases_with_recruitment || 0}</strong></span><span>Both <strong>{researchMetrics.cases_with_both || 0}</strong></span><span>Neither <strong>{researchMetrics.cases_with_neither || 0}</strong></span><span>Rejected candidates <strong>{researchMetrics.candidate_items_rejected || 0}</strong></span></div><div className="table-wrap"><table><thead><tr><th>Outcome</th><th>Provider</th><th>Planning</th><th>Recruitment</th><th>Research result</th></tr></thead><tbody>{(research.cases || []).map((item) => <tr key={item.benchmark_case_id}><td>{formatDate(item.outcome_date)}</td><td>{item.known_operator}</td><td>{item.eligible_planning || 0}</td><td>{item.eligible_recruitment || 0}</td><td>{item.records_accepted ? <Badge tone="approved">Replay evidence</Badge> : <Badge>Excluded</Badge>}<span className="cell-subtitle">{titleCase(item.not_found_reason) || item.notes || "No eligible evidence"}</span></td></tr>)}</tbody></table></div></div>}
     <div className="metric-grid">
@@ -970,6 +995,8 @@ export function BacktestingPage({ apiClient, selectedVertical = "CHILDRENS_HOME"
       <article className="metric-card"><span>Organisation accuracy</span><strong>{metricPercent(metrics.organisation_accuracy)}</strong><small>Operator identity measured separately</small></article>
       <article className="metric-card"><span>Site accuracy</span><strong>{metricPercent(metrics.site_accuracy)}</strong><small>No inferred redacted locations</small></article>
     </div>
+    {recruitmentShadow && <div className="panel"><div className="section-heading"><div><h2>Current recruitment policy preview</h2><p className="muted">Read-only evaluation of the latest {recruitmentShadow.evaluated} stored CareSignal recruitment records.</p></div><Badge>{recruitmentShadow.changed_count} changed</Badge></div><div className="source-counts"><span>Change <strong>{recruitmentShadow.counts?.RELEVANT_CHANGE || 0}</strong></span><span>Routine <strong>{recruitmentShadow.counts?.RELEVANT_ROUTINE || 0}</strong></span><span>Uncertain <strong>{recruitmentShadow.counts?.UNCERTAIN || 0}</strong></span><span>Irrelevant <strong>{recruitmentShadow.counts?.IRRELEVANT || 0}</strong></span></div>{recruitmentShadow.changed?.length > 0 && <div className="table-wrap"><table><thead><tr><th>Vacancy</th><th>Employer</th><th>Previous</th><th>Preview</th><th>Evidence</th></tr></thead><tbody>{recruitmentShadow.changed.map((item) => <tr key={item.signal_id}><td>{item.title}<span className="cell-subtitle">{item.location || "—"}</span></td><td>{item.employer || "—"}</td><td>{titleCase(item.previous_relevance)}</td><td><Badge tone={item.new_relevance === "RELEVANT_CHANGE" ? "approved" : "pending"}>{titleCase(item.new_relevance)}</Badge></td><td>{(item.change_terms || []).map(titleCase).join(", ") || "Role/setting context"}</td></tr>)}</tbody></table></div>}</div>}
+    {sensitivity?.runs?.length > 0 && <div className="panel"><h2>Lookback sensitivity</h2><p className="muted">Read-only comparison; the canonical benchmark remains 365 days.</p><div className="table-wrap"><table><thead><tr><th>Window</th><th>Usable</th><th>Detected</th><th>Recall</th><th>Median lead</th></tr></thead><tbody>{sensitivity.runs.map((item) => <tr key={item.lookback_days}><td>{item.lookback_days} days</td><td>{item.metrics?.cases_usable ?? "—"}</td><td>{item.metrics?.detected_cases ?? "—"}</td><td>{metricPercent(item.metrics?.recall)}</td><td>{item.metrics?.lead_time_days?.median == null ? "—" : `${item.metrics.lead_time_days.median} days`}</td></tr>)}</tbody></table></div></div>}
     {detail && <>
       <div className="dashboard-grid">
         <div className="panel"><h2>Source contribution</h2>{["planning", "recruitment"].map((source) => <div className="field" key={source}><dt>{titleCase(source)}</dt><dd>{contribution[source]?.first_discoveries ?? 0} first · {contribution[source]?.corroborations ?? 0} corroborations · {contribution[source]?.missed ?? 0} missed</dd></div>)}<div className="field"><dt>Combined</dt><dd>{contribution.combined?.found_by_either ?? 0} found · {contribution.combined?.neither_detected ?? 0} neither source</dd></div></div>

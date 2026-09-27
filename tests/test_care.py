@@ -1,5 +1,8 @@
+import json
 from datetime import UTC, date, datetime
+from pathlib import Path
 
+from app.backtesting import BacktestBounds, replay_case
 from app.care import (
     care_opportunity_decision,
     classify_care_planning,
@@ -8,8 +11,9 @@ from app.care import (
 )
 from app.care_backfill import backfill_care_from_stored_evidence
 from app.config import Settings
+from app.historical_corpus import replay_signal
 from app.planning import PlanningRecord, candidate_decision
-from app.recruitment import RecruitmentRecord
+from app.recruitment import RecruitmentRecord, recruitment_record_from_signal
 
 
 def planning(description: str, *, postcode: str = "CV1 2AB") -> PlanningRecord:
@@ -125,6 +129,112 @@ def test_brand_new_home_manager_is_change_signal():
     )
     assert result["relevance"] == "RELEVANT_CHANGE"
     assert result["commercial_change_evidence"] == "STRONG"
+
+
+def test_generic_support_worker_uses_explicit_new_home_body_context() -> None:
+    result = classify_care_recruitment(
+        vacancy(
+            "Support Worker",
+            "Support Worker required for our brand new children's home opening in Staffordshire.",
+        )
+    )
+    assert result["role_category"] == "support_worker"
+    assert result["relevance"] == "RELEVANT_CHANGE"
+    assert result["commercial_change_evidence"] == "STRONG"
+
+
+def test_generic_team_leader_uses_registration_stage_body_context() -> None:
+    result = classify_care_recruitment(
+        vacancy(
+            "Team Leader",
+            "Join a new residential children's home currently going through Ofsted registration.",
+        )
+    )
+    assert result["role_category"] == "team_leader"
+    assert result["relevance"] == "RELEVANT_CHANGE"
+    assert "new_residential_home" in result["explicit_change_terms"]
+
+
+def test_generic_titles_at_established_home_remain_routine() -> None:
+    for title, description in (
+        ("Support Worker", "Join our established children's home as a Support Worker."),
+        (
+            "Team Leader",
+            "Due to staff turnover we are recruiting a Team Leader "
+            "for our existing children's home.",
+        ),
+    ):
+        result = classify_care_recruitment(vacancy(title, description))
+        assert result["relevance"] == "RELEVANT_ROUTINE"
+        assert result["commercial_change_evidence"] == "NONE"
+
+
+def test_weak_new_and_registered_wording_do_not_imply_change() -> None:
+    for description in (
+        "A new opportunity to join our established Ofsted registered children's home.",
+        "Join our existing children's home. Ofsted registered home experience is useful.",
+        "Welcome new starters and support the home's usual opening hours.",
+    ):
+        result = classify_care_recruitment(vacancy("Support Worker", description))
+        assert result["relevance"] == "RELEVANT_ROUTINE"
+        assert result["commercial_change_evidence"] == "NONE"
+
+
+def test_generic_adult_and_supported_living_roles_remain_irrelevant() -> None:
+    for description in (
+        "Support adults in an established supported living service.",
+        "Join our elderly nursing care home as a Support Worker.",
+        "A generic care role supporting adults in their own homes.",
+    ):
+        result = classify_care_recruitment(
+            vacancy("Support Worker", description, employer="Adult Care Limited")
+        )
+        assert result["relevance"] == "IRRELEVANT"
+
+
+def test_cumulus_historical_adverts_are_generic_change_signals() -> None:
+    manifest = json.loads(
+        Path("backend/app/data/care_historical_research_v1.json").read_text(encoding="utf-8")
+    )
+    records = [
+        item for item in manifest["records"] if item["external_id"].startswith("warwickshire-")
+    ]
+    assert len(records) == 2
+    signals = []
+    for index, record in enumerate(records):
+        signal = replay_signal(
+            {**record, "id": f"cumulus-{index}", "corpus_version": manifest["corpus_version"]}
+        )
+        decision = classify_care_recruitment(recruitment_record_from_signal(signal))
+        assert decision["relevance"] == "RELEVANT_CHANGE"
+        assert decision["commercial_change_evidence"] == "STRONG"
+        signals.append(signal)
+
+    result = replay_case(
+        {
+            "id": "11111111-1111-4111-8111-111111111111",
+            "benchmark_case_id": "ofsted:2817348",
+            "vertical": "CHILDRENS_HOME",
+            "known_operator": "RCS Operations Limited",
+            "known_location": "Warwickshire",
+            "known_regulatory_id": "2817348",
+            "outcome_type": "REGISTERED",
+            "outcome_date": "2025-02-11",
+            "provenance": {"source_coverage_complete": True},
+        },
+        signals,
+        [],
+        BacktestBounds.from_values(
+            as_of="2026-09-27T23:59:59Z",
+            lookback_days=365,
+            max_cases=30,
+            max_signals=500,
+        ),
+        case_signal_ids={"cumulus-0", "cumulus-1"},
+    )
+    assert result["detected"] is True
+    assert result["first_source"] == "recruitment"
+    assert result["lead_time_days"] == 97
 
 
 def test_support_worker_at_existing_home_is_routine_and_adult_role_is_irrelevant():

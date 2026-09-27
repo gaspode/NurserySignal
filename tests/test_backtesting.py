@@ -246,6 +246,29 @@ def test_same_backtest_parameters_have_stable_fingerprint() -> None:
     assert first == second
 
 
+def test_lookback_sensitivity_is_bounded_and_deterministic() -> None:
+    values = [
+        BacktestBounds.from_values(
+            as_of="2026-02-19T23:59:59Z",
+            lookback_days=days,
+            max_cases=30,
+            max_signals=500,
+            max_lookback_days=540,
+        )
+        for days in (365, 450, 540)
+    ]
+    assert [item.lookback_days for item in values] == [365, 450, 540]
+    signal = planning_signal(date_value="2025-02-12")
+    benchmark_case = case(outcome_date="2026-02-19")
+    canonical = replay_case(benchmark_case, [signal], [], values[0])
+    wider_first = replay_case(benchmark_case, [signal], [], values[1])
+    wider_second = replay_case(benchmark_case, [signal], [], values[1])
+    assert canonical["usable"] is False
+    assert wider_first["detected"] is True
+    assert wider_first["lead_time_days"] == 372
+    assert wider_first == wider_second
+
+
 def test_corpus_version_changes_backtest_fingerprint() -> None:
     value = bounds()
     without_corpus = run_fingerprint(
