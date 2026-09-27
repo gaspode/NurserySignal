@@ -32,6 +32,8 @@ def collect_companies_house(
             name=str(item["name"]),
             company_number=str(item["company_number"]) if item.get("company_number") else None,
             locality=str(item["locality"]) if item.get("locality") else None,
+            postcode=str(item["postcode"]) if item.get("postcode") else None,
+            address=str(item["address"]) if item.get("address") else None,
         )
         for item in raw_candidates[:limit]
         if isinstance(item, dict) and item.get("operator_id") and item.get("name")

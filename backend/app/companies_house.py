@@ -15,6 +15,21 @@ from app.correlation import normalize_identity
 
 USER_AGENT = "SignalHub/1.0"
 MAX_ERROR_BODY = 512
+SIC_DESCRIPTIONS = {
+    "68209": "Other letting and operating of own or leased real estate",
+    "85100": "Pre-primary education",
+    "85200": "Primary education",
+    "85590": "Other education not elsewhere classified",
+    "85600": "Educational support services",
+    "87100": "Residential nursing care facilities",
+    "87200": "Residential care for learning difficulties, mental health and substance abuse",
+    "87300": "Residential care for elderly and disabled people",
+    "87900": "Other residential care activities not elsewhere classified",
+    "88100": "Social work without accommodation for elderly and disabled people",
+    "88910": "Child day-care activities",
+    "88990": "Other social work activities without accommodation not elsewhere classified",
+    "96090": "Other service activities not elsewhere classified",
+}
 
 
 class CompaniesHouseError(RuntimeError):
@@ -33,6 +48,8 @@ class OrganisationCandidate:
     name: str
     company_number: str | None = None
     locality: str | None = None
+    postcode: str | None = None
+    address: str | None = None
 
 
 @dataclass(frozen=True)
@@ -59,6 +76,8 @@ def _safe_error_body(raw: bytes, api_key: str) -> str:
 
 def _safe_company(item: dict[str, Any]) -> dict[str, Any]:
     address = item.get("registered_office_address") or item.get("address") or {}
+    company_number = item.get("company_number")
+    sic_codes = item.get("sic_codes") or []
     return {
         "company_number": item.get("company_number"),
         "company_name": item.get("company_name") or item.get("title"),
@@ -77,8 +96,85 @@ def _safe_company(item: dict[str, Any]) -> dict[str, Any]:
             )
             if address.get(key)
         },
-        "sic_codes": item.get("sic_codes") or [],
+        "sic_codes": sic_codes,
+        "sic_descriptions": [
+            {"code": code, "description": SIC_DESCRIPTIONS.get(str(code))}
+            for code in sic_codes
+        ],
         "links": item.get("links") or {},
+        "companies_house_url": (
+            "https://find-and-update.company-information.service.gov.uk/company/"
+            f"{company_number}"
+            if company_number
+            else None
+        ),
+    }
+
+
+def _name_without_legal_suffix(value: Any) -> str:
+    words = normalize_identity(value).split()
+    while words and words[-1] in {"ltd", "limited", "plc", "llp"}:
+        words.pop()
+    return " ".join(words)
+
+
+def _outward_postcode(value: Any) -> str:
+    return str(value or "").strip().upper().replace(" ", "")[:-3]
+
+
+def _candidate_comparison(
+    candidate: OrganisationCandidate, company: dict[str, Any]
+) -> dict[str, Any]:
+    observed = normalize_identity(candidate.name)
+    legal_name = normalize_identity(company.get("company_name"))
+    similarity = SequenceMatcher(None, observed, legal_name).ratio()
+    address = company.get("registered_office_address") or {}
+    source_locality = normalize_identity(candidate.locality)
+    company_locality = normalize_identity(address.get("locality"))
+    locality_agrees = bool(source_locality and source_locality == company_locality)
+    source_outward = _outward_postcode(candidate.postcode)
+    company_outward = _outward_postcode(address.get("postal_code"))
+    postcode_area_agrees = bool(source_outward and source_outward == company_outward)
+    reasons: list[str] = []
+    cautions: list[str] = []
+    if observed == legal_name:
+        reasons.append("Exact normalised legal-name match")
+    elif _name_without_legal_suffix(observed) == _name_without_legal_suffix(legal_name):
+        reasons.append("Legal name differs only by company suffix")
+    elif similarity >= 0.9:
+        reasons.append("Strong legal-name similarity")
+    elif similarity >= 0.75:
+        reasons.append("Partial legal-name similarity")
+    else:
+        cautions.append("Weak legal-name similarity")
+    if locality_agrees:
+        reasons.append("Same town/locality as source evidence")
+    elif source_locality and company_locality:
+        cautions.append("Registered-office town differs from source context")
+    if postcode_area_agrees:
+        reasons.append("Registered-office postcode area agrees with source evidence")
+    elif source_outward and company_outward:
+        cautions.append("Registered-office postcode area differs from source context")
+    if not locality_agrees and not postcode_area_agrees:
+        cautions.append("Name match only; no location corroboration")
+    suffix_equivalent = _name_without_legal_suffix(observed) == _name_without_legal_suffix(
+        legal_name
+    )
+    outcome = "PROBABLE" if similarity >= 0.9 or suffix_equivalent else "UNCERTAIN"
+    if (observed == legal_name or suffix_equivalent) and (
+        locality_agrees or postcode_area_agrees
+    ):
+        outcome = "STRONG"
+    return {
+        **company,
+        "match_outcome": outcome,
+        "name_similarity": round(similarity, 4),
+        "match_reasons": reasons,
+        "match_cautions": cautions,
+        "location_agreement": {
+            "locality": locality_agrees,
+            "postcode_area": postcode_area_agrees,
+        },
     }
 
 
@@ -212,6 +308,20 @@ class CompaniesHouseProvider:
                 profile,
                 results,
             )
+        detailed_candidates: list[dict[str, Any]] = []
+        for item in results:
+            company = item
+            company_number = str(item.get("company_number") or "")
+            if company_number:
+                try:
+                    company = self.company_profile(company_number)
+                except CompaniesHouseError:
+                    # The search result still gives an admin a safe bounded fallback.
+                    company = item
+            detailed_candidates.append(_candidate_comparison(candidate, company))
+        detailed_candidates.sort(
+            key=lambda item: float(item.get("name_similarity") or 0), reverse=True
+        )
         return CompanyResolution(
             candidate.operator_id,
             candidate.name,
@@ -220,5 +330,5 @@ class CompaniesHouseProvider:
             best_score,
             "multiple or insufficiently corroborated company candidates require admin review",
             None,
-            results,
+            tuple(detailed_candidates),
         )

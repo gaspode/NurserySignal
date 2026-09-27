@@ -12,8 +12,15 @@ from app.companies_house import (
     OrganisationCandidate,
 )
 from app.config import Settings
-from app.organisation_enrichment import organisation_evidence_document
-from app.repository import list_organisation_enrichment_candidates
+from app.organisation_enrichment import (
+    organisation_evidence_document,
+    process_organisation_enrichment,
+)
+from app.repository import (
+    list_organisation_enrichment_candidates,
+    list_organisation_match_reviews,
+    resolve_organisation_match_review,
+)
 
 
 class Response(io.BytesIO):
@@ -71,6 +78,28 @@ def test_exact_legal_name_resolution_uses_basic_auth_without_exposing_key() -> N
 
 def test_ambiguous_name_does_not_auto_resolve() -> None:
     def opener(request, timeout):
+        if "/company/" in request.full_url:
+            company_number = request.full_url.rsplit("/", 1)[-1]
+            return Response(
+                json.dumps(
+                    {
+                        "company_name": (
+                            "ACME CARE LIMITED"
+                            if company_number == "11111111"
+                            else "ACME CARE GROUP LIMITED"
+                        ),
+                        "company_number": company_number,
+                        "company_status": "active",
+                        "date_of_creation": "2020-03-04",
+                        "company_type": "ltd",
+                        "registered_office_address": {
+                            "locality": "Coventry",
+                            "postal_code": "CV1 2AB",
+                        },
+                        "sic_codes": ["87900"],
+                    }
+                ).encode()
+            )
         return Response(
             json.dumps(
                 {
@@ -88,6 +117,18 @@ def test_ambiguous_name_does_not_auto_resolve() -> None:
     assert result.status == "AMBIGUOUS"
     assert result.outcome == "UNCERTAIN"
     assert result.company is None
+    assert result.candidates[0]["company_status"] == "active"
+    assert result.candidates[0]["date_of_creation"] == "2020-03-04"
+    assert result.candidates[0]["sic_descriptions"] == [
+        {
+            "code": "87900",
+            "description": "Other residential care activities not elsewhere classified",
+        }
+    ]
+    assert result.candidates[0]["match_outcome"] == "PROBABLE"
+    assert "Name match only; no location corroboration" in result.candidates[0][
+        "match_cautions"
+    ]
 
 
 def test_http_error_is_bounded_and_redacts_api_key() -> None:
@@ -124,13 +165,25 @@ def test_signal_only_operator_is_materialised_as_enrichment_candidate(monkeypatc
         committed = False
 
         def execute(self, sql, params=()):
-            if "WITH activity AS" in sql:
+            if "WITH activity" in sql:
                 assert params[:3] == (
                     "CHILDRENS_HOME",
                     "CHILDRENS_HOME",
                     "CHILDRENS_HOME",
                 )
-                return Result(rows=[("Acme Care Limited", None, "Coventry", 3)])
+                return Result(
+                    rows=[
+                        (
+                            "Acme Care Limited",
+                            None,
+                            "Coventry",
+                            "CV1 2AB",
+                            "1 Example Road",
+                            "https://acme.example",
+                            3,
+                        )
+                    ]
+                )
             if "SELECT name, companies_house_number" in sql:
                 return Result(row=("Acme Care Limited", None, None))
             return Result()
@@ -159,6 +212,9 @@ def test_signal_only_operator_is_materialised_as_enrichment_candidate(monkeypatc
             "name": "Acme Care Limited",
             "company_number": None,
             "locality": "Coventry",
+            "postcode": "CV1 2AB",
+            "address": "1 Example Road",
+            "website": "https://acme.example",
         }
     ]
     assert conn.committed is True
@@ -186,3 +242,187 @@ def test_companies_house_evidence_identity_ignores_retrieval_time() -> None:
 
     assert first == second
     assert "retrieved_at" not in first
+
+
+def test_rejected_candidate_set_is_not_immediately_recreated(monkeypatch) -> None:
+    class Result:
+        def __init__(self, row=None):
+            self.row = row
+
+        def fetchone(self):
+            return self.row
+
+    class Connection:
+        inserted_review = False
+
+        def execute(self, sql, params=()):
+            if "SELECT id, name, companies_house_number" in sql:
+                return Result(("operator-1", "Other Care", None))
+            if "status = 'REJECTED'" in sql:
+                return Result((1,))
+            if "INSERT INTO organisation_match_reviews" in sql:
+                self.inserted_review = True
+            return Result()
+
+        def commit(self):
+            return None
+
+    conn = Connection()
+
+    @contextmanager
+    def fake_connection(_settings):
+        yield conn
+
+    monkeypatch.setattr("app.organisation_enrichment.connection", fake_connection)
+    monkeypatch.setattr("app.organisation_enrichment.put_raw_evidence", lambda *args: None)
+    result = process_organisation_enrichment(
+        Settings(evidence_bucket="evidence"),
+        {
+            "provider": "COMPANIES_HOUSE",
+            "operator_id": "operator-1",
+            "query_name": "Other Care",
+            "status": "AMBIGUOUS",
+            "outcome": "UNCERTAIN",
+            "confidence": 0.8,
+            "reason": "multiple candidates",
+            "retrieved_at": "2026-09-27T12:00:00Z",
+            "candidates": [
+                {"company_name": "OTHER CARE LIMITED", "company_number": "87654321"}
+            ],
+        },
+    )
+    assert result["status"] == "AMBIGUOUS"
+    assert conn.inserted_review is False
+
+
+def test_organisation_review_includes_source_context(monkeypatch) -> None:
+    class Result:
+        def __init__(self, *, rows=None, row=None):
+            self.rows = rows or []
+            self.row = row
+
+        def fetchall(self):
+            return self.rows
+
+        def fetchone(self):
+            return self.row
+
+    class Connection:
+        def execute(self, sql, params=()):
+            if "FROM organisation_match_reviews r" in sql:
+                return Result(
+                    rows=[
+                        (
+                            "review-1",
+                            "operator-1",
+                            "Other Care",
+                            "COMPANIES_HOUSE",
+                            "Other Care Ltd",
+                            [{"company_number": "87654321"}],
+                            "multiple candidates",
+                            "2026-09-27T12:00:00Z",
+                        )
+                    ]
+                )
+            if "SELECT name, legal_name, website_url" in sql:
+                return Result(row=("Other Care", None, "https://other.example"))
+            if "FROM organisation_aliases" in sql:
+                return Result(rows=[("Other Care Ltd", "SOURCE")])
+            if "FROM opportunities" in sql:
+                return Result(
+                    rows=[
+                        (
+                            "opportunity-1",
+                            "New children's home — Coventry",
+                            "CHILDRENS_HOME",
+                            "Coventry",
+                            "CV1 2AB",
+                            "1 Example Road",
+                        )
+                    ]
+                )
+            if "FROM raw_signals rs" in sql:
+                return Result(
+                    rows=[
+                        (
+                            "signal-1",
+                            "Change of use to children's home",
+                            "CHILDRENS_HOME",
+                            "planning",
+                            "https://planning.example/1",
+                            "Coventry CV1 2AB",
+                            "Other Care Ltd",
+                            {"postcode": "CV1 2AB", "council": "Coventry"},
+                            "2026-09-20T12:00:00Z",
+                        )
+                    ]
+                )
+            return Result()
+
+    @contextmanager
+    def fake_connection(_settings):
+        yield Connection()
+
+    monkeypatch.setattr("app.repository.connection", fake_connection)
+    reviews = list_organisation_match_reviews(Settings(), limit=25)
+    assert reviews[0]["source_context"]["verticals"] == ["CHILDRENS_HOME"]
+    assert reviews[0]["source_context"]["source_types"] == ["planning"]
+    assert reviews[0]["source_context"]["signals"][0]["postcode"] == "CV1 2AB"
+    assert reviews[0]["source_context"]["opportunities"][0]["id"] == "opportunity-1"
+
+
+def test_confirmed_organisation_review_preserves_aliases_and_audit(monkeypatch) -> None:
+    class Result:
+        def __init__(self, row=None):
+            self.row = row
+
+        def fetchone(self):
+            return self.row
+
+    class Connection:
+        statements = []
+
+        def execute(self, sql, params=()):
+            self.statements.append((sql, params))
+            if "FROM organisation_match_reviews WHERE id" in sql:
+                return Result(
+                    (
+                        "review-1",
+                        "operator-1",
+                        [
+                            {
+                                "company_number": "87654321",
+                                "company_name": "OTHER CARE LIMITED",
+                                "company_status": "active",
+                                "date_of_creation": "2020-03-04",
+                                "type": "ltd",
+                                "registered_office_address": {"locality": "Coventry"},
+                                "sic_codes": ["87900"],
+                            }
+                        ],
+                        "PENDING",
+                        "Other Care",
+                    )
+                )
+            return Result()
+
+        def commit(self):
+            return None
+
+    conn = Connection()
+
+    @contextmanager
+    def fake_connection(_settings):
+        yield conn
+
+    monkeypatch.setattr("app.repository.connection", fake_connection)
+    result = resolve_organisation_match_review(
+        Settings(),
+        "review-1",
+        action="confirm",
+        actor="admin-1",
+        company_number="87654321",
+    )
+    assert result["status"] == "CONFIRMED"
+    assert any("INSERT INTO organisation_aliases" in sql for sql, _ in conn.statements)
+    assert any("INSERT INTO admin_audit_events" in sql for sql, _ in conn.statements)

@@ -234,6 +234,9 @@ Validation gate:
 - Initial Companies House validation resolved 8 of 10 stored CareSignal organisation names
   through strong official legal-name matches and held 2 ambiguous results for admin review.
   Repeating those two candidates preserved 10 evidence objects and the existing review items.
+- Organisation resolution review now compares cached official company profiles with the
+  originating SignalHub signals, locations, aliases and opportunities. Rejected candidate sets
+  remain historical and are not re-offered until the upstream candidate set materially changes.
 
 Initial validation gate passed:
 - credentials, bounded source runs, idempotency, source health and queue/DLQ state are verified;

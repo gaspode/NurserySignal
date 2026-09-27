@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Dashboard, LoginPage, MatchReviewPage, OpportunitiesPage, OpportunityDetail, OrganisationsPage, ReviewInboxPage, ReviewedSignalsPage, SignalDetail, SourcesPage, UnmatchedSignalsPage, restoredVertical, verticalScopedPath } from "./App.jsx";
@@ -316,7 +316,7 @@ describe("admin frontend", () => {
   it("shows Companies House enrichment and keeps ambiguous matches reviewable", async () => {
     const apiClient = vi.fn()
       .mockResolvedValueOnce({ items: [{ id: "operator-1", name: "Acme Care", legal_name: "ACME CARE LIMITED", vertical: "CHILDRENS_HOME", companies_house_number: "12345678", company_status: "active", signal_count: 2, opportunity_count: 1 }] })
-      .mockResolvedValueOnce({ items: [{ id: "review-1", organisation_name: "Other Care", reason: "multiple candidates", candidates: [{ company_name: "OTHER CARE LIMITED", company_number: "87654321" }] }] })
+      .mockResolvedValueOnce({ items: [{ id: "review-1", operator_id: "operator-2", organisation_name: "Other Care", reason: "multiple candidates", source_context: { observed_name: "Other Care", verticals: ["CHILDRENS_HOME"], source_types: ["planning"], website: "https://other.example", aliases: [{ alias: "Other Care Ltd" }], signals: [{ id: "signal-1", title: "Change of use to children's home", source_type: "planning", vertical: "CHILDRENS_HOME", organisation_name: "Other Care", town: "Coventry", postcode: "CV1 2AB", source_url: "https://planning.example/1" }], opportunities: [{ id: "opportunity-1", name: "New children's home — Coventry", vertical: "CHILDRENS_HOME", town: "Coventry" }] }, candidates: [{ company_name: "OTHER CARE LIMITED", company_number: "87654321", company_status: "active", date_of_creation: "2020-03-04", type: "ltd", registered_office_address: { locality: "Coventry", postal_code: "CV1 2AB" }, sic_descriptions: [{ code: "87900", description: "Other residential care activities not elsewhere classified" }], companies_house_url: "https://find-and-update.company-information.service.gov.uk/company/87654321", match_outcome: "STRONG", match_reasons: ["Legal name differs only by company suffix", "Same town/locality as source evidence"], match_cautions: [] }] }] })
       .mockResolvedValueOnce({ id: "review-1", status: "CONFIRMED" })
       .mockResolvedValueOnce({ items: [] })
       .mockResolvedValueOnce({ items: [] });
@@ -324,10 +324,39 @@ describe("admin frontend", () => {
     expect(await screen.findByText("ACME CARE LIMITED")).toBeInTheDocument();
     expect(screen.getByText("12345678")).toBeInTheDocument();
     expect(screen.getByText("Organisation resolution review")).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: /Use OTHER CARE LIMITED/ }));
+    expect(screen.getByText("Change of use to children's home")).toBeInTheDocument();
+    expect(screen.getByText("Coventry, CV1 2AB")).toBeInTheDocument();
+    expect(screen.getByText("Other residential care activities not elsewhere classified", { exact: false })).toBeInTheDocument();
+    expect(screen.getByText("Legal name differs only by company suffix")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "View Companies House" })).toHaveAttribute("target", "_blank");
+    expect(screen.getByRole("link", { name: "View signal" })).toHaveAttribute("href", "#/history/signal-1");
+    await userEvent.click(screen.getByRole("button", { name: "Use this company" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveTextContent("Original names remain as aliases");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Use this company" }));
     expect(apiClient).toHaveBeenCalledWith(
       "/admin/organisation-match-review/review-1/confirm",
       { method: "POST", body: JSON.stringify({ company_number: "87654321" }) },
+    );
+  });
+
+  it("rejects candidate companies without rejecting the observed organisation", async () => {
+    const apiClient = vi.fn()
+      .mockResolvedValueOnce({ items: [{ id: "operator-1", name: "Other Care", vertical: "CHILDRENS_HOME", signal_count: 1, opportunity_count: 0 }] })
+      .mockResolvedValueOnce({ items: [{ id: "review-1", operator_id: "operator-1", organisation_name: "Other Care", candidates: [{ company_name: "OTHER CARE LIMITED", company_number: "87654321" }] }] })
+      .mockResolvedValueOnce({ id: "review-1", status: "REJECTED" })
+      .mockResolvedValueOnce({ items: [] })
+      .mockResolvedValueOnce({ items: [] });
+    render(<OrganisationsPage apiClient={apiClient} />);
+    await screen.findByText("Organisation resolution review");
+    expect(screen.getByText("Needs review")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "None of these companies" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveTextContent("organisation and its CareSignal evidence will not be rejected");
+    await userEvent.click(within(dialog).getByRole("button", { name: "None of these companies" }));
+    expect(apiClient).toHaveBeenCalledWith(
+      "/admin/organisation-match-review/review-1/reject",
+      { method: "POST", body: JSON.stringify({}) },
     );
   });
 

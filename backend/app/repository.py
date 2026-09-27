@@ -2016,15 +2016,19 @@ def list_organisation_enrichment_candidates(
     limit = min(max(limit, 1), 25)
     with connection(settings) as conn:
         rows = conn.execute(
-            """WITH activity AS (
+            """WITH activity
+               (name, companies_house_number, locality, postcode, address, website_url, priority)
+               AS (
                  SELECT op.name, op.companies_house_number,
-                        NULLIF(o.town, '') AS locality, 0 AS priority
+                        NULLIF(o.town, '') AS locality, NULLIF(o.postcode, ''),
+                        NULLIF(o.address, ''), NULLIF(op.website_url, ''), 0 AS priority
                  FROM operators op
                  JOIN opportunities o ON o.operator_id = op.id
                  WHERE o.vertical = %s
                    AND o.review_status NOT IN ('MERGED', 'REJECTED')
                  UNION ALL
-                 SELECT o.operator_name, NULL, NULLIF(o.town, ''), 1
+                 SELECT o.operator_name, NULL, NULLIF(o.town, ''),
+                        NULLIF(o.postcode, ''), NULLIF(o.address, ''), NULL, 1
                  FROM opportunities o
                  WHERE o.vertical = %s
                    AND o.review_status NOT IN ('MERGED', 'REJECTED')
@@ -2037,6 +2041,11 @@ def list_organisation_enrichment_candidates(
                         COALESCE(NULLIF(rs.metadata->>'town', ''),
                                  NULLIF(rs.metadata->>'locality', ''),
                                  NULLIF(rs.location_hint, '')),
+                        NULLIF(rs.metadata->>'postcode', ''),
+                        COALESCE(NULLIF(rs.metadata->>'address', ''),
+                                 NULLIF(rs.location_hint, '')),
+                        COALESCE(NULLIF(rs.metadata->>'website', ''),
+                                 NULLIF(rs.metadata->>'website_url', '')),
                         CASE WHEN rs.source_type = 'ofsted' THEN 2 ELSE 3 END
                  FROM raw_signals rs
                  LEFT JOIN signal_enrichments se ON se.raw_signal_id = rs.id
@@ -2044,7 +2053,8 @@ def list_organisation_enrichment_candidates(
                    AND COALESCE(NULLIF(trim(se.operator_name), ''),
                                 NULLIF(trim(rs.organisation_hint), '')) IS NOT NULL
                )
-               SELECT name, max(companies_house_number), max(locality), min(priority)
+               SELECT name, max(companies_house_number), max(locality), max(postcode),
+                      max(address), max(website_url), min(priority)
                FROM activity
                WHERE lower(trim(name)) NOT IN ('unknown', 'not provided', 'redacted')
                GROUP BY lower(trim(name)), name
@@ -2054,7 +2064,7 @@ def list_organisation_enrichment_candidates(
         ).fetchall()
         candidates: list[dict[str, Any]] = []
         seen: set[str] = set()
-        for name, company_number, locality, _priority in rows:
+        for name, company_number, locality, postcode, address, website_url, _priority in rows:
             identity = normalize_identity(name)
             if not identity or identity in seen:
                 continue
@@ -2087,6 +2097,9 @@ def list_organisation_enrichment_candidates(
                     "name": operator[0],
                     "company_number": operator[1],
                     "locality": locality,
+                    "postcode": postcode,
+                    "address": address,
+                    "website": website_url,
                 }
             )
             if len(candidates) >= limit:
@@ -2168,14 +2181,118 @@ def list_organisation_match_reviews(
                ORDER BY r.created_at DESC LIMIT %s""",
             (min(max(limit, 1), 100),),
         ).fetchall()
-    return [
+        results = []
+        for row in rows:
+            operator = conn.execute(
+                """SELECT name, legal_name, website_url
+                   FROM operators WHERE id = %s""",
+                (row[1],),
+            ).fetchone()
+            aliases = conn.execute(
+                """SELECT alias, source FROM organisation_aliases
+                   WHERE operator_id = %s ORDER BY created_at""",
+                (row[1],),
+            ).fetchall()
+            identity_names = {
+                str(value).strip().lower()
+                for value in [
+                    operator[0] if operator else None,
+                    operator[1] if operator else None,
+                    row[4],
+                    *(alias[0] for alias in aliases),
+                ]
+                if str(value or "").strip()
+            }
+            opportunities = conn.execute(
+                """SELECT id, name, vertical, town, postcode, address
+                   FROM opportunities
+                   WHERE operator_id = %s AND review_status NOT IN ('MERGED', 'REJECTED')
+                   ORDER BY latest_update_at DESC LIMIT 20""",
+                (row[1],),
+            ).fetchall()
+            signals = conn.execute(
+                """SELECT DISTINCT rs.id, rs.title, rs.vertical, rs.source_type,
+                          rs.source_url, rs.location_hint, rs.organisation_hint,
+                          rs.metadata, rs.discovered_at
+                   FROM raw_signals rs
+                   LEFT JOIN signal_enrichments se ON se.raw_signal_id = rs.id
+                   LEFT JOIN opportunity_signals os
+                     ON os.raw_signal_id = rs.id AND os.status = 'ACTIVE'
+                   LEFT JOIN opportunities opp ON opp.id = os.opportunity_id
+                   WHERE opp.operator_id = %s
+                      OR lower(trim(COALESCE(se.operator_name, rs.organisation_hint, '')))
+                         = ANY(%s)
+                   ORDER BY rs.discovered_at DESC LIMIT 30""",
+                (row[1], list(identity_names)),
+            ).fetchall()
+            results.append(
+                {
+                    "id": row[0],
+                    "operator_id": row[1],
+                    "organisation_name": row[2],
+                    "provider": row[3],
+                    "query_name": row[4],
+                    "candidates": row[5],
+                    "reason": row[6],
+                    "created_at": row[7],
+                    "source_context": {
+                        "observed_name": row[4],
+                        "website": operator[2] if operator else None,
+                        "aliases": [
+                            {"alias": alias[0], "source": alias[1]} for alias in aliases
+                        ],
+                        "verticals": sorted(
+                            {signal[2] for signal in signals}
+                            | {opportunity[2] for opportunity in opportunities}
+                        ),
+                        "source_types": sorted({signal[3] for signal in signals}),
+                        "signals": [
+                            {
+                                "id": signal[0],
+                                "title": signal[1],
+                                "vertical": signal[2],
+                                "source_type": signal[3],
+                                "source_url": signal[4],
+                                "location": signal[5],
+                                "organisation_name": signal[6],
+                                "address": (signal[7] or {}).get("address"),
+                                "postcode": (signal[7] or {}).get("postcode"),
+                                "town": (signal[7] or {}).get("town")
+                                or (signal[7] or {}).get("locality"),
+                                "local_authority": (signal[7] or {}).get("council")
+                                or (signal[7] or {}).get("local_authority"),
+                                "discovered_at": signal[8],
+                            }
+                            for signal in signals
+                        ],
+                        "opportunities": [
+                            {
+                                "id": opportunity[0],
+                                "name": opportunity[1],
+                                "vertical": opportunity[2],
+                                "town": opportunity[3],
+                                "postcode": opportunity[4],
+                                "address": opportunity[5],
+                            }
+                            for opportunity in opportunities
+                        ],
+                    },
+                }
+            )
+    return results
+
+
+def _organisation_candidate_fingerprint(candidates: list[dict[str, Any]]) -> str:
+    import hashlib
+
+    values = sorted(
         {
-            "id": row[0], "operator_id": row[1], "organisation_name": row[2],
-            "provider": row[3], "query_name": row[4], "candidates": row[5],
-            "reason": row[6], "created_at": row[7],
+            str(candidate.get("company_number") or "").strip().upper()
+            for candidate in candidates
+            if isinstance(candidate, dict) and candidate.get("company_number")
         }
-        for row in rows
-    ]
+    )
+    return hashlib.sha256("\n".join(values).encode()).hexdigest()
 
 
 def resolve_organisation_match_review(
@@ -2190,7 +2307,7 @@ def resolve_organisation_match_review(
         raise ValueError("unsupported organisation review action")
     with connection(settings) as conn:
         row = conn.execute(
-            """SELECT id, operator_id, candidates, status
+            """SELECT id, operator_id, candidates, status, query_name
                FROM organisation_match_reviews WHERE id = %s FOR UPDATE""",
             (review_id,),
         ).fetchone()
@@ -2213,22 +2330,61 @@ def resolve_organisation_match_review(
                 raise ValueError("selected company is not a review candidate")
             conn.execute(
                 """UPDATE operators SET companies_house_number = %s, legal_name = %s,
-                   company_status = %s, resolution_outcome = 'EXACT',
-                   resolution_confidence = 1, updated_at = now() WHERE id = %s""",
+                   company_status = %s, incorporation_date = %s,
+                   company_type = %s, registered_office = %s, sic_codes = %s,
+                   companies_house_url = %s, resolution_outcome = 'EXACT',
+                   resolution_confidence = 1, enrichment_provenance = %s,
+                   updated_at = now() WHERE id = %s""",
                 (
                     selected.get("company_number"),
                     selected.get("company_name"),
                     selected.get("company_status"),
+                    selected.get("date_of_creation") or None,
+                    selected.get("type"),
+                    Jsonb(selected.get("registered_office_address") or {}),
+                    Jsonb(selected.get("sic_codes") or []),
+                    selected.get("companies_house_url")
+                    or (
+                        "https://find-and-update.company-information.service.gov.uk/company/"
+                        f"{selected.get('company_number')}"
+                    ),
+                    Jsonb(
+                        {
+                            "provider": "COMPANIES_HOUSE",
+                            "reason": "administrator confirmed an ambiguous company match",
+                            "review_id": review_id,
+                        }
+                    ),
                     row[1],
                 ),
             )
+            for alias in {
+                str(row[4] or "").strip(),
+                str(selected.get("company_name") or "").strip(),
+            }:
+                normalized = normalize_identity(alias)
+                if normalized:
+                    conn.execute(
+                        """INSERT INTO organisation_aliases
+                           (operator_id, alias, normalized_alias, source)
+                           VALUES (%s, %s, %s, 'ADMIN')
+                           ON CONFLICT (operator_id, normalized_alias) DO NOTHING""",
+                        (row[1], alias, normalized),
+                    )
             status = "CONFIRMED"
         else:
             status = "REJECTED"
+        candidates = row[2] or []
         conn.execute(
             """UPDATE organisation_match_reviews SET status = %s,
-               reviewed_by = %s, reviewed_at = now() WHERE id = %s""",
-            (status, actor, review_id),
+               reviewed_by = %s, reviewed_at = now(), candidate_fingerprint = %s
+               WHERE id = %s""",
+            (
+                status,
+                actor,
+                _organisation_candidate_fingerprint(candidates),
+                review_id,
+            ),
         )
         conn.execute(
             """INSERT INTO admin_audit_events (action, actor, target_type, details)

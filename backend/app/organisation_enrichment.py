@@ -29,11 +29,32 @@ def _safe_candidates(values: Any) -> list[dict[str, Any]]:
             "company_number": item.get("company_number"),
             "company_name": item.get("company_name"),
             "company_status": item.get("company_status"),
+            "date_of_creation": item.get("date_of_creation"),
+            "type": item.get("type"),
             "registered_office_address": item.get("registered_office_address") or {},
+            "sic_codes": item.get("sic_codes") or [],
+            "sic_descriptions": item.get("sic_descriptions") or [],
+            "companies_house_url": item.get("companies_house_url"),
+            "match_outcome": item.get("match_outcome"),
+            "name_similarity": item.get("name_similarity"),
+            "match_reasons": item.get("match_reasons") or [],
+            "match_cautions": item.get("match_cautions") or [],
+            "location_agreement": item.get("location_agreement") or {},
         }
         for item in values[:10]
         if isinstance(item, dict)
     ]
+
+
+def _candidate_fingerprint(candidates: list[dict[str, Any]]) -> str:
+    identities = sorted(
+        {
+            str(item.get("company_number") or "").strip().upper()
+            for item in candidates
+            if item.get("company_number")
+        }
+    )
+    return hashlib.sha256("\n".join(identities).encode()).hexdigest()
 
 
 def organisation_evidence_document(
@@ -152,12 +173,53 @@ def process_organisation_enrichment(settings: Settings, payload: dict[str, Any])
                         )
         if effective_status == "AMBIGUOUS":
             conn.execute(
-                """INSERT INTO organisation_match_reviews
-                   (operator_id, provider, query_name, candidates, reason)
-                   VALUES (%s, 'COMPANIES_HOUSE', %s, %s, %s)
-                   ON CONFLICT (operator_id, provider) WHERE status = 'PENDING'
-                   DO UPDATE SET candidates = EXCLUDED.candidates, reason = EXCLUDED.reason""",
-                (operator_id, query_name, Jsonb(candidates), reason),
+                """UPDATE operators SET companies_house_refreshed_at = %s::timestamptz,
+                   resolution_outcome = %s, resolution_confidence = %s,
+                   enrichment_provenance = %s, updated_at = now() WHERE id = %s""",
+                (
+                    retrieved_at,
+                    outcome,
+                    confidence,
+                    Jsonb({"provider": "COMPANIES_HOUSE", "reason": reason}),
+                    operator_id,
+                ),
+            )
+            fingerprint = _candidate_fingerprint(candidates)
+            previously_rejected = conn.execute(
+                """SELECT 1 FROM organisation_match_reviews
+                   WHERE operator_id = %s AND provider = 'COMPANIES_HOUSE'
+                     AND status = 'REJECTED' AND candidate_fingerprint = %s
+                   LIMIT 1""",
+                (operator_id, fingerprint),
+            ).fetchone()
+            if not previously_rejected:
+                conn.execute(
+                    """INSERT INTO organisation_match_reviews
+                       (operator_id, provider, query_name, candidates, reason,
+                        candidate_fingerprint)
+                       VALUES (%s, 'COMPANIES_HOUSE', %s, %s, %s, %s)
+                       ON CONFLICT (operator_id, provider) WHERE status = 'PENDING'
+                       DO UPDATE SET candidates = EXCLUDED.candidates,
+                         reason = EXCLUDED.reason,
+                         candidate_fingerprint = EXCLUDED.candidate_fingerprint""",
+                    (
+                        operator_id,
+                        query_name,
+                        Jsonb(candidates),
+                        reason,
+                        fingerprint,
+                    ),
+                )
+        elif effective_status == "NO_MATCH":
+            conn.execute(
+                """UPDATE operators SET companies_house_refreshed_at = %s::timestamptz,
+                   resolution_outcome = 'NO_MATCH', resolution_confidence = 0,
+                   enrichment_provenance = %s, updated_at = now() WHERE id = %s""",
+                (
+                    retrieved_at,
+                    Jsonb({"provider": "COMPANIES_HOUSE", "reason": reason}),
+                    operator_id,
+                ),
             )
         external_id = (
             str(company.get("company_number"))
