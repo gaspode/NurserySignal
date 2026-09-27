@@ -239,6 +239,10 @@ Validation gate:
   remain historical and are not re-offered until the upstream candidate set materially changes.
 - Ofsted regulatory evidence is explicitly outside the planning/recruitment AI shadow scope;
   SignalHub labels it not applicable and prevents cross-source prompt fallback.
+- Bounded URN-specific enrichment now follows official Ofsted provider pages and latest public
+  report metadata. It versions registered-provider identity separately from the annual register,
+  strengthens Companies House resolution, and explicitly keeps provider registered offices
+  separate from redacted home/site locations.
 
 Initial validation gate passed:
 - credentials, bounded source runs, idempotency, source health and queue/DLQ state are verified;

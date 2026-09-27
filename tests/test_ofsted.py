@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import zipfile
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -8,6 +9,58 @@ from app.care import enrich_care_signal
 from app.config import Settings
 from app.ofsted import OfstedQuery, ofsted_signal, records_from_ods
 from app.ofsted_collector import collect_ofsted
+from app.ofsted_enrichment import (
+    enrich_ofsted_urn,
+    parse_provider_page,
+    parse_report_pdf,
+    persist_ofsted_urn_enrichment,
+)
+
+
+class Response(io.BytesIO):
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self.close()
+
+
+def _provider_page(*, reports: bool = True) -> bytes:
+    report_rows = ""
+    if reports:
+        report_rows = """
+        <li class="timeline__day"><div class="event">
+          <p class="timeline__date"><time>28 July 2026</time></p>
+          <a class="publication-link" href="https://files.ofsted.gov.uk/v1/file/50311430">
+            Full inspection <span class="nonvisual">Full inspection, PDF - 08 September 2026</span>
+          </a><div>Published <time>08 September 2026</time></div>
+        </div></li>
+        <li class="timeline__day"><div class="event">
+          <p class="timeline__date"><time>27 November 2025</time></p>
+          <a class="publication-link" href="https://files.ofsted.gov.uk/v1/file/50293150">
+            Monitoring visit <span class="nonvisual">Monitoring visit, PDF - 31 December 2025</span>
+          </a><div>Published <time>31 December 2025</time></div>
+        </div></li>
+        """
+    return f"""
+      <html><head><link rel="canonical" href="https://reports.ofsted.gov.uk/provider/2/2766766"></head>
+      <body><ol>{report_rows}<li class="timeline__day timeline__day--registered">
+        <time>04 October 2024</time><span>Registration</span></li></ol>
+        <ul><li><span>Type: </span><span>Children's Home</span></li>
+        <li><span>Local authority: </span><span>Lancashire</span></li></ul>
+      </body></html>
+    """.encode()
+
+
+def _tagged_report() -> bytes:
+    return (
+        b"%PDF-1.7 /ActualText(Registered provider: ) "
+        b"/ActualText(Oaktree Childcare Limited) "
+        b"/ActualText(Registered provider address: ) "
+        b"/ActualText(Ground Floor, Seneca House, Links Point, Amy Johnson Way, "
+        b"Blackpool, Lancashire FY4 2FF) /ActualText(Responsible individual: ) "
+        b"/ActualText(A person who is deliberately not retained)"
+    )
 
 
 def _ods(path: Path) -> None:
@@ -106,6 +159,88 @@ def test_official_register_normalization_preserves_redaction(tmp_path: Path) -> 
     assert "REDACTED" not in signal["location_hint"]
 
 
+def test_known_urn_page_and_report_extract_provider_identity_without_home_address() -> None:
+    page = parse_provider_page(_provider_page(), "2766766")
+    report = parse_report_pdf(_tagged_report())
+
+    assert page == {
+        "urn": "2766766",
+        "provider_page_url": "https://reports.ofsted.gov.uk/provider/2/2766766",
+        "provision_type": "Children's Home",
+        "local_authority": "Lancashire",
+        "registration_date": "2024-10-04",
+        "latest_report_type": "Full inspection",
+        "latest_report_date": "2026-07-28",
+        "latest_report_publication_date": "2026-09-08",
+        "latest_report_url": "https://files.ofsted.gov.uk/v1/file/50311430",
+        "report_count": 2,
+    }
+    assert report["registered_provider_name"] == "Oaktree Childcare Limited"
+    assert report["provider_registered_locality"] == "Blackpool"
+    assert report["provider_registered_region"] == "Lancashire"
+    assert report["provider_registered_postcode"] == "FY4 2FF"
+    assert "home_address" not in report
+    assert "manager" not in report
+
+
+def test_urn_enrichment_uses_latest_public_report_and_handles_no_report() -> None:
+    requested = []
+
+    def opener(request, timeout):
+        requested.append(request.full_url)
+        if "files.ofsted.gov.uk" in request.full_url:
+            return Response(_tagged_report())
+        return Response(_provider_page())
+
+    result = enrich_ofsted_urn(
+        "2766766",
+        opener=opener,
+        retrieved_at=datetime(2026, 9, 27, tzinfo=UTC),
+    )
+    assert requested == [
+        "https://reports.ofsted.gov.uk/provider/2/2766766",
+        "https://files.ofsted.gov.uk/v1/file/50311430",
+    ]
+    assert result["status"] == "SUCCEEDED"
+    assert result["registered_provider_name"] == "Oaktree Childcare Limited"
+
+    no_report = enrich_ofsted_urn(
+        "2766766",
+        opener=lambda request, timeout: Response(_provider_page(reports=False)),
+    )
+    assert no_report["status"] == "NO_REPORT"
+    assert no_report["latest_report_url"] is None
+
+
+def test_urn_enrichment_evidence_identity_ignores_retrieval_time(monkeypatch) -> None:
+    stored = []
+    uploaded = []
+    monkeypatch.setattr(
+        "app.ofsted_enrichment.put_raw_evidence",
+        lambda settings, bucket, key, payload: uploaded.append((key, payload)),
+    )
+    monkeypatch.setattr(
+        "app.ofsted_enrichment.store_ofsted_urn_enrichment",
+        lambda settings, **values: stored.append(values) or len(stored) == 1,
+    )
+    base = {
+        **parse_provider_page(_provider_page(), "2766766"),
+        **parse_report_pdf(_tagged_report()),
+        "status": "SUCCEEDED",
+        "parser_version": "ofsted-urn-v1",
+    }
+    settings = Settings(evidence_bucket="private-evidence")
+    assert persist_ofsted_urn_enrichment(
+        settings, "signal-1", {**base, "retrieved_at": "2026-09-27T10:00:00Z"}
+    )
+    assert not persist_ofsted_urn_enrichment(
+        settings, "signal-1", {**base, "retrieved_at": "2026-09-27T11:00:00Z"}
+    )
+    assert uploaded[0][0] == uploaded[1][0]
+    assert uploaded[0][1] == uploaded[1][1]
+    assert stored[0]["content_sha256"] == stored[1]["content_sha256"]
+
+
 def test_ofsted_is_supporting_regulatory_evidence_not_a_new_opportunity() -> None:
     candidate = enrich_care_signal(
         {
@@ -160,11 +295,43 @@ def test_ofsted_repeated_collection_keeps_provider_evidence_stable(
         ingestion_queue_url="https://sqs.example/ingestion",
         ofsted_data_url="https://example.test/ofsted.ods",
     )
-    collect_ofsted(settings, {"source": "manual", "max_records": 1})
-    collect_ofsted(settings, {"source": "manual", "max_records": 1})
+    collect_ofsted(
+        settings, {"source": "manual", "max_records": 1, "urn_enrichment_limit": 0}
+    )
+    collect_ofsted(
+        settings, {"source": "manual", "max_records": 1, "urn_enrichment_limit": 0}
+    )
 
     assert len(queued) == 2
     assert queued[0].raw_provider_record == queued[1].raw_provider_record
     assert "retrieved_at" not in queued[0].raw_provider_record
     assert queued[0].raw_provider_record["dataset_url"] == settings.ofsted_data_url
     assert datetime.fromisoformat(queued[0].signal["discovered_at"]).tzinfo == UTC
+
+
+def test_failed_urn_lookup_does_not_break_base_ofsted_collection(
+    tmp_path: Path, monkeypatch
+) -> None:
+    path = tmp_path / "register.ods"
+    _ods(path)
+    queued = []
+    monkeypatch.setattr("app.ofsted_collector.download_register", lambda _url: path)
+    monkeypatch.setattr(
+        "app.ofsted_collector.enrich_ofsted_urn",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(TimeoutError("timed out")),
+    )
+    monkeypatch.setattr(
+        "app.ofsted_collector.send_ingestion_message",
+        lambda _settings, message: queued.append(message),
+    )
+    result = collect_ofsted(
+        Settings(
+            ingestion_queue_url="https://sqs.example/ingestion",
+            ofsted_data_url="https://example.test/ofsted.ods",
+        ),
+        {"source": "manual", "max_records": 1, "registered_since_days": 3650},
+    )
+    assert result["signals_queued"] == 1
+    assert result["urn_enrichment_failed"] == 1
+    assert queued[0].ofsted_urn_enrichment["status"] == "FAILED"
+    assert queued[0].ofsted_urn_enrichment["failure_category"] == "TimeoutError"

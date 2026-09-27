@@ -6,6 +6,7 @@ from typing import Any
 
 from app.config import Settings
 from app.ingestion import NormalizedSignal
+from app.ofsted_enrichment import persist_ofsted_urn_enrichment
 from app.organisation_enrichment import process_organisation_enrichment
 from app.queueing import SignalIngestionMessage
 from app.service import ingest_signal
@@ -29,7 +30,11 @@ def process_message(settings: Settings, body: str) -> None:
     evidence = json.dumps(
         message.raw_provider_record, separators=(",", ":"), sort_keys=True
     ).encode()
-    ingest_signal(settings, signal, evidence)
+    result = ingest_signal(settings, signal, evidence)
+    if signal.source_type == "ofsted" and message.ofsted_urn_enrichment:
+        persist_ofsted_urn_enrichment(
+            settings, result.signal_id, message.ofsted_urn_enrichment
+        )
     logger.info(
         "signal_ingested source_type=%s external_id=%s", signal.source_type, signal.external_id
     )

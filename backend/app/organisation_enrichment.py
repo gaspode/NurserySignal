@@ -171,6 +171,14 @@ def process_organisation_enrichment(settings: Settings, payload: dict[str, Any])
                                ON CONFLICT (operator_id, normalized_alias) DO NOTHING""",
                             (operator_id, alias, normalized),
                         )
+                conn.execute(
+                    """UPDATE organisation_match_reviews
+                       SET status = 'SUPERSEDED', reviewed_by = 'SYSTEM',
+                           reviewed_at = now()
+                       WHERE operator_id = %s AND provider = 'COMPANIES_HOUSE'
+                         AND status = 'PENDING'""",
+                    (operator_id,),
+                )
         if effective_status == "AMBIGUOUS":
             conn.execute(
                 """UPDATE operators SET companies_house_refreshed_at = %s::timestamptz,

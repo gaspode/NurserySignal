@@ -316,7 +316,7 @@ describe("admin frontend", () => {
   it("shows Companies House enrichment and keeps ambiguous matches reviewable", async () => {
     const apiClient = vi.fn()
       .mockResolvedValueOnce({ items: [{ id: "operator-1", name: "Acme Care", legal_name: "ACME CARE LIMITED", vertical: "CHILDRENS_HOME", companies_house_number: "12345678", company_status: "active", signal_count: 2, opportunity_count: 1 }] })
-      .mockResolvedValueOnce({ items: [{ id: "review-1", operator_id: "operator-2", organisation_name: "Other Care", reason: "multiple candidates", source_context: { observed_name: "Other Care", verticals: ["CHILDRENS_HOME"], source_types: ["planning"], website: "https://other.example", aliases: [{ alias: "Other Care Ltd" }], signals: [{ id: "signal-1", title: "Change of use to children's home", source_type: "planning", vertical: "CHILDRENS_HOME", organisation_name: "Other Care", town: "Coventry", postcode: "CV1 2AB", source_url: "https://planning.example/1" }], opportunities: [{ id: "opportunity-1", name: "New children's home — Coventry", vertical: "CHILDRENS_HOME", town: "Coventry" }] }, candidates: [{ company_name: "OTHER CARE LIMITED", company_number: "87654321", company_status: "active", date_of_creation: "2020-03-04", type: "ltd", registered_office_address: { locality: "Coventry", postal_code: "CV1 2AB" }, sic_descriptions: [{ code: "87900", description: "Other residential care activities not elsewhere classified" }], companies_house_url: "https://find-and-update.company-information.service.gov.uk/company/87654321", match_outcome: "STRONG", match_reasons: ["Legal name differs only by company suffix", "Same town/locality as source evidence"], match_cautions: [] }] }] })
+      .mockResolvedValueOnce({ items: [{ id: "review-1", operator_id: "operator-2", organisation_name: "Other Care", reason: "multiple candidates", source_context: { observed_name: "Other Care", verticals: ["CHILDRENS_HOME"], source_types: ["planning", "ofsted"], website: "https://other.example", aliases: [{ alias: "Other Care Ltd" }], signals: [{ id: "signal-1", title: "Change of use to children's home", source_type: "planning", vertical: "CHILDRENS_HOME", organisation_name: "Other Care", town: "Coventry", postcode: "CV1 2AB", source_url: "https://planning.example/1" }], opportunities: [{ id: "opportunity-1", name: "New children's home — Coventry", vertical: "CHILDRENS_HOME", town: "Coventry" }], ofsted_evidence: [{ urn: "2766766", registered_provider_name: "Other Care Limited", provider_registered_address: "1 Provider Office, Blackpool, FY4 2FF", provider_registered_locality: "Blackpool", provider_registered_region: "Lancashire", provider_registered_postcode: "FY4 2FF", latest_report_url: "https://files.ofsted.gov.uk/v1/file/50311430", provider_page_url: "https://reports.ofsted.gov.uk/provider/2/2766766" }] }, candidates: [{ company_name: "OTHER CARE LIMITED", company_number: "87654321", company_status: "active", date_of_creation: "2020-03-04", type: "ltd", registered_office_address: { locality: "Coventry", postal_code: "CV1 2AB" }, sic_descriptions: [{ code: "87900", description: "Other residential care activities not elsewhere classified" }], companies_house_url: "https://find-and-update.company-information.service.gov.uk/company/87654321", match_outcome: "STRONG", match_reasons: ["Legal name differs only by company suffix", "Same town/locality as source evidence"], match_cautions: [] }] }] })
       .mockResolvedValueOnce({ id: "review-1", status: "CONFIRMED" })
       .mockResolvedValueOnce({ items: [] })
       .mockResolvedValueOnce({ items: [] });
@@ -328,6 +328,10 @@ describe("admin frontend", () => {
     expect(screen.getByText("Coventry, CV1 2AB")).toBeInTheDocument();
     expect(screen.getByText("Other residential care activities not elsewhere classified", { exact: false })).toBeInTheDocument();
     expect(screen.getByText("Legal name differs only by company suffix")).toBeInTheDocument();
+    expect(screen.getByText("Ofsted provider evidence")).toBeInTheDocument();
+    expect(screen.getByText("URN 2766766 · Blackpool · Lancashire · FY4 2FF")).toBeInTheDocument();
+    expect(screen.getByText(/Provider registered office \(not home\/site\): 1 Provider Office/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "View latest Ofsted report" })).toHaveAttribute("target", "_blank");
     expect(screen.getByRole("link", { name: "View Companies House" })).toHaveAttribute("target", "_blank");
     expect(screen.getByRole("link", { name: "View signal" })).toHaveAttribute("href", "#/history/signal-1");
     await userEvent.click(screen.getByRole("button", { name: "Use this company" }));
@@ -430,11 +434,31 @@ describe("admin frontend", () => {
     ofsted.vertical = "CHILDRENS_HOME";
     ofsted.title = "Ofsted children's home registration";
     ofsted.ai_reviews = [];
+    ofsted.ofsted_enrichment = {
+      urn: "2766766",
+      status: "SUCCEEDED",
+      registered_provider_name: "Oaktree Childcare Limited",
+      provision_type: "Children's Home",
+      registration_date: "2024-10-04",
+      local_authority: "Lancashire",
+      provider_registered_address: "Ground Floor, Seneca House, Blackpool, Lancashire FY4 2FF",
+      provider_registered_locality: "Blackpool",
+      provider_registered_region: "Lancashire",
+      provider_registered_postcode: "FY4 2FF",
+      latest_report_date: "2026-07-28",
+      latest_report_publication_date: "2026-09-08",
+      latest_report_url: "https://files.ofsted.gov.uk/v1/file/50311430",
+      provider_page_url: "https://reports.ofsted.gov.uk/provider/2/2766766",
+    };
     const apiClient = vi.fn().mockResolvedValue(ofsted);
     render(<SignalDetail signalId="signal-1" apiClient={apiClient} onBack={vi.fn()} />);
     expect(await screen.findByText(/Not applicable to Ofsted regulatory evidence/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Run AI/ })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Change to Rejected" })).toBeInTheDocument();
+    expect(screen.getByText("Ofsted regulatory evidence")).toBeInTheDocument();
+    expect(screen.getByText("Oaktree Childcare Limited")).toBeInTheDocument();
+    expect(screen.getByText("Provider registered office (not home/site)")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "View latest Ofsted report" })).toHaveAttribute("target", "_blank");
     expect(apiClient).toHaveBeenCalledTimes(1);
   });
 

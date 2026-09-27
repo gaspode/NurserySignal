@@ -1,4 +1,5 @@
 import json
+from types import SimpleNamespace
 
 from app.ingestion_worker import handler
 
@@ -61,3 +62,43 @@ def test_ingestion_worker_routes_organisation_enrichment_without_signal_ingestio
     result = handler({"Records": [{"messageId": "org-1", "body": body}]}, None)
     assert result == {"batchItemFailures": []}
     assert captured[0]["provider"] == "COMPANIES_HOUSE"
+
+
+def test_ingestion_worker_persists_ofsted_urn_enrichment_after_base_signal(
+    monkeypatch,
+) -> None:
+    settings = object()
+    monkeypatch.setattr("app.ingestion_worker.Settings.from_env", lambda: settings)
+    monkeypatch.setattr(
+        "app.ingestion_worker.ingest_signal",
+        lambda *_args: SimpleNamespace(signal_id="signal-1"),
+    )
+    persisted = []
+    monkeypatch.setattr(
+        "app.ingestion_worker.persist_ofsted_urn_enrichment",
+        lambda current, signal_id, value: persisted.append((current, signal_id, value)),
+    )
+    body = json.dumps(
+        {
+            "message_version": "1.0",
+            "signal": {
+                "source_type": "ofsted",
+                "source_url": "https://reports.ofsted.gov.uk/provider/2/2766766",
+                "external_id": "ofsted:2766766",
+                "discovered_at": "2026-09-27T08:00:00Z",
+                "title": "Ofsted registration — Oaktree Childcare Ltd",
+                "raw_text": "Registration status: Active",
+                "vertical": "CHILDRENS_HOME",
+            },
+            "raw_provider_record": {"URN": "2766766"},
+            "ofsted_urn_enrichment": {
+                "urn": "2766766",
+                "status": "SUCCEEDED",
+                "registered_provider_name": "Oaktree Childcare Limited",
+            },
+        }
+    )
+    result = handler({"Records": [{"messageId": "ofsted-1", "body": body}]}, None)
+    assert result == {"batchItemFailures": []}
+    assert persisted[0][1] == "signal-1"
+    assert persisted[0][2]["registered_provider_name"] == "Oaktree Childcare Limited"

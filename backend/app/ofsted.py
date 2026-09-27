@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import tempfile
 import urllib.request
 import zipfile
@@ -32,15 +33,29 @@ class OfstedQuery:
     max_records: int = 50
     registered_since_days: int = 730
     active_only: bool = True
+    urns: tuple[str, ...] = ()
+    urn_enrichment_limit: int = 10
 
     @classmethod
     def from_event(cls, event: dict[str, Any]) -> OfstedQuery:
+        raw_urns = event.get("urns") or []
+        if not isinstance(raw_urns, list):
+            raise ValueError("urns must be a list")
+        urns = tuple(
+            urn
+            for urn in (str(value).strip() for value in raw_urns[:10])
+            if urn and re.fullmatch(r"(?:SC)?\d{6,8}", urn, re.I)
+        )
         return cls(
             max_records=min(max(int(event.get("max_records", 50)), 1), 200),
             registered_since_days=min(
                 max(int(event.get("registered_since_days", 730)), 1), 3650
             ),
             active_only=bool(event.get("active_only", True)),
+            urns=urns,
+            urn_enrichment_limit=min(
+                max(int(event.get("urn_enrichment_limit", 10)), 0), 10
+            ),
         )
 
 
@@ -136,6 +151,7 @@ def records_from_ods(
 ) -> Iterator[OfstedRecord]:
     today = today or datetime.now(UTC).date()
     earliest = today - timedelta(days=query.registered_since_days)
+    requested_urns = {value.upper() for value in query.urns}
     headers: list[str] | None = None
     current_sheet: str | None = None
     yielded = 0
@@ -166,11 +182,13 @@ def records_from_ods(
                 if query.active_only and status.lower() not in {"active", "registered"}:
                     continue
                 registration_date = _parse_date(row.get("Registration date"))
-                if registration_date and registration_date < earliest:
+                if not requested_urns and registration_date and registration_date < earliest:
                     continue
                 urn = str(row.get("URN") or "").strip()
                 provider = str(row.get("Organisation which owns the provider") or "").strip()
                 if not urn or not provider:
+                    continue
+                if requested_urns and urn.upper() not in requested_urns:
                     continue
                 source_url = next((link for link in links if link), None) or OFSTED_REGISTER_PAGE
                 yield OfstedRecord(

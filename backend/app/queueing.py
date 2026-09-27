@@ -52,6 +52,7 @@ class SignalIngestionMessage:
     message_version: str
     signal: dict[str, Any]
     raw_provider_record: dict[str, Any]
+    ofsted_urn_enrichment: dict[str, Any] | None = None
 
     @classmethod
     def from_json(cls, body: bytes) -> SignalIngestionMessage:
@@ -62,7 +63,10 @@ class SignalIngestionMessage:
         raw = payload.get("raw_provider_record")
         if not isinstance(signal, dict) or not isinstance(raw, dict):
             raise ValueError("invalid ingestion message payload")
-        return cls("1.0", signal, raw)
+        ofsted_enrichment = payload.get("ofsted_urn_enrichment")
+        if ofsted_enrichment is not None and not isinstance(ofsted_enrichment, dict):
+            raise ValueError("invalid Ofsted URN enrichment payload")
+        return cls("1.0", signal, raw, ofsted_enrichment)
 
 
 def send_ingestion_message(settings: Settings, message: SignalIngestionMessage) -> str:

@@ -50,6 +50,10 @@ class OrganisationCandidate:
     locality: str | None = None
     postcode: str | None = None
     address: str | None = None
+    provider_registered_name: str | None = None
+    provider_registered_locality: str | None = None
+    provider_registered_postcode: str | None = None
+    provider_registered_address: str | None = None
 
 
 @dataclass(frozen=True)
@@ -125,7 +129,7 @@ def _outward_postcode(value: Any) -> str:
 def _candidate_comparison(
     candidate: OrganisationCandidate, company: dict[str, Any]
 ) -> dict[str, Any]:
-    observed = normalize_identity(candidate.name)
+    observed = normalize_identity(candidate.provider_registered_name or candidate.name)
     legal_name = normalize_identity(company.get("company_name"))
     similarity = SequenceMatcher(None, observed, legal_name).ratio()
     address = company.get("registered_office_address") or {}
@@ -135,6 +139,17 @@ def _candidate_comparison(
     source_outward = _outward_postcode(candidate.postcode)
     company_outward = _outward_postcode(address.get("postal_code"))
     postcode_area_agrees = bool(source_outward and source_outward == company_outward)
+    provider_locality = normalize_identity(candidate.provider_registered_locality)
+    provider_postcode = str(candidate.provider_registered_postcode or "").upper().replace(
+        " ", ""
+    )
+    company_postcode = str(address.get("postal_code") or "").upper().replace(" ", "")
+    provider_locality_agrees = bool(
+        provider_locality and provider_locality == company_locality
+    )
+    provider_postcode_agrees = bool(
+        provider_postcode and provider_postcode == company_postcode
+    )
     reasons: list[str] = []
     cautions: list[str] = []
     if observed == legal_name:
@@ -155,14 +170,32 @@ def _candidate_comparison(
         reasons.append("Registered-office postcode area agrees with source evidence")
     elif source_outward and company_outward:
         cautions.append("Registered-office postcode area differs from source context")
-    if not locality_agrees and not postcode_area_agrees:
+    if provider_locality_agrees:
+        reasons.append("Companies House office town matches Ofsted provider address")
+    elif provider_locality and company_locality:
+        cautions.append("Companies House office town differs from Ofsted provider address")
+    if provider_postcode_agrees:
+        reasons.append("Companies House office postcode matches Ofsted provider address")
+    elif provider_postcode and company_postcode:
+        cautions.append("Companies House office postcode differs from Ofsted provider address")
+    if not any(
+        (
+            locality_agrees,
+            postcode_area_agrees,
+            provider_locality_agrees,
+            provider_postcode_agrees,
+        )
+    ):
         cautions.append("Name match only; no location corroboration")
     suffix_equivalent = _name_without_legal_suffix(observed) == _name_without_legal_suffix(
         legal_name
     )
     outcome = "PROBABLE" if similarity >= 0.9 or suffix_equivalent else "UNCERTAIN"
     if (observed == legal_name or suffix_equivalent) and (
-        locality_agrees or postcode_area_agrees
+        locality_agrees
+        or postcode_area_agrees
+        or provider_locality_agrees
+        or provider_postcode_agrees
     ):
         outcome = "STRONG"
     return {
@@ -174,6 +207,8 @@ def _candidate_comparison(
         "location_agreement": {
             "locality": locality_agrees,
             "postcode_area": postcode_area_agrees,
+            "ofsted_provider_locality": provider_locality_agrees,
+            "ofsted_provider_postcode": provider_postcode_agrees,
         },
     }
 
@@ -258,7 +293,8 @@ class CompaniesHouseProvider:
                 profile,
                 (),
             )
-        results = self.search(candidate.name)
+        lookup_name = candidate.provider_registered_name or candidate.name
+        results = self.search(lookup_name)
         if not results:
             return CompanyResolution(
                 candidate.operator_id,
@@ -270,19 +306,52 @@ class CompaniesHouseProvider:
                 None,
                 (),
             )
-        target = normalize_identity(candidate.name)
+        target = normalize_identity(lookup_name)
         exact = [item for item in results if normalize_identity(item.get("company_name")) == target]
         if len(exact) == 1:
+            compared_exact = _candidate_comparison(candidate, exact[0])
+            ofsted_location_agrees = any(
+                (compared_exact.get("location_agreement") or {}).get(key)
+                for key in ("ofsted_provider_locality", "ofsted_provider_postcode")
+            )
             profile = self.company_profile(str(exact[0]["company_number"]))
             return CompanyResolution(
                 candidate.operator_id,
                 candidate.name,
                 "MATCHED",
                 "STRONG",
-                0.95,
-                "unique normalized legal-name match",
+                0.99 if ofsted_location_agrees else 0.95,
+                (
+                    "unique registered-provider legal-name match corroborated by "
+                    "Ofsted provider address"
+                    if ofsted_location_agrees
+                    else "unique normalized legal-name match"
+                ),
                 profile,
-                results,
+                (compared_exact,),
+            )
+        compared = [_candidate_comparison(candidate, item) for item in results]
+        provider_corroborated = [
+            item
+            for item in compared
+            if item.get("match_outcome") == "STRONG"
+            and any(
+                (item.get("location_agreement") or {}).get(key)
+                for key in ("ofsted_provider_locality", "ofsted_provider_postcode")
+            )
+        ]
+        if len(provider_corroborated) == 1:
+            selected = provider_corroborated[0]
+            profile = self.company_profile(str(selected["company_number"]))
+            return CompanyResolution(
+                candidate.operator_id,
+                candidate.name,
+                "MATCHED",
+                "STRONG",
+                0.98,
+                "unique legal-name match corroborated by Ofsted provider address",
+                profile,
+                tuple(compared),
             )
         locality = normalize_identity(candidate.locality)
         scored: list[tuple[float, dict[str, Any]]] = []

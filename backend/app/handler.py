@@ -89,6 +89,7 @@ SOURCE_DEFINITIONS = {
             "registered_since_days": 730,
             "max_records": 50,
             "active_only": True,
+            "urn_enrichment_limit": 10,
         },
         "queue_setting": "ofsted_manual_run_queue_url",
         "supported_verticals": ["CHILDRENS_HOME"],

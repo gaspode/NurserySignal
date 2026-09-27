@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 from contextlib import contextmanager
+from datetime import UTC, datetime, timedelta
 from urllib.error import HTTPError
 
 import pytest
@@ -180,6 +181,11 @@ def test_signal_only_operator_is_materialised_as_enrichment_candidate(monkeypatc
                             "CV1 2AB",
                             "1 Example Road",
                             "https://acme.example",
+                            None,
+                            None,
+                            None,
+                            None,
+                            None,
                             3,
                         )
                     ]
@@ -215,9 +221,72 @@ def test_signal_only_operator_is_materialised_as_enrichment_candidate(monkeypatc
             "postcode": "CV1 2AB",
             "address": "1 Example Road",
             "website": "https://acme.example",
+            "provider_registered_name": None,
+            "provider_registered_locality": None,
+            "provider_registered_postcode": None,
+            "provider_registered_address": None,
         }
     ]
     assert conn.committed is True
+
+
+def test_new_ofsted_provider_evidence_bypasses_stale_company_cache(monkeypatch) -> None:
+    provider_evidence_at = datetime.now(UTC)
+
+    class Result:
+        def __init__(self, *, rows=None, row=None):
+            self.rows = rows or []
+            self.row = row
+
+        def fetchall(self):
+            return self.rows
+
+        def fetchone(self):
+            return self.row
+
+    class Connection:
+        def execute(self, sql, params=()):
+            if "WITH activity" in sql:
+                return Result(
+                    rows=[
+                        (
+                            "Oaktree Childcare Ltd",
+                            None,
+                            "Lancashire",
+                            None,
+                            None,
+                            None,
+                            "Oaktree Childcare Limited",
+                            "Blackpool",
+                            "FY4 2FF",
+                            "Provider office, Blackpool, FY4 2FF",
+                            provider_evidence_at,
+                            2,
+                        )
+                    ]
+                )
+            if "SELECT name, companies_house_number" in sql:
+                return Result(
+                    row=(
+                        "Oaktree Childcare Ltd",
+                        None,
+                        provider_evidence_at - timedelta(minutes=1),
+                    )
+                )
+            return Result()
+
+        def commit(self):
+            return None
+
+    @contextmanager
+    def fake_connection(_settings):
+        yield Connection()
+
+    monkeypatch.setattr("app.repository.connection", fake_connection)
+    monkeypatch.setattr("app.repository._resolve_operator_id", lambda *_args: "operator-1")
+    result = list_organisation_enrichment_candidates(Settings(), limit=1)
+    assert result[0]["provider_registered_name"] == "Oaktree Childcare Limited"
+    assert result[0]["provider_registered_postcode"] == "FY4 2FF"
 
 
 def test_companies_house_evidence_identity_ignores_retrieval_time() -> None:
@@ -295,6 +364,61 @@ def test_rejected_candidate_set_is_not_immediately_recreated(monkeypatch) -> Non
     assert conn.inserted_review is False
 
 
+def test_strong_enrichment_supersedes_an_existing_pending_review(monkeypatch) -> None:
+    class Result:
+        def __init__(self, row=None):
+            self.row = row
+
+        def fetchone(self):
+            return self.row
+
+    class Connection:
+        statements = []
+
+        def execute(self, sql, params=()):
+            self.statements.append((sql, params))
+            if "SELECT id, name, companies_house_number" in sql:
+                return Result(("operator-1", "Oaktree Childcare Ltd", None))
+            return Result()
+
+        def commit(self):
+            return None
+
+    conn = Connection()
+
+    @contextmanager
+    def fake_connection(_settings):
+        yield conn
+
+    monkeypatch.setattr("app.organisation_enrichment.connection", fake_connection)
+    monkeypatch.setattr("app.organisation_enrichment.put_raw_evidence", lambda *args: None)
+    result = process_organisation_enrichment(
+        Settings(evidence_bucket="evidence"),
+        {
+            "provider": "COMPANIES_HOUSE",
+            "operator_id": "operator-1",
+            "query_name": "Oaktree Childcare Limited",
+            "status": "MATCHED",
+            "outcome": "STRONG",
+            "confidence": 0.99,
+            "reason": "Ofsted provider identity corroborated",
+            "retrieved_at": "2026-09-27T12:00:00Z",
+            "company": {
+                "company_number": "10445560",
+                "company_name": "OAKTREE CHILDCARE LIMITED",
+                "company_status": "active",
+                "registered_office_address": {"postal_code": "FY4 2FF"},
+            },
+            "candidates": [],
+        },
+    )
+    assert result["status"] == "MATCHED"
+    assert any(
+        "UPDATE organisation_match_reviews" in sql and "SUPERSEDED" in sql
+        for sql, _params in conn.statements
+    )
+
+
 def test_organisation_review_includes_source_context(monkeypatch) -> None:
     class Result:
         def __init__(self, *, rows=None, row=None):
@@ -357,6 +481,27 @@ def test_organisation_review_includes_source_context(monkeypatch) -> None:
                         )
                     ]
                 )
+            if "FROM ofsted_urn_enrichments" in sql:
+                return Result(
+                    rows=[
+                        (
+                            "2766766",
+                            "Other Care Limited",
+                            "Children's Home",
+                            "2024-10-04",
+                            "Lancashire",
+                            "1 Provider Office, Blackpool, FY4 2FF",
+                            "Blackpool",
+                            "Lancashire",
+                            "FY4 2FF",
+                            "2026-07-28",
+                            "2026-09-08",
+                            "https://files.ofsted.gov.uk/v1/file/50311430",
+                            "https://reports.ofsted.gov.uk/provider/2/2766766",
+                            "2026-09-27T12:00:00Z",
+                        )
+                    ]
+                )
             return Result()
 
     @contextmanager
@@ -369,6 +514,72 @@ def test_organisation_review_includes_source_context(monkeypatch) -> None:
     assert reviews[0]["source_context"]["source_types"] == ["planning"]
     assert reviews[0]["source_context"]["signals"][0]["postcode"] == "CV1 2AB"
     assert reviews[0]["source_context"]["opportunities"][0]["id"] == "opportunity-1"
+    assert reviews[0]["source_context"]["ofsted_evidence"][0]["urn"] == "2766766"
+    assert reviews[0]["source_context"]["ofsted_evidence"][0][
+        "provider_registered_postcode"
+    ] == "FY4 2FF"
+
+
+def test_ofsted_provider_identity_and_office_can_make_company_match_strong() -> None:
+    def opener(request, timeout):
+        if "/company/" in request.full_url:
+            return Response(
+                json.dumps(
+                    {
+                        "company_name": "OAKTREE CHILDCARE LIMITED",
+                        "company_number": "10445560",
+                        "company_status": "active",
+                        "registered_office_address": {
+                            "locality": "Blackpool",
+                            "region": "Lancashire",
+                            "postal_code": "FY4 2FF",
+                        },
+                        "sic_codes": ["87900"],
+                    }
+                ).encode()
+            )
+        return Response(
+            json.dumps(
+                {
+                    "items": [
+                        {
+                            "title": "OAKTREE CHILDCARE LIMITED",
+                            "company_number": "10445560",
+                            "company_status": "active",
+                            "address": {
+                                "locality": "Blackpool",
+                                "region": "Lancashire",
+                                "postal_code": "FY4 2FF",
+                            },
+                        },
+                        {
+                            "title": "OAKTREE TRAINING AND CHILDCARE SERVICES LIMITED",
+                            "company_number": "09385309",
+                            "company_status": "active",
+                            "address": {
+                                "locality": "London",
+                                "postal_code": "N1 1AA",
+                            },
+                        },
+                    ]
+                }
+            ).encode()
+        )
+
+    result = CompaniesHouseProvider("key", opener=opener).resolve(
+        OrganisationCandidate(
+            "operator-1",
+            "Oaktree Childcare Ltd",
+            provider_registered_name="Oaktree Childcare Limited",
+            provider_registered_locality="Blackpool",
+            provider_registered_postcode="FY4 2FF",
+        )
+    )
+    assert result.status == "MATCHED"
+    assert result.outcome == "STRONG"
+    assert result.confidence == 0.99
+    assert "Ofsted provider address" in result.reason
+    assert result.company["company_number"] == "10445560"
 
 
 def test_confirmed_organisation_review_preserves_aliases_and_audit(monkeypatch) -> None:

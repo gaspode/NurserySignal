@@ -79,6 +79,94 @@ def _resolve_operator_id(conn: Any, name: Any, metadata: dict[str, Any]) -> Any 
     ).fetchone()[0]
 
 
+def store_ofsted_urn_enrichment(
+    settings: Settings,
+    *,
+    signal_id: str,
+    value: dict[str, Any],
+    evidence_bucket: str,
+    evidence_key: str,
+    content_sha256: str,
+    retrieved_at: str,
+) -> bool:
+    """Persist immutable provider-level Ofsted evidence without changing site identity."""
+    with connection(settings) as conn:
+        signal = conn.execute(
+            """SELECT vertical, source_type, organisation_hint
+               FROM raw_signals WHERE id = %s FOR UPDATE""",
+            (signal_id,),
+        ).fetchone()
+        if signal is None:
+            raise ValueError("Ofsted enrichment references an unknown signal")
+        if signal[0] != "CHILDRENS_HOME" or signal[1] != "ofsted":
+            raise ValueError("Ofsted enrichment references an incompatible signal")
+        observed_name = str(signal[2] or "").strip()
+        provider_name = str(value.get("registered_provider_name") or "").strip()
+        operator_id = _resolve_operator_id(conn, observed_name or provider_name, {})
+        if operator_id:
+            for alias, source in (
+                (observed_name, "OFSTED_REGISTER"),
+                (provider_name, "OFSTED_REPORT"),
+            ):
+                normalized = normalize_identity(alias)
+                if normalized:
+                    conn.execute(
+                        """INSERT INTO organisation_aliases
+                           (operator_id, alias, normalized_alias, source)
+                           VALUES (%s, %s, %s, %s)
+                           ON CONFLICT (operator_id, normalized_alias) DO NOTHING""",
+                        (operator_id, alias, normalized, source),
+                    )
+        inserted = conn.execute(
+            """INSERT INTO ofsted_urn_enrichments (
+                   raw_signal_id, operator_id, urn, status, provider_page_url,
+                   provision_type, registration_date, local_authority,
+                   registered_provider_name, provider_registered_address,
+                   provider_registered_locality, provider_registered_region,
+                   provider_registered_postcode, latest_report_type,
+                   latest_report_date, latest_report_publication_date,
+                   latest_report_url, report_count, report_content_sha256,
+                   parser_version, failure_category, evidence_bucket,
+                   evidence_key, content_sha256, retrieved_at
+               ) VALUES (
+                   %s, %s, %s, %s, %s, %s, %s::date, %s, %s, %s, %s, %s, %s,
+                   %s, %s::date, %s::date, %s, %s, %s, %s, %s, %s, %s, %s,
+                   %s::timestamptz
+               )
+               ON CONFLICT (urn, content_sha256) DO NOTHING
+               RETURNING id""",
+            (
+                signal_id,
+                operator_id,
+                value.get("urn"),
+                value.get("status"),
+                value.get("provider_page_url"),
+                value.get("provision_type"),
+                value.get("registration_date"),
+                value.get("local_authority"),
+                provider_name or None,
+                value.get("provider_registered_address"),
+                value.get("provider_registered_locality"),
+                value.get("provider_registered_region"),
+                value.get("provider_registered_postcode"),
+                value.get("latest_report_type"),
+                value.get("latest_report_date"),
+                value.get("latest_report_publication_date"),
+                value.get("latest_report_url"),
+                int(value.get("report_count") or 0),
+                value.get("report_content_sha256"),
+                value.get("parser_version"),
+                value.get("failure_category"),
+                evidence_bucket,
+                evidence_key,
+                content_sha256,
+                retrieved_at,
+            ),
+        ).fetchone()
+        conn.commit()
+    return inserted is not None
+
+
 @dataclass(frozen=True)
 class SignalIdentity:
     id: UUID
@@ -591,6 +679,19 @@ def signal_detail(settings: Settings, signal_id: str) -> dict[str, Any] | None:
                FROM signal_ai_reviews WHERE raw_signal_id = %s ORDER BY created_at DESC""",
             (signal_id,),
         ).fetchall()
+        ofsted_enrichment = conn.execute(
+            """SELECT urn, status, provider_page_url, provision_type,
+                      registration_date, local_authority, registered_provider_name,
+                      provider_registered_address, provider_registered_locality,
+                      provider_registered_region, provider_registered_postcode,
+                      latest_report_type, latest_report_date,
+                      latest_report_publication_date, latest_report_url,
+                      report_count, parser_version, failure_category, retrieved_at
+               FROM ofsted_urn_enrichments
+               WHERE raw_signal_id = %s
+               ORDER BY retrieved_at DESC, created_at DESC LIMIT 1""",
+            (signal_id,),
+        ).fetchone()
     raw["documents"] = [
         dict(zip(("id", "s3_bucket", "s3_key", "sha256", "mime_type", "captured_at"), row))
         for row in documents
@@ -642,6 +743,33 @@ def signal_detail(settings: Settings, signal_id: str) -> dict[str, Any] | None:
         )
         for row in ai_reviews
     ]
+    if ofsted_enrichment:
+        raw["ofsted_enrichment"] = dict(
+            zip(
+                (
+                    "urn",
+                    "status",
+                    "provider_page_url",
+                    "provision_type",
+                    "registration_date",
+                    "local_authority",
+                    "registered_provider_name",
+                    "provider_registered_address",
+                    "provider_registered_locality",
+                    "provider_registered_region",
+                    "provider_registered_postcode",
+                    "latest_report_type",
+                    "latest_report_date",
+                    "latest_report_publication_date",
+                    "latest_report_url",
+                    "report_count",
+                    "parser_version",
+                    "failure_category",
+                    "retrieved_at",
+                ),
+                ofsted_enrichment,
+            )
+        )
     if enrichment:
         raw["enrichment"] = dict(
             zip(
@@ -2017,25 +2145,33 @@ def list_organisation_enrichment_candidates(
     with connection(settings) as conn:
         rows = conn.execute(
             """WITH activity
-               (name, companies_house_number, locality, postcode, address, website_url, priority)
+               (name, companies_house_number, locality, postcode, address, website_url,
+                provider_registered_name,
+                provider_registered_locality, provider_registered_postcode,
+                provider_registered_address, provider_evidence_at, priority)
                AS (
                  SELECT op.name, op.companies_house_number,
                         NULLIF(o.town, '') AS locality, NULLIF(o.postcode, ''),
-                        NULLIF(o.address, ''), NULLIF(op.website_url, ''), 0 AS priority
+                        NULLIF(o.address, ''), NULLIF(op.website_url, ''),
+                        NULL::text, NULL::text, NULL::text, NULL::text,
+                        NULL::timestamptz, 0 AS priority
                  FROM operators op
                  JOIN opportunities o ON o.operator_id = op.id
                  WHERE o.vertical = %s
                    AND o.review_status NOT IN ('MERGED', 'REJECTED')
                  UNION ALL
                  SELECT o.operator_name, NULL, NULLIF(o.town, ''),
-                        NULLIF(o.postcode, ''), NULLIF(o.address, ''), NULL, 1
+                        NULLIF(o.postcode, ''), NULLIF(o.address, ''), NULL,
+                        NULL::text, NULL::text, NULL::text, NULL::text,
+                        NULL::timestamptz, 1
                  FROM opportunities o
                  WHERE o.vertical = %s
                    AND o.review_status NOT IN ('MERGED', 'REJECTED')
                    AND NULLIF(trim(o.operator_name), '') IS NOT NULL
                  UNION ALL
                  SELECT COALESCE(NULLIF(trim(se.operator_name), ''),
-                                 NULLIF(trim(rs.organisation_hint), '')),
+                                 NULLIF(trim(rs.organisation_hint), ''),
+                                 NULLIF(trim(oe.registered_provider_name), '')),
                         COALESCE(rs.metadata->>'companies_house_number',
                                  rs.metadata->>'company_number'),
                         COALESCE(NULLIF(rs.metadata->>'town', ''),
@@ -2046,15 +2182,34 @@ def list_organisation_enrichment_candidates(
                                  NULLIF(rs.location_hint, '')),
                         COALESCE(NULLIF(rs.metadata->>'website', ''),
                                  NULLIF(rs.metadata->>'website_url', '')),
+                        NULLIF(oe.registered_provider_name, ''),
+                        NULLIF(oe.provider_registered_locality, ''),
+                        NULLIF(oe.provider_registered_postcode, ''),
+                        NULLIF(oe.provider_registered_address, ''),
+                        oe.retrieved_at,
                         CASE WHEN rs.source_type = 'ofsted' THEN 2 ELSE 3 END
                  FROM raw_signals rs
                  LEFT JOIN signal_enrichments se ON se.raw_signal_id = rs.id
+                 LEFT JOIN LATERAL (
+                   SELECT registered_provider_name, provider_registered_locality,
+                          provider_registered_postcode, provider_registered_address,
+                          retrieved_at
+                   FROM ofsted_urn_enrichments
+                   WHERE raw_signal_id = rs.id
+                   ORDER BY retrieved_at DESC, created_at DESC LIMIT 1
+                 ) oe ON rs.source_type = 'ofsted'
                  WHERE rs.vertical = %s
                    AND COALESCE(NULLIF(trim(se.operator_name), ''),
-                                NULLIF(trim(rs.organisation_hint), '')) IS NOT NULL
+                                NULLIF(trim(rs.organisation_hint), ''),
+                                NULLIF(trim(oe.registered_provider_name), '')) IS NOT NULL
                )
                SELECT name, max(companies_house_number), max(locality), max(postcode),
-                      max(address), max(website_url), min(priority)
+                      max(address), max(website_url),
+                      max(provider_registered_name),
+                      max(provider_registered_locality),
+                      max(provider_registered_postcode),
+                      max(provider_registered_address), max(provider_evidence_at),
+                      min(priority)
                FROM activity
                WHERE lower(trim(name)) NOT IN ('unknown', 'not provided', 'redacted')
                GROUP BY lower(trim(name)), name
@@ -2064,7 +2219,20 @@ def list_organisation_enrichment_candidates(
         ).fetchall()
         candidates: list[dict[str, Any]] = []
         seen: set[str] = set()
-        for name, company_number, locality, postcode, address, website_url, _priority in rows:
+        for (
+            name,
+            company_number,
+            locality,
+            postcode,
+            address,
+            website_url,
+            provider_name,
+            provider_locality,
+            provider_postcode,
+            provider_address,
+            provider_evidence_at,
+            _priority,
+        ) in rows:
             identity = normalize_identity(name)
             if not identity or identity in seen:
                 continue
@@ -2082,7 +2250,11 @@ def list_organisation_enrichment_candidates(
             if not operator:
                 continue
             refreshed_at = operator[2]
-            if refreshed_at and refreshed_at > datetime.now(UTC) - timedelta(days=30):
+            if (
+                refreshed_at
+                and refreshed_at > datetime.now(UTC) - timedelta(days=30)
+                and (not provider_evidence_at or provider_evidence_at <= refreshed_at)
+            ):
                 continue
             conn.execute(
                 """UPDATE opportunities SET operator_id = %s, updated_at = now()
@@ -2100,6 +2272,10 @@ def list_organisation_enrichment_candidates(
                     "postcode": postcode,
                     "address": address,
                     "website": website_url,
+                    "provider_registered_name": provider_name,
+                    "provider_registered_locality": provider_locality,
+                    "provider_registered_postcode": provider_postcode,
+                    "provider_registered_address": provider_address,
                 }
             )
             if len(candidates) >= limit:
@@ -2140,6 +2316,18 @@ def organisation_detail(settings: Settings, operator_id: str) -> dict[str, Any] 
                ORDER BY retrieved_at DESC LIMIT 20""",
             (operator_id,),
         ).fetchall()
+        ofsted_corroboration = conn.execute(
+            """SELECT DISTINCT ON (urn) urn, registered_provider_name,
+                      provision_type, registration_date, local_authority,
+                      provider_registered_address, provider_registered_locality,
+                      provider_registered_region, provider_registered_postcode,
+                      latest_report_date, latest_report_publication_date,
+                      latest_report_url, provider_page_url, retrieved_at
+               FROM ofsted_urn_enrichments
+               WHERE operator_id = %s
+               ORDER BY urn, retrieved_at DESC, created_at DESC""",
+            (operator_id,),
+        ).fetchall()
     fields = (
         "id", "name", "legal_name", "companies_house_number", "website_url",
         "company_status", "incorporation_date", "company_type", "registered_office",
@@ -2164,6 +2352,30 @@ def organisation_detail(settings: Settings, operator_id: str) -> dict[str, Any] 
             "reason": row[5], "retrieved_at": row[6],
         }
         for row in evidence
+    ]
+    result["ofsted_corroboration"] = [
+        dict(
+            zip(
+                (
+                    "urn",
+                    "registered_provider_name",
+                    "provision_type",
+                    "registration_date",
+                    "local_authority",
+                    "provider_registered_address",
+                    "provider_registered_locality",
+                    "provider_registered_region",
+                    "provider_registered_postcode",
+                    "latest_report_date",
+                    "latest_report_publication_date",
+                    "latest_report_url",
+                    "provider_page_url",
+                    "retrieved_at",
+                ),
+                row,
+            )
+        )
+        for row in ofsted_corroboration
     ]
     return result
 
@@ -2225,6 +2437,24 @@ def list_organisation_match_reviews(
                    ORDER BY rs.discovered_at DESC LIMIT 30""",
                 (row[1], list(identity_names)),
             ).fetchall()
+            signal_ids = [signal[0] for signal in signals]
+            ofsted_evidence = []
+            if signal_ids:
+                ofsted_evidence = conn.execute(
+                    """SELECT DISTINCT ON (urn) urn, registered_provider_name,
+                              provision_type, registration_date, local_authority,
+                              provider_registered_address,
+                              provider_registered_locality,
+                              provider_registered_region,
+                              provider_registered_postcode,
+                              latest_report_date,
+                              latest_report_publication_date,
+                              latest_report_url, provider_page_url, retrieved_at
+                       FROM ofsted_urn_enrichments
+                       WHERE raw_signal_id = ANY(%s)
+                       ORDER BY urn, retrieved_at DESC, created_at DESC""",
+                    (signal_ids,),
+                ).fetchall()
             results.append(
                 {
                     "id": row[0],
@@ -2275,6 +2505,30 @@ def list_organisation_match_reviews(
                                 "address": opportunity[5],
                             }
                             for opportunity in opportunities
+                        ],
+                        "ofsted_evidence": [
+                            dict(
+                                zip(
+                                    (
+                                        "urn",
+                                        "registered_provider_name",
+                                        "provision_type",
+                                        "registration_date",
+                                        "local_authority",
+                                        "provider_registered_address",
+                                        "provider_registered_locality",
+                                        "provider_registered_region",
+                                        "provider_registered_postcode",
+                                        "latest_report_date",
+                                        "latest_report_publication_date",
+                                        "latest_report_url",
+                                        "provider_page_url",
+                                        "retrieved_at",
+                                    ),
+                                    evidence,
+                                )
+                            )
+                            for evidence in ofsted_evidence
                         ],
                     },
                 }

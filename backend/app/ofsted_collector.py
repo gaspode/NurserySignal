@@ -13,6 +13,11 @@ from app.ofsted import (
     ofsted_signal,
     records_from_ods,
 )
+from app.ofsted_enrichment import (
+    OFSTED_PROVIDER_URL,
+    PARSER_VERSION,
+    enrich_ofsted_urn,
+)
 from app.queueing import SignalIngestionMessage, send_ingestion_message
 from app.source_runs import finish_run, safe_failure, start_run
 
@@ -32,6 +37,8 @@ def collect_ofsted(settings: Settings, event: dict[str, Any] | None = None) -> d
             "registered_since_days": query.registered_since_days,
             "max_records": query.max_records,
             "active_only": query.active_only,
+            "urns": list(query.urns),
+            "urn_enrichment_limit": query.urn_enrichment_limit,
         },
         run_id=str(event.get("run_id")) if event.get("run_id") else None,
         started_at=str(event.get("run_started_at")) if event.get("run_started_at") else None,
@@ -43,6 +50,8 @@ def collect_ofsted(settings: Settings, event: dict[str, Any] | None = None) -> d
         "duplicates": 0,
         "excluded": 0,
         "errors": 0,
+        "urn_enriched": 0,
+        "urn_enrichment_failed": 0,
     }
     status = "SUCCESS"
     failure_category = failure_message = None
@@ -55,6 +64,33 @@ def collect_ofsted(settings: Settings, event: dict[str, Any] | None = None) -> d
         for record in records_from_ods(register_path, query):
             counts["records_fetched"] += 1
             signal = ofsted_signal(record, retrieved_at=retrieved_at)
+            urn_enrichment = None
+            if counts["records_fetched"] <= query.urn_enrichment_limit:
+                try:
+                    urn_enrichment = enrich_ofsted_urn(
+                        record.urn, retrieved_at=retrieved_at
+                    )
+                    if urn_enrichment["status"] in {"SUCCEEDED", "NO_REPORT"}:
+                        counts["urn_enriched"] += 1
+                    else:
+                        counts["urn_enrichment_failed"] += 1
+                        counts["errors"] += 1
+                except Exception as exc:
+                    counts["urn_enrichment_failed"] += 1
+                    counts["errors"] += 1
+                    urn_enrichment = {
+                        "urn": record.urn,
+                        "status": "FAILED",
+                        "provider_page_url": OFSTED_PROVIDER_URL.format(urn=record.urn),
+                        "parser_version": PARSER_VERSION,
+                        "retrieved_at": retrieved_at.isoformat(),
+                        "failure_category": type(exc).__name__[:80],
+                    }
+                    logger.warning(
+                        "ofsted_urn_enrichment_failed urn=%s error_type=%s",
+                        record.urn,
+                        type(exc).__name__,
+                    )
             body = json.dumps(
                 {
                     "message_version": "1.0",
@@ -63,6 +99,7 @@ def collect_ofsted(settings: Settings, event: dict[str, Any] | None = None) -> d
                         **record.raw,
                         "dataset_url": settings.ofsted_data_url,
                     },
+                    "ofsted_urn_enrichment": urn_enrichment,
                 },
                 separators=(",", ":"),
                 sort_keys=True,
@@ -83,15 +120,19 @@ def collect_ofsted(settings: Settings, event: dict[str, Any] | None = None) -> d
             register_path.unlink(missing_ok=True)
         logger.info(
             "ofsted_collection_summary fetched=%d matched=%d queued=%d duplicates=%d "
-            "excluded=%d errors=%d registered_since_days=%d max_records=%d source=%s",
+            "excluded=%d errors=%d urn_enriched=%d urn_enrichment_failed=%d "
+            "registered_since_days=%d max_records=%d urn_enrichment_limit=%d source=%s",
             counts["records_fetched"],
             counts["candidates_matched"],
             counts["signals_queued"],
             counts["duplicates"],
             counts["excluded"],
             counts["errors"],
+            counts["urn_enriched"],
+            counts["urn_enrichment_failed"],
             query.registered_since_days,
             query.max_records,
+            query.urn_enrichment_limit,
             source,
         )
         finish_run(
