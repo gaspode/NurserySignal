@@ -7,7 +7,13 @@ from typing import Any
 
 from app.config import Settings
 from app.ingestion import NormalizedSignal
-from app.repository import dispatch_enrichment, find_signal, store_planning_revision, store_signal
+from app.repository import (
+    dispatch_enrichment,
+    dispatch_revision_enrichment,
+    find_signal,
+    store_planning_revision,
+    store_signal,
+)
 from app.storage import evidence_key, evidence_revision_key, evidence_sha256, put_raw_evidence
 
 
@@ -43,7 +49,7 @@ def ingest_signal(
     )
 
     if existing and existing.content_sha256 and existing.content_sha256 != content_hash:
-        if signal.source_type != "planning":
+        if signal.source_type not in {"planning", "ofsted"}:
             raise SignalConflictError(
                 "source_type and external_id already identify different content"
             )
@@ -57,11 +63,25 @@ def ingest_signal(
             revision_key,
             content_hash,
         )
+        if changed and signal.source_type == "ofsted":
+            try:
+                dispatch_revision_enrichment(
+                    settings,
+                    existing,
+                    signal.schema_version,
+                    settings.evidence_bucket,
+                    revision_key,
+                    signal.vertical,
+                )
+            except Exception as exc:
+                raise EnrichmentQueueError(
+                    "regulatory revision stored but enrichment queueing failed"
+                ) from exc
         return IngestionResult(
             signal_id=str(existing.id),
             status="updated" if changed else "duplicate",
             evidence_key=revision_key,
-            enrichment_queued=False,
+            enrichment_queued=changed and signal.source_type == "ofsted",
         )
     if existing is None or not existing.evidence_key:
         put_raw_evidence(settings, settings.evidence_bucket, key, original_payload)

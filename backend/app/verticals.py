@@ -105,7 +105,11 @@ class ChildrenHomeVerticalPolicy:
 
     @staticmethod
     def initial_lifecycle(source_type: str) -> str:
-        return "PLANNING" if source_type == "planning" else "RECRUITING"
+        return {
+            "planning": "PLANNING",
+            "recruitment": "RECRUITING",
+            "ofsted": "REGISTRATION",
+        }.get(source_type, "DISCOVERED")
 
 
 VERTICAL_POLICIES = {

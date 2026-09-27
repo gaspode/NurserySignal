@@ -53,6 +53,20 @@ most 50 preserved Planning records and Care-targeted Recruitment records from no
 than the last 90 days and does not call either provider. Recruitment rows are selected
 by stored discovery provenance rather than by their position in the NurserySignal queue.
 
+CareSignal also supports bounded manual Ofsted regulatory ingestion. The official annual
+register exposes URN, registration/provider and broad geographic fields while deliberately
+redacting children's-home names and exact addresses; SignalHub retains that redaction and
+does not attempt to reconstruct withheld location data. Provider and published-area
+agreement creates a conservative Match Review suggestion because it cannot prove one
+residential site; a confirmed link advances that opportunity to `REGISTRATION`.
+
+Companies House is a shared organisation-enrichment source, not a signal that creates an
+opportunity. Official company profiles enrich the existing `operators` identity with legal
+name, company number, status, incorporation date, registered-office business fields and
+SIC codes. Ambiguous name searches use a separate Organisation Review queue. Officer data
+is not collected. See `docs/ofsted-companies-house.md` for source, privacy and credential
+details.
+
 ### Recruitment and opportunities
 
 The first recruitment provider is the documented GOV.UK Find an Apprenticeship

@@ -325,9 +325,30 @@ def test_sources_status_is_admin_only_and_includes_recent_runs(monkeypatch) -> N
     response = handler(event("/admin/sources", claims=admin_claims), None)
     assert response["statusCode"] == 200
     body = json.loads(response["body"])
-    assert {item["key"] for item in body["items"]} == {"planning", "recruitment"}
+    assert {item["key"] for item in body["items"]} == {
+        "planning",
+        "recruitment",
+        "companies_house",
+    }
     assert body["items"][0]["last_run"]["status"] == "SUCCESS"
     assert handler(event("/admin/sources"), None)["statusCode"] == 403
+
+
+def test_care_sources_include_manual_ofsted_and_companies_house(monkeypatch) -> None:
+    monkeypatch.setattr("app.handler.list_runs", lambda *args, **kwargs: [])
+    response = handler(
+        event(
+            "/admin/sources",
+            query={"vertical": "CHILDRENS_HOME"},
+            claims={**CLAIMS, "cognito:groups": ["NurserySignalAdmins"]},
+        ),
+        None,
+    )
+    assert response["statusCode"] == 200
+    items = {item["key"]: item for item in json.loads(response["body"])["items"]}
+    assert set(items) == {"planning", "recruitment", "ofsted", "companies_house"}
+    assert items["ofsted"]["schedule_state"] == "DISABLED"
+    assert items["companies_house"]["schedule_expression"] == "Manual only"
 
 
 def test_source_manual_run_uses_fixed_bounds_and_exact_lambda(monkeypatch) -> None:
@@ -373,6 +394,51 @@ def test_source_manual_run_uses_fixed_bounds_and_exact_lambda(monkeypatch) -> No
         "run_id": "run-1",
         "run_started_at": "2026-09-26T19:00:00Z",
     }
+
+
+def test_companies_house_manual_run_uses_server_selected_bounded_candidates(
+    monkeypatch,
+) -> None:
+    settings = SimpleNamespace(
+        environment="test",
+        admin_group="NurserySignalAdmins",
+        source_runs_table_name=None,
+        planning_manual_run_queue_url=None,
+        recruitment_manual_run_queue_url=None,
+        ofsted_manual_run_queue_url=None,
+        companies_house_manual_run_queue_url="https://sqs.example/companies-house",
+    )
+    monkeypatch.setattr("app.handler.Settings.from_env", lambda: settings)
+    monkeypatch.setattr(
+        "app.handler.list_organisation_enrichment_candidates",
+        lambda settings, limit, vertical: [
+            {"operator_id": "op-1", "name": "Acme Care Limited", "locality": "Coventry"}
+        ],
+    )
+    monkeypatch.setattr(
+        "app.handler.start_run", lambda *args, **kwargs: ("run-1", "2026-09-27T05:00:00Z")
+    )
+    monkeypatch.setattr("app.handler.record_admin_audit", lambda *args, **kwargs: "audit-1")
+    sent = []
+
+    class FakeSqs:
+        def send_message(self, **kwargs):
+            sent.append(json.loads(kwargs["MessageBody"]))
+            return {"MessageId": "message-1"}
+
+    monkeypatch.setattr("app.handler.boto3.client", lambda name: FakeSqs())
+    response = handler(
+        event(
+            "/admin/sources/companies_house/run",
+            "POST",
+            body=json.dumps({"vertical": "CHILDRENS_HOME", "max_organisations": 999}),
+            claims={**CLAIMS, "cognito:groups": ["NurserySignalAdmins"]},
+        ),
+        None,
+    )
+    assert response["statusCode"] == 202
+    assert sent[0]["max_organisations"] == 10
+    assert sent[0]["organisation_candidates"][0]["operator_id"] == "op-1"
 
 
 def test_admin_detail_and_review_actions(monkeypatch) -> None:

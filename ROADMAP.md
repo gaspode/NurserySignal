@@ -177,7 +177,8 @@ Opportunity matching foundation:
 
 Current next step:
 
-Run the bounded opportunity-creation recalculation against production data, review demotions/promotions and uncertain matches, then tune only from observed false positives or false negatives.
+Continue measuring opportunity quality and admin corrections from live source evidence;
+do not widen automatic matching thresholds without observed production evidence.
 
 ## Phase 8 — SignalHub shared internal engine — INCREMENTAL FOUNDATION
 
@@ -208,4 +209,30 @@ Validation gate:
 - manually review every CareSignal candidate and automatic correlation;
 - confirm no NurserySignal/CareSignal cross-links;
 - confirm queues, DLQs and existing NurserySignal schedules remain healthy;
-- tune only from observed false positives or false negatives before adding Ofsted registration data.
+- tune only from observed false positives or false negatives.
+
+## Phase 10 — CareSignal regulatory and organisation evidence — VALIDATION
+
+- Added a bounded, manual-only Ofsted collector using the official annual children’s social
+  care provider register. Published redactions of home names and exact addresses are
+  preserved as a safeguarding boundary.
+- Ofsted URNs provide stable regulatory evidence identity. Because exact home locations are
+  redacted, provider plus local-authority agreement enters Match Review rather than forcing
+  a site match; an admin-confirmed link advances the opportunity to `REGISTRATION`, and a
+  register row cannot create a standalone opportunity.
+- Added official Companies House Public Data API enrichment to the shared organisation
+  layer. Exact company number and strong unique legal-name matches enrich organisations;
+  ambiguous results use a separate admin review queue.
+- Companies House does not create opportunities. One company may own several separate sites,
+  and organisation identity alone never merges those opportunities.
+- Officer/director history is deliberately not collected because it is unnecessary for the
+  current entity-resolution purpose.
+- Both sources remain bounded and manual-only while production accuracy is assessed.
+
+Validation gate:
+- configure the Companies House API key privately and inspect a small bounded set of existing
+  CareSignal operators;
+- run a bounded Ofsted current/recent sample and manually inspect every automatic match and
+  Match Review suggestion;
+- verify regulatory lifecycle changes, idempotency, source health and queue/DLQ state;
+- decide polling cadence only after observing official publication frequency and match quality.

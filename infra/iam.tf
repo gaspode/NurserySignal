@@ -52,9 +52,14 @@ resource "aws_iam_role_policy" "lambda_application" {
         Resource = aws_dynamodb_table.source_runs.arn
       },
       {
-        Effect   = "Allow"
-        Action   = ["sqs:SendMessage"]
-        Resource = [aws_sqs_queue.planning_manual_runs.arn, aws_sqs_queue.recruitment_manual_runs.arn]
+        Effect = "Allow"
+        Action = ["sqs:SendMessage"]
+        Resource = [
+          aws_sqs_queue.planning_manual_runs.arn,
+          aws_sqs_queue.recruitment_manual_runs.arn,
+          aws_sqs_queue.ofsted_manual_runs.arn,
+          aws_sqs_queue.companies_house_manual_runs.arn
+        ]
       }
     ]
   })
@@ -167,7 +172,9 @@ resource "aws_iam_policy" "github_actions" {
         Resource = [
           "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.name_prefix}-enrichment",
           "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.name_prefix}-planning-collector",
-          "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.name_prefix}-ingestion-worker"
+          "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.name_prefix}-ingestion-worker",
+          "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.name_prefix}-ofsted-collector",
+          "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.name_prefix}-companies-house-collector"
         ]
       },
       {
@@ -177,6 +184,16 @@ resource "aws_iam_policy" "github_actions" {
         Condition = {
           StringEquals = {
             "secretsmanager:Name" = "${local.name_prefix}/planning-provider"
+          }
+        }
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["secretsmanager:CreateSecret"]
+        Resource = "*"
+        Condition = {
+          StringEquals = {
+            "secretsmanager:Name" = "${local.name_prefix}/companies-house"
           }
         }
       },
@@ -198,7 +215,8 @@ resource "aws_iam_policy" "github_actions" {
         ]
         Resource = [
           "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:${local.name_prefix}/planning-provider-*",
-          "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:${local.name_prefix}/recruitment-provider-*"
+          "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:${local.name_prefix}/recruitment-provider-*",
+          "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:${local.name_prefix}/companies-house-*"
         ]
       },
       {

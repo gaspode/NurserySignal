@@ -1,7 +1,7 @@
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { Dashboard, LoginPage, MatchReviewPage, OpportunitiesPage, OpportunityDetail, ReviewInboxPage, ReviewedSignalsPage, SignalDetail, SourcesPage, UnmatchedSignalsPage, restoredVertical, verticalScopedPath } from "./App.jsx";
+import { Dashboard, LoginPage, MatchReviewPage, OpportunitiesPage, OpportunityDetail, OrganisationsPage, ReviewInboxPage, ReviewedSignalsPage, SignalDetail, SourcesPage, UnmatchedSignalsPage, restoredVertical, verticalScopedPath } from "./App.jsx";
 
 const pendingItem = {
   id: "signal-1",
@@ -311,6 +311,24 @@ describe("admin frontend", () => {
     );
     expect(await screen.findByText(/20 planning, 5 recruitment/)).toBeInTheDocument();
     expect(screen.getByText(/3 relevant and 3 newly accepted/)).toBeInTheDocument();
+  });
+
+  it("shows Companies House enrichment and keeps ambiguous matches reviewable", async () => {
+    const apiClient = vi.fn()
+      .mockResolvedValueOnce({ items: [{ id: "operator-1", name: "Acme Care", legal_name: "ACME CARE LIMITED", vertical: "CHILDRENS_HOME", companies_house_number: "12345678", company_status: "active", signal_count: 2, opportunity_count: 1 }] })
+      .mockResolvedValueOnce({ items: [{ id: "review-1", organisation_name: "Other Care", reason: "multiple candidates", candidates: [{ company_name: "OTHER CARE LIMITED", company_number: "87654321" }] }] })
+      .mockResolvedValueOnce({ id: "review-1", status: "CONFIRMED" })
+      .mockResolvedValueOnce({ items: [] })
+      .mockResolvedValueOnce({ items: [] });
+    render(<OrganisationsPage apiClient={apiClient} />);
+    expect(await screen.findByText("ACME CARE LIMITED")).toBeInTheDocument();
+    expect(screen.getByText("12345678")).toBeInTheDocument();
+    expect(screen.getByText("Organisation resolution review")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /Use OTHER CARE LIMITED/ }));
+    expect(apiClient).toHaveBeenCalledWith(
+      "/admin/organisation-match-review/review-1/confirm",
+      { method: "POST", body: JSON.stringify({ company_number: "87654321" }) },
+    );
   });
 
   it("shows recruitment role, setting, routine relevance and change evidence", async () => {

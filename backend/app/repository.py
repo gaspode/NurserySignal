@@ -308,6 +308,27 @@ def dispatch_enrichment(
     return True
 
 
+def dispatch_revision_enrichment(
+    settings: Settings,
+    identity: SignalIdentity,
+    schema_version: str,
+    bucket: str,
+    key: str,
+    vertical: str,
+) -> None:
+    """Queue one enrichment after a newly persisted mutable-source revision."""
+    message = EnrichmentMessage(
+        message_version="1.0",
+        signal_id=str(identity.id),
+        schema_version=schema_version,
+        evidence_bucket=bucket,
+        evidence_key=key,
+        queued_at=datetime.now(UTC).isoformat(),
+        vertical=validate_vertical(vertical),
+    )
+    send_enrichment_message(settings, message)
+
+
 def get_raw_signal(settings: Settings, signal_id: str) -> dict[str, Any] | None:
     with connection(settings) as conn:
         row = conn.execute(
@@ -1111,6 +1132,28 @@ def save_enrichment(settings: Settings, candidate: dict[str, Any]) -> bool:
                 Jsonb(candidate["evidence"]),
             ),
         ).fetchone()
+        if row is None and str((candidate.get("metadata") or {}).get("source_type")) == "ofsted":
+            row = conn.execute(
+                """UPDATE signal_enrichments SET schema_version = %s, event_type = %s,
+                   nursery_name = %s, operator_name = %s, address = %s,
+                   expected_opening_date = %s, capacity = %s, lifecycle_stage = %s,
+                   confidence = %s, extracted_facts = %s, evidence = %s, updated_at = now()
+                   WHERE raw_signal_id = %s RETURNING id""",
+                (
+                    candidate["schema_version"],
+                    candidate["event_type"],
+                    candidate["nursery_name"],
+                    candidate["operator_name"],
+                    candidate["address"],
+                    candidate["expected_opening_date"],
+                    candidate["capacity"],
+                    candidate["lifecycle_stage"],
+                    candidate["confidence"],
+                    Jsonb(candidate["extracted_facts"]),
+                    Jsonb(candidate["evidence"]),
+                    candidate["raw_signal_id"],
+                ),
+            ).fetchone()
         conn.commit()
     return row is not None
 
@@ -1185,7 +1228,7 @@ def correlate_signal(
         existing = conn.execute(
             """SELECT o.id, o.name, o.operator_id, o.lifecycle_stage, o.confidence,
                       o.confidence_breakdown, COALESCE(n.postcode, linked.postcode),
-                      COALESCE(op.name, linked.operator_name)
+                      COALESCE(op.legal_name, op.name, linked.operator_name), o.town
                FROM opportunities o
                LEFT JOIN nurseries n ON n.id = o.nursery_id
                LEFT JOIN operators op ON op.id = o.operator_id
@@ -1203,23 +1246,57 @@ def correlate_signal(
         match = None
         match_reason = None
         uncertain_matches: list[tuple[Any, float, str]] = []
-        for row in existing:
-            comparison = classify_match(postcode, name, row[6], row[7] or row[1])
-            operator_comparison = classify_match(postcode, operator, row[6], row[7])
-            if comparison.outcome == "UNCERTAIN" or operator_comparison.outcome == "UNCERTAIN":
-                uncertain = comparison if comparison.outcome == "UNCERTAIN" else operator_comparison
-                uncertain_matches.append((row[0], uncertain.confidence, uncertain.reason))
-            if comparison.outcome == "EXACT" or operator_comparison.outcome == "EXACT":
-                blocked = conn.execute(
-                    """SELECT 1 FROM opportunity_signals
-                       WHERE opportunity_id = %s AND raw_signal_id = %s AND status = 'REJECTED'""",
-                    (row[0], signal_id),
-                ).fetchone()
-                if blocked:
-                    continue
-                match = row
-                match_reason = preferred_match_reason(comparison, operator_comparison)
-                break
+        if source_type == "ofsted":
+            area = normalize_identity(metadata.get("local_authority"))
+            organisation = normalize_identity(operator)
+            strong = [
+                row
+                for row in existing
+                if organisation
+                and organisation == normalize_identity(row[7])
+                and area
+                and area == normalize_identity(row[8])
+            ]
+            possible = [
+                row
+                for row in existing
+                if organisation and organisation == normalize_identity(row[7])
+            ]
+            for row in (strong or possible)[:3]:
+                uncertain_matches.append(
+                    (
+                        row[0],
+                        0.78 if row in strong else 0.62,
+                        "registered provider matches but Ofsted's published location "
+                        "is insufficient to identify one residential site safely",
+                    )
+                )
+        else:
+            for row in existing:
+                comparison = classify_match(postcode, name, row[6], row[7] or row[1])
+                operator_comparison = classify_match(postcode, operator, row[6], row[7])
+                if (
+                    comparison.outcome == "UNCERTAIN"
+                    or operator_comparison.outcome == "UNCERTAIN"
+                ):
+                    uncertain = (
+                        comparison
+                        if comparison.outcome == "UNCERTAIN"
+                        else operator_comparison
+                    )
+                    uncertain_matches.append((row[0], uncertain.confidence, uncertain.reason))
+                if comparison.outcome == "EXACT" or operator_comparison.outcome == "EXACT":
+                    blocked = conn.execute(
+                        """SELECT 1 FROM opportunity_signals
+                           WHERE opportunity_id = %s AND raw_signal_id = %s
+                             AND status = 'REJECTED'""",
+                        (row[0], signal_id),
+                    ).fetchone()
+                    if blocked:
+                        continue
+                    match = row
+                    match_reason = preferred_match_reason(comparison, operator_comparison)
+                    break
         if match:
             opportunity_id = match[0]
             breakdown = dict(match[5] or {})
@@ -1242,7 +1319,9 @@ def correlate_signal(
             if source_type == "recruitment":
                 confidence = min(0.98, confidence + recruitment_contribution)
             stage = (
-                "STAFFING"
+                "REGISTRATION"
+                if source_type == "ofsted"
+                else "STAFFING"
                 if len(unique_sources) > 1
                 and source_type == "recruitment"
                 and recruitment_contribution > 0.05
@@ -1259,6 +1338,8 @@ def correlate_signal(
                     Jsonb(breakdown),
                     f"{match_reason}; {recruitment_reason}"
                     if source_type == "recruitment"
+                    else "Ofsted evidence confirms registration progress"
+                    if source_type == "ofsted"
                     else match_reason,
                     opportunity_id,
                 ),
@@ -1305,6 +1386,22 @@ def correlate_signal(
                 ),
             ).fetchone()[0]
         else:
+            for possible_id, possible_confidence, possible_reason in uncertain_matches[:3]:
+                if _canonical_opportunity_id(conn, possible_id) != possible_id:
+                    continue
+                conn.execute(
+                    """INSERT INTO opportunity_match_reviews
+                       (raw_signal_id, opportunity_id, vertical, outcome, confidence, reason)
+                       VALUES (%s, %s, %s, 'UNCERTAIN', %s, %s)
+                       ON CONFLICT (raw_signal_id, opportunity_id) DO NOTHING""",
+                    (
+                        signal_id,
+                        possible_id,
+                        signal_vertical,
+                        possible_confidence,
+                        possible_reason,
+                    ),
+                )
             conn.commit()
             return {
                 "opportunity_id": None,
@@ -1863,13 +1960,22 @@ def list_organisations(
                     UNION ALL
                     SELECT vertical, operator_name AS name, NULL::uuid, id
                     FROM opportunities WHERE operator_name IS NOT NULL
+                ), grouped AS (
+                  SELECT min(name) AS name, vertical,
+                         count(DISTINCT signal_id) AS signal_count,
+                         count(DISTINCT opportunity_id) AS opportunity_count
+                  FROM activity WHERE {where}
+                  GROUP BY vertical, lower(trim(name))
                 )
-                SELECT min(name) AS name, vertical,
-                       count(DISTINCT signal_id), count(DISTINCT opportunity_id)
-                FROM activity
-                WHERE {where}
-                GROUP BY vertical, lower(trim(name))
-                ORDER BY lower(min(name))
+                SELECT g.name, g.vertical, g.signal_count, g.opportunity_count,
+                       op.id, op.legal_name, op.companies_house_number,
+                       op.company_status, op.incorporation_date,
+                       op.companies_house_url, op.resolution_outcome
+                FROM grouped g
+                LEFT JOIN operators op
+                  ON lower(trim(op.name)) = lower(trim(g.name))
+                  OR lower(trim(op.legal_name)) = lower(trim(g.name))
+                ORDER BY lower(g.name)
                 LIMIT %s OFFSET %s""",
             [*params, min(max(limit, 1), 100), max(offset, 0)],
         ).fetchall()
@@ -1880,6 +1986,13 @@ def list_organisations(
                 "vertical": row[1],
                 "signal_count": row[2],
                 "opportunity_count": row[3],
+                "id": row[4],
+                "legal_name": row[5],
+                "companies_house_number": row[6],
+                "company_status": row[7],
+                "incorporation_date": row[8],
+                "companies_house_url": row[9],
+                "resolution_outcome": row[10],
             }
             for row in rows
         ],
@@ -1888,13 +2001,202 @@ def list_organisations(
     }
 
 
+def list_organisation_enrichment_candidates(
+    settings: Settings, *, limit: int, vertical: str = "CHILDRENS_HOME"
+) -> list[dict[str, Any]]:
+    """Return bounded shared organisations with activity in one vertical."""
+    vertical = validate_vertical(vertical)
+    with connection(settings) as conn:
+        rows = conn.execute(
+            """SELECT op.id, op.name, op.companies_house_number,
+                      min(NULLIF(o.town, '')) AS locality
+               FROM operators op
+               JOIN opportunities o ON o.operator_id = op.id
+               WHERE o.vertical = %s
+                 AND o.review_status NOT IN ('MERGED', 'REJECTED')
+                 AND (
+                   op.companies_house_refreshed_at IS NULL
+                   OR op.companies_house_refreshed_at < now() - interval '30 days'
+                 )
+               GROUP BY op.id, op.name, op.companies_house_number,
+                        op.companies_house_refreshed_at
+               ORDER BY op.companies_house_refreshed_at NULLS FIRST, op.created_at
+               LIMIT %s""",
+            (vertical, min(max(limit, 1), 25)),
+        ).fetchall()
+    return [
+        {
+            "operator_id": str(row[0]),
+            "name": row[1],
+            "company_number": row[2],
+            "locality": row[3],
+        }
+        for row in rows
+    ]
+
+
+def organisation_detail(settings: Settings, operator_id: str) -> dict[str, Any] | None:
+    with connection(settings) as conn:
+        operator = conn.execute(
+            """SELECT id, name, legal_name, companies_house_number, website_url,
+                      company_status, incorporation_date, company_type,
+                      registered_office, sic_codes, companies_house_url,
+                      companies_house_refreshed_at, resolution_outcome,
+                      resolution_confidence, enrichment_provenance
+               FROM operators WHERE id = %s""",
+            (operator_id,),
+        ).fetchone()
+        if not operator:
+            return None
+        aliases = conn.execute(
+            """SELECT alias, source, created_at FROM organisation_aliases
+               WHERE operator_id = %s ORDER BY created_at""",
+            (operator_id,),
+        ).fetchall()
+        opportunities = conn.execute(
+            """SELECT id, name, vertical, change_type, lifecycle_stage, confidence
+               FROM opportunities WHERE operator_id = %s
+                 AND review_status NOT IN ('MERGED', 'REJECTED')
+               ORDER BY latest_update_at DESC""",
+            (operator_id,),
+        ).fetchall()
+        evidence = conn.execute(
+            """SELECT provider, external_id, status, resolution_outcome,
+                      resolution_confidence, reason, retrieved_at
+               FROM organisation_evidence WHERE operator_id = %s
+               ORDER BY retrieved_at DESC LIMIT 20""",
+            (operator_id,),
+        ).fetchall()
+    fields = (
+        "id", "name", "legal_name", "companies_house_number", "website_url",
+        "company_status", "incorporation_date", "company_type", "registered_office",
+        "sic_codes", "companies_house_url", "companies_house_refreshed_at",
+        "resolution_outcome", "resolution_confidence", "enrichment_provenance",
+    )
+    result = dict(zip(fields, operator))
+    result["aliases"] = [
+        {"alias": row[0], "source": row[1], "created_at": row[2]} for row in aliases
+    ]
+    result["opportunities"] = [
+        {
+            "id": row[0], "name": row[1], "vertical": row[2],
+            "change_type": row[3], "lifecycle_stage": row[4], "confidence": row[5],
+        }
+        for row in opportunities
+    ]
+    result["evidence"] = [
+        {
+            "provider": row[0], "external_id": row[1], "status": row[2],
+            "resolution_outcome": row[3], "resolution_confidence": row[4],
+            "reason": row[5], "retrieved_at": row[6],
+        }
+        for row in evidence
+    ]
+    return result
+
+
+def list_organisation_match_reviews(
+    settings: Settings, *, limit: int = 25
+) -> list[dict[str, Any]]:
+    with connection(settings) as conn:
+        rows = conn.execute(
+            """SELECT r.id, r.operator_id, o.name, r.provider, r.query_name,
+                      r.candidates, r.reason, r.created_at
+               FROM organisation_match_reviews r
+               JOIN operators o ON o.id = r.operator_id
+               WHERE r.status = 'PENDING'
+               ORDER BY r.created_at DESC LIMIT %s""",
+            (min(max(limit, 1), 100),),
+        ).fetchall()
+    return [
+        {
+            "id": row[0], "operator_id": row[1], "organisation_name": row[2],
+            "provider": row[3], "query_name": row[4], "candidates": row[5],
+            "reason": row[6], "created_at": row[7],
+        }
+        for row in rows
+    ]
+
+
+def resolve_organisation_match_review(
+    settings: Settings,
+    review_id: str,
+    *,
+    action: str,
+    actor: str,
+    company_number: str | None = None,
+) -> dict[str, Any]:
+    if action not in {"confirm", "reject"}:
+        raise ValueError("unsupported organisation review action")
+    with connection(settings) as conn:
+        row = conn.execute(
+            """SELECT id, operator_id, candidates, status
+               FROM organisation_match_reviews WHERE id = %s FOR UPDATE""",
+            (review_id,),
+        ).fetchone()
+        if not row:
+            raise ValueError("organisation review not found")
+        if row[3] != "PENDING":
+            return {"id": review_id, "status": row[3]}
+        if action == "confirm":
+            candidates = row[2] or []
+            selected = next(
+                (
+                    item
+                    for item in candidates
+                    if isinstance(item, dict)
+                    and str(item.get("company_number") or "") == str(company_number or "")
+                ),
+                None,
+            )
+            if not selected:
+                raise ValueError("selected company is not a review candidate")
+            conn.execute(
+                """UPDATE operators SET companies_house_number = %s, legal_name = %s,
+                   company_status = %s, resolution_outcome = 'EXACT',
+                   resolution_confidence = 1, updated_at = now() WHERE id = %s""",
+                (
+                    selected.get("company_number"),
+                    selected.get("company_name"),
+                    selected.get("company_status"),
+                    row[1],
+                ),
+            )
+            status = "CONFIRMED"
+        else:
+            status = "REJECTED"
+        conn.execute(
+            """UPDATE organisation_match_reviews SET status = %s,
+               reviewed_by = %s, reviewed_at = now() WHERE id = %s""",
+            (status, actor, review_id),
+        )
+        conn.execute(
+            """INSERT INTO admin_audit_events (action, actor, target_type, details)
+               VALUES (%s, %s, 'organisation_match_review', %s)""",
+            (
+                f"organisation_match_{action}",
+                actor,
+                Jsonb(
+                    {
+                        "review_id": review_id,
+                        "operator_id": str(row[1]),
+                        "company_number": company_number if action == "confirm" else None,
+                    }
+                ),
+            ),
+        )
+        conn.commit()
+    return {"id": review_id, "status": status, "operator_id": str(row[1])}
+
+
 def opportunity_detail(settings: Settings, opportunity_id: str) -> dict[str, Any] | None:
     with connection(settings) as conn:
         opportunity = conn.execute(
             """SELECT id, name, operator_name, address, postcode, town, vertical, change_type,
                       event_type, lifecycle_stage, confidence,
                       confidence_breakdown, stage_reason, creation_reason, first_seen_at,
-                      latest_update_at, location_sensitivity FROM opportunities WHERE id = %s""",
+                      latest_update_at, location_sensitivity, operator_id
+               FROM opportunities WHERE id = %s""",
             (opportunity_id,),
         ).fetchone()
         if not opportunity:
@@ -1912,6 +2214,15 @@ def opportunity_detail(settings: Settings, opportunity_id: str) -> dict[str, Any
                WHERE os.opportunity_id = %s ORDER BY rs.discovered_at""",
             (opportunity_id,),
         ).fetchall()
+        organisation_evidence = []
+        if opportunity[17]:
+            organisation_evidence = conn.execute(
+                """SELECT provider, external_id, status, resolution_outcome,
+                          resolution_confidence, reason, retrieved_at
+                   FROM organisation_evidence WHERE operator_id = %s
+                   ORDER BY retrieved_at DESC LIMIT 10""",
+                (opportunity[17],),
+            ).fetchall()
     fields = (
         "id",
         "source_type",
@@ -1952,7 +2263,16 @@ def opportunity_detail(settings: Settings, opportunity_id: str) -> dict[str, Any
         "first_seen_at": opportunity[14],
         "latest_update_at": opportunity[15],
         "location_sensitivity": opportunity[16],
+        "operator_id": opportunity[17],
         "signals": [dict(zip(fields, row)) for row in rows],
+        "organisation_evidence": [
+            {
+                "provider": row[0], "external_id": row[1], "status": row[2],
+                "resolution_outcome": row[3], "resolution_confidence": row[4],
+                "reason": row[5], "retrieved_at": row[6],
+            }
+            for row in organisation_evidence
+        ],
     }
 
 
@@ -2208,7 +2528,7 @@ def link_signal_to_opportunity(
             raise ValueError("signal and opportunity verticals must match")
         if opportunity[1] in {"MERGED", "REJECTED"}:
             raise ValueError("opportunity_is_not_current")
-        confidence = signal[-1] or 0
+        confidence = signal[9] or 0
         row = conn.execute(
             "SELECT status FROM opportunity_signals "
             "WHERE opportunity_id = %s AND raw_signal_id = %s",
@@ -2240,10 +2560,19 @@ def link_signal_to_opportunity(
                     actor,
                 ),
             )
-        conn.execute(
-            "UPDATE opportunities SET latest_update_at = now(), updated_at = now() WHERE id = %s",
-            (opportunity_id,),
-        )
+        if signal[2] == "ofsted":
+            conn.execute(
+                """UPDATE opportunities SET lifecycle_stage = 'REGISTRATION',
+                   stage_reason = 'Ofsted evidence confirmed by an administrator',
+                   latest_update_at = now(), updated_at = now() WHERE id = %s""",
+                (opportunity_id,),
+            )
+        else:
+            conn.execute(
+                """UPDATE opportunities SET latest_update_at = now(), updated_at = now()
+                   WHERE id = %s""",
+                (opportunity_id,),
+            )
         conn.commit()
     _audit_match(
         settings,

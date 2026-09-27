@@ -42,7 +42,10 @@ def process_message(settings: Settings, body: str) -> None:
         opportunity["opportunity_id"],
         opportunity["linked"],
     )
-    if getattr(settings, "ai_shadow_enabled", False):
+    if getattr(settings, "ai_shadow_enabled", False) and raw.get("source_type") in {
+        "planning",
+        "recruitment",
+    }:
         model_id = getattr(settings, "ai_model_id", "eu.amazon.nova-lite-v1:0")
         source_type = str(raw.get("source_type") or "").lower()
         prompt_version = prompt_version_for(source_type, settings, raw.get("vertical"))

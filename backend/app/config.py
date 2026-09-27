@@ -17,6 +17,13 @@ class Settings:
     planning_provider_base_url: str = "https://api.plota.co.uk/v1"
     recruitment_provider_secret_arn: str | None = None
     recruitment_provider_base_url: str = "https://api.apprenticeships.education.gov.uk/vacancies"
+    ofsted_data_url: str = (
+        "https://assets.publishing.service.gov.uk/media/697345cb51bd707cb10ed934/"
+        "Inspection_and_regulation_of_childrens_social_care_and_supported_"
+        "accommodation_providers_2025.ods"
+    )
+    companies_house_secret_arn: str | None = None
+    companies_house_base_url: str = "https://api.company-information.service.gov.uk"
     admin_group: str = "NurserySignalAdmins"
     ai_shadow_enabled: bool = False
     ai_model_id: str = "eu.amazon.nova-lite-v1:0"
@@ -28,6 +35,8 @@ class Settings:
     source_runs_table_name: str | None = None
     planning_manual_run_queue_url: str | None = None
     recruitment_manual_run_queue_url: str | None = None
+    ofsted_manual_run_queue_url: str | None = None
+    companies_house_manual_run_queue_url: str | None = None
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -47,6 +56,17 @@ class Settings:
             recruitment_provider_base_url=os.getenv(
                 "RECRUITMENT_PROVIDER_BASE_URL",
                 "https://api.apprenticeships.education.gov.uk/vacancies",
+            ),
+            ofsted_data_url=os.getenv(
+                "OFSTED_DATA_URL",
+                "https://assets.publishing.service.gov.uk/media/697345cb51bd707cb10ed934/"
+                "Inspection_and_regulation_of_childrens_social_care_and_supported_"
+                "accommodation_providers_2025.ods",
+            ),
+            companies_house_secret_arn=os.getenv("COMPANIES_HOUSE_SECRET_ARN") or None,
+            companies_house_base_url=os.getenv(
+                "COMPANIES_HOUSE_BASE_URL",
+                "https://api.company-information.service.gov.uk",
             ),
             admin_group=os.getenv("ADMIN_GROUP", "NurserySignalAdmins"),
             ai_shadow_enabled=os.getenv("AI_SHADOW_ENABLED", "false").lower()
@@ -68,4 +88,8 @@ class Settings:
             source_runs_table_name=os.getenv("SOURCE_RUNS_TABLE_NAME") or None,
             planning_manual_run_queue_url=os.getenv("PLANNING_MANUAL_RUN_QUEUE_URL") or None,
             recruitment_manual_run_queue_url=os.getenv("RECRUITMENT_MANUAL_RUN_QUEUE_URL") or None,
+            ofsted_manual_run_queue_url=os.getenv("OFSTED_MANUAL_RUN_QUEUE_URL") or None,
+            companies_house_manual_run_queue_url=(
+                os.getenv("COMPANIES_HOUSE_MANUAL_RUN_QUEUE_URL") or None
+            ),
         )

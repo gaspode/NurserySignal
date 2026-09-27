@@ -240,6 +240,15 @@ def enrich_care_signal(raw: dict[str, Any]) -> dict[str, Any]:
         role = decision["role_category"]
         setting = decision["setting_category"]
         changes = decision["explicit_change_terms"]
+    elif source_type == "ofsted":
+        registration_status = str(metadata.get("registration_status") or "").upper()
+        matched = bool(metadata.get("ofsted_urn") and raw.get("organisation_hint"))
+        relevance = "RELEVANT_ROUTINE" if matched else "UNCERTAIN"
+        change_type = "OTHER_CHANGE"
+        confidence = 0.92 if registration_status in {"ACTIVE", "REGISTERED"} else 0.75
+        role = None
+        setting = "childrens_home"
+        changes = []
     else:
         raise ValueError("unsupported CareSignal source type")
     material_planning_change = source_type == "planning" and change_type != "OTHER_CHANGE"
@@ -262,11 +271,19 @@ def enrich_care_signal(raw: dict[str, Any]) -> dict[str, Any]:
         if material_planning_change
         else "Recruitment explicitly indicates a new or opening children's home"
         if action == "CREATE_OPPORTUNITY"
+        else "Ofsted regulatory evidence can confirm registration of an existing opportunity"
+        if source_type == "ofsted"
         else "Relevant evidence supports an existing CareSignal opportunity only"
     )
     facts = {
         "method": "care-deterministic-v1",
-        "classification": "care-planning" if source_type == "planning" else "care-recruitment",
+        "classification": (
+            "care-planning"
+            if source_type == "planning"
+            else "care-recruitment"
+            if source_type == "recruitment"
+            else "care-regulatory"
+        ),
         "source_type": source_type,
         "children_home_relevance": relevance,
         "recruitment_relevance": relevance if source_type == "recruitment" else "unknown",
@@ -279,6 +296,8 @@ def enrich_care_signal(raw: dict[str, Any]) -> dict[str, Any]:
         "care_explicit_change_terms": changes,
         "likely_false_positive": not matched,
         "location_sensitivity": "INTERNAL_EXACT",
+        "ofsted_urn": metadata.get("ofsted_urn"),
+        "registration_status": metadata.get("registration_status"),
     }
     title = str(raw.get("title") or "Children's home signal")
     operator = raw.get("organisation_hint")
@@ -300,7 +319,13 @@ def enrich_care_signal(raw: dict[str, Any]) -> dict[str, Any]:
         "address": raw.get("location_hint"),
         "expected_opening_date": None,
         "capacity": None,
-        "lifecycle_stage": "PLANNING" if source_type == "planning" else "RECRUITING",
+        "lifecycle_stage": (
+            "PLANNING"
+            if source_type == "planning"
+            else "RECRUITING"
+            if source_type == "recruitment"
+            else "REGISTRATION"
+        ),
         "confidence": confidence,
         "extracted_facts": facts,
         "evidence": {

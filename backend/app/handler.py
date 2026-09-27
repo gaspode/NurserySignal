@@ -20,15 +20,19 @@ from app.repository import (
     link_signal_to_opportunity,
     list_match_reviews,
     list_opportunities,
+    list_organisation_enrichment_candidates,
+    list_organisation_match_reviews,
     list_organisations,
     list_signals,
     merge_opportunities,
     opportunity_detail,
+    organisation_detail,
     recalculate_opportunity_creation,
     record_admin_audit,
     reprocess_planning_signals,
     reprocess_recruitment_signals,
     resolve_match_review,
+    resolve_organisation_match_review,
     review_signal,
     review_signals_bulk,
     signal_detail,
@@ -73,6 +77,29 @@ SOURCE_DEFINITIONS = {
             "page_size": 25,
         },
         "queue_setting": "recruitment_manual_run_queue_url",
+        "supported_verticals": ["NURSERY", "CHILDRENS_HOME"],
+    },
+    "ofsted": {
+        "display_name": "Ofsted children's social care register",
+        "provider": "Ofsted",
+        "schedule_state": "DISABLED",
+        "schedule_expression": "Manual only",
+        "default_parameters": {
+            "source": "manual",
+            "registered_since_days": 730,
+            "max_records": 50,
+            "active_only": True,
+        },
+        "queue_setting": "ofsted_manual_run_queue_url",
+        "supported_verticals": ["CHILDRENS_HOME"],
+    },
+    "companies_house": {
+        "display_name": "Organisation enrichment",
+        "provider": "Companies House",
+        "schedule_state": "DISABLED",
+        "schedule_expression": "Manual only",
+        "default_parameters": {"source": "manual", "max_organisations": 10},
+        "queue_setting": "companies_house_manual_run_queue_url",
         "supported_verticals": ["NURSERY", "CHILDRENS_HOME"],
     },
 }
@@ -142,10 +169,20 @@ def _admin_path(path: str) -> tuple[str, str | None]:
         return "vertical-list", None
     if path == "/admin/organisations":
         return "organisation-list", None
+    if path == "/admin/organisation-match-review":
+        return "organisation-review-list", None
+    if path.startswith("/admin/organisation-match-review/"):
+        parts = path[len("/admin/organisation-match-review/") :].split("/")
+        if len(parts) == 2 and parts[1] in {"confirm", "reject"}:
+            return f"organisation-review-{parts[1]}", parts[0]
+    if path.startswith("/admin/organisations/"):
+        return "organisation-detail", path[len("/admin/organisations/") :]
     if path == "/admin/sources":
         return "source-list", None
-    if path in {"/admin/sources/planning/run", "/admin/sources/recruitment/run"}:
-        return "source-run", path.split("/")[3]
+    if path.startswith("/admin/sources/") and path.endswith("/run"):
+        parts = path.split("/")
+        if len(parts) == 5 and parts[3] in SOURCE_DEFINITIONS:
+            return "source-run", parts[3]
     if path == "/admin/planning/reprocess":
         return "reprocess", None
     if path == "/admin/recruitment/reprocess":
@@ -269,6 +306,40 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                         vertical=validate_vertical_filter(_query(event, "vertical")),
                     ),
                 )
+            if action == "organisation-detail" and method == "GET" and signal_id:
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                detail = organisation_detail(settings, signal_id)
+                return _response(200, detail) if detail else _response(404, {"error": "not_found"})
+            if action == "organisation-review-list" and method == "GET":
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                limit = min(max(int(_query(event, "limit") or "25"), 1), 100)
+                return _response(
+                    200, {"items": list_organisation_match_reviews(settings, limit=limit)}
+                )
+            if (
+                action in {"organisation-review-confirm", "organisation-review-reject"}
+                and method == "POST"
+                and signal_id
+            ):
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                payload = parse_json_payload(_raw_body(event))
+                actor = str(claims.get("sub") or claims.get("username") or "unknown")
+                return _response(
+                    200,
+                    resolve_organisation_match_review(
+                        settings,
+                        signal_id,
+                        action="confirm" if action.endswith("confirm") else "reject",
+                        actor=actor,
+                        company_number=payload.get("company_number"),
+                    ),
+                )
             if action == "source-list" and method == "GET":
                 admin_error = _require_admin(claims, settings)
                 if admin_error:
@@ -332,6 +403,17 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 parameters = dict(definition["default_parameters"])
                 if vertical != ALL_VERTICALS:
                     parameters["verticals"] = [vertical]
+                if signal_id == "companies_house":
+                    candidate_vertical = (
+                        "CHILDRENS_HOME" if vertical == ALL_VERTICALS else vertical
+                    )
+                    parameters["organisation_candidates"] = (
+                        list_organisation_enrichment_candidates(
+                            settings,
+                            limit=int(parameters["max_organisations"]),
+                            vertical=candidate_vertical,
+                        )
+                    )
                 run_id, started_at = start_run(
                     settings,
                     source_key=signal_id,
@@ -691,3 +773,4 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         return _response(404, {"error": "not_found"})
 
     return _response(404, {"error": "not_found"})
+    organisation_detail,

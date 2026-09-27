@@ -146,3 +146,21 @@ def test_planning_content_change_is_tracked_without_duplicate_or_requeue(monkeyp
     assert result.status == "updated"
     assert result.enrichment_queued is False
     assert calls == ["s3", "revision"]
+
+
+def test_ofsted_content_change_is_revisioned_and_reenriched_once(monkeypatch) -> None:
+    existing = SignalIdentity(uuid4(), "signals/ofsted/raw.json", datetime.now(UTC), "different")
+    monkeypatch.setattr("app.service.find_signal", lambda *args: existing)
+    calls = []
+    monkeypatch.setattr("app.service.put_raw_evidence", lambda *args: calls.append("s3"))
+    monkeypatch.setattr(
+        "app.service.store_planning_revision", lambda *args: calls.append("revision") or True
+    )
+    monkeypatch.setattr(
+        "app.service.dispatch_revision_enrichment",
+        lambda *args: calls.append("reenrichment"),
+    )
+    result = ingest_signal(settings(), signal("ofsted"), b'{"status":"active"}')
+    assert result.status == "updated"
+    assert result.enrichment_queued is True
+    assert calls == ["s3", "revision", "reenrichment"]
