@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+from contextlib import contextmanager
 from urllib.error import HTTPError
 
 import pytest
@@ -10,6 +11,9 @@ from app.companies_house import (
     CompaniesHouseProvider,
     OrganisationCandidate,
 )
+from app.config import Settings
+from app.organisation_enrichment import organisation_evidence_document
+from app.repository import list_organisation_enrichment_candidates
 
 
 class Response(io.BytesIO):
@@ -102,3 +106,83 @@ def test_http_error_is_bounded_and_redacts_api_key() -> None:
         CompaniesHouseProvider(key, opener=opener).search("Example")
     assert key not in str(error.value)
     assert "[REDACTED]" in str(error.value)
+
+
+def test_signal_only_operator_is_materialised_as_enrichment_candidate(monkeypatch) -> None:
+    class Result:
+        def __init__(self, *, rows=None, row=None):
+            self.rows = rows or []
+            self.row = row
+
+        def fetchall(self):
+            return self.rows
+
+        def fetchone(self):
+            return self.row
+
+    class Connection:
+        committed = False
+
+        def execute(self, sql, params=()):
+            if "WITH activity AS" in sql:
+                assert params[:3] == (
+                    "CHILDRENS_HOME",
+                    "CHILDRENS_HOME",
+                    "CHILDRENS_HOME",
+                )
+                return Result(rows=[("Acme Care Limited", None, "Coventry", 3)])
+            if "SELECT name, companies_house_number" in sql:
+                return Result(row=("Acme Care Limited", None, None))
+            return Result()
+
+        def commit(self):
+            self.committed = True
+
+    conn = Connection()
+
+    @contextmanager
+    def fake_connection(_settings):
+        yield conn
+
+    monkeypatch.setattr("app.repository.connection", fake_connection)
+    monkeypatch.setattr("app.repository._resolve_operator_id", lambda *_args: "operator-1")
+
+    candidates = list_organisation_enrichment_candidates(
+        Settings(database_url="postgresql://unused"),
+        limit=10,
+        vertical="CHILDRENS_HOME",
+    )
+
+    assert candidates == [
+        {
+            "operator_id": "operator-1",
+            "name": "Acme Care Limited",
+            "company_number": None,
+            "locality": "Coventry",
+        }
+    ]
+    assert conn.committed is True
+
+
+def test_companies_house_evidence_identity_ignores_retrieval_time() -> None:
+    first = organisation_evidence_document(
+        query_name="Acme Care Limited",
+        status="MATCHED",
+        outcome="STRONG",
+        confidence=0.95,
+        reason="unique normalized legal-name match",
+        company={"company_number": "12345678"},
+        candidates=[],
+    )
+    second = organisation_evidence_document(
+        query_name="Acme Care Limited",
+        status="MATCHED",
+        outcome="STRONG",
+        confidence=0.95,
+        reason="unique normalized legal-name match",
+        company={"company_number": "12345678"},
+        candidates=[],
+    )
+
+    assert first == second
+    assert "retrieved_at" not in first

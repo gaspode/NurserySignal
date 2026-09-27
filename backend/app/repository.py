@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
@@ -2004,35 +2004,95 @@ def list_organisations(
 def list_organisation_enrichment_candidates(
     settings: Settings, *, limit: int, vertical: str = "CHILDRENS_HOME"
 ) -> list[dict[str, Any]]:
-    """Return bounded shared organisations with activity in one vertical."""
+    """Materialise and return bounded organisations with vertical activity.
+
+    Early evidence often has a legitimate provider/employer name before an
+    opportunity has resolved an ``operator_id``.  A manual enrichment run is
+    the point at which those stored names become shared organisation
+    candidates; requiring an existing opportunity link creates a circular
+    dependency and leaves the first run empty.
+    """
     vertical = validate_vertical(vertical)
+    limit = min(max(limit, 1), 25)
     with connection(settings) as conn:
         rows = conn.execute(
-            """SELECT op.id, op.name, op.companies_house_number,
-                      min(NULLIF(o.town, '')) AS locality
-               FROM operators op
-               JOIN opportunities o ON o.operator_id = op.id
-               WHERE o.vertical = %s
-                 AND o.review_status NOT IN ('MERGED', 'REJECTED')
-                 AND (
-                   op.companies_house_refreshed_at IS NULL
-                   OR op.companies_house_refreshed_at < now() - interval '30 days'
-                 )
-               GROUP BY op.id, op.name, op.companies_house_number,
-                        op.companies_house_refreshed_at
-               ORDER BY op.companies_house_refreshed_at NULLS FIRST, op.created_at
+            """WITH activity AS (
+                 SELECT op.name, op.companies_house_number,
+                        NULLIF(o.town, '') AS locality, 0 AS priority
+                 FROM operators op
+                 JOIN opportunities o ON o.operator_id = op.id
+                 WHERE o.vertical = %s
+                   AND o.review_status NOT IN ('MERGED', 'REJECTED')
+                 UNION ALL
+                 SELECT o.operator_name, NULL, NULLIF(o.town, ''), 1
+                 FROM opportunities o
+                 WHERE o.vertical = %s
+                   AND o.review_status NOT IN ('MERGED', 'REJECTED')
+                   AND NULLIF(trim(o.operator_name), '') IS NOT NULL
+                 UNION ALL
+                 SELECT COALESCE(NULLIF(trim(se.operator_name), ''),
+                                 NULLIF(trim(rs.organisation_hint), '')),
+                        COALESCE(rs.metadata->>'companies_house_number',
+                                 rs.metadata->>'company_number'),
+                        COALESCE(NULLIF(rs.metadata->>'town', ''),
+                                 NULLIF(rs.metadata->>'locality', ''),
+                                 NULLIF(rs.location_hint, '')),
+                        CASE WHEN rs.source_type = 'ofsted' THEN 2 ELSE 3 END
+                 FROM raw_signals rs
+                 LEFT JOIN signal_enrichments se ON se.raw_signal_id = rs.id
+                 WHERE rs.vertical = %s
+                   AND COALESCE(NULLIF(trim(se.operator_name), ''),
+                                NULLIF(trim(rs.organisation_hint), '')) IS NOT NULL
+               )
+               SELECT name, max(companies_house_number), max(locality), min(priority)
+               FROM activity
+               WHERE lower(trim(name)) NOT IN ('unknown', 'not provided', 'redacted')
+               GROUP BY lower(trim(name)), name
+               ORDER BY min(priority), lower(trim(name))
                LIMIT %s""",
-            (vertical, min(max(limit, 1), 25)),
+            (vertical, vertical, vertical, min(limit * 5, 125)),
         ).fetchall()
-    return [
-        {
-            "operator_id": str(row[0]),
-            "name": row[1],
-            "company_number": row[2],
-            "locality": row[3],
-        }
-        for row in rows
-    ]
+        candidates: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for name, company_number, locality, _priority in rows:
+            identity = normalize_identity(name)
+            if not identity or identity in seen:
+                continue
+            seen.add(identity)
+            operator_id = _resolve_operator_id(
+                conn,
+                name,
+                {"companies_house_number": company_number} if company_number else {},
+            )
+            operator = conn.execute(
+                """SELECT name, companies_house_number, companies_house_refreshed_at
+                   FROM operators WHERE id = %s""",
+                (operator_id,),
+            ).fetchone()
+            if not operator:
+                continue
+            refreshed_at = operator[2]
+            if refreshed_at and refreshed_at > datetime.now(UTC) - timedelta(days=30):
+                continue
+            conn.execute(
+                """UPDATE opportunities SET operator_id = %s, updated_at = now()
+                   WHERE vertical = %s AND operator_id IS NULL
+                     AND lower(trim(operator_name)) = lower(trim(%s))
+                     AND review_status NOT IN ('MERGED', 'REJECTED')""",
+                (operator_id, vertical, name),
+            )
+            candidates.append(
+                {
+                    "operator_id": str(operator_id),
+                    "name": operator[0],
+                    "company_number": operator[1],
+                    "locality": locality,
+                }
+            )
+            if len(candidates) >= limit:
+                break
+        conn.commit()
+    return candidates
 
 
 def organisation_detail(settings: Settings, operator_id: str) -> dict[str, Any] | None:

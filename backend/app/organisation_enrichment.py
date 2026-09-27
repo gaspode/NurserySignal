@@ -36,6 +36,29 @@ def _safe_candidates(values: Any) -> list[dict[str, Any]]:
     ]
 
 
+def organisation_evidence_document(
+    *,
+    query_name: str,
+    status: str,
+    outcome: str,
+    confidence: float,
+    reason: str,
+    company: dict[str, Any] | None,
+    candidates: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Return stable provider evidence, excluding observation-time metadata."""
+    return {
+        "provider": "COMPANIES_HOUSE",
+        "query_name": query_name,
+        "status": status,
+        "outcome": outcome,
+        "confidence": confidence,
+        "reason": reason,
+        "company": company,
+        "candidates": candidates,
+    }
+
+
 def process_organisation_enrichment(settings: Settings, payload: dict[str, Any]) -> dict[str, Any]:
     if payload.get("provider") != "COMPANIES_HOUSE":
         raise ValueError("unsupported organisation enrichment provider")
@@ -53,17 +76,15 @@ def process_organisation_enrichment(settings: Settings, payload: dict[str, Any])
     reason = str(payload.get("reason") or "")[:500]
     retrieved_at = str(payload.get("retrieved_at") or "")
     evidence_payload = json.dumps(
-        {
-            "provider": "COMPANIES_HOUSE",
-            "query_name": query_name,
-            "status": status,
-            "outcome": outcome,
-            "confidence": confidence,
-            "reason": reason,
-            "company": company,
-            "candidates": candidates,
-            "retrieved_at": retrieved_at,
-        },
+        organisation_evidence_document(
+            query_name=query_name,
+            status=status,
+            outcome=outcome,
+            confidence=confidence,
+            reason=reason,
+            company=company,
+            candidates=candidates,
+        ),
         separators=(",", ":"),
         sort_keys=True,
     ).encode()
