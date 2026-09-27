@@ -69,6 +69,7 @@ SOURCE_DEFINITIONS = {
             "source": "manual",
             "posted_since_days": 7,
             "max_records": 50,
+            "care_max_records": 50,
             "page_size": 25,
         },
         "queue_setting": "recruitment_manual_run_queue_url",

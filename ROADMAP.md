@@ -194,6 +194,8 @@ Run the bounded opportunity-creation recalculation against production data, revi
 - Exact residential locations are marked internal-only for future subscriber projections, while source provenance remains available to authenticated administrators.
 - Evidence object identity is vertical-scoped, so one provider record can support independent NurserySignal and CareSignal records without sharing or losing document links.
 - GOV.UK vacancies with malformed optional application URLs fall back to their stable provider-reference URL so one provider record cannot abort a bounded shared Recruitment run.
+- Recruitment discovery now uses the Display Advert API's official vertical-specific route filters (`Education and early years` and `Care services`) because the API has no free-text search parameter. Cross-query vacancy IDs are deduplicated while discovery provenance is retained.
+- Live Care-route inspection found four genuine residential-childcare apprenticeships in 76 recent Care-services vacancies; narrow `residential childcare worker` and `children's support worker` wording gaps were corrected without admitting generic/adult support work.
 - Added source-specific advisory Bedrock prompt versions and a bounded stored-evidence backfill operation. AI remains advisory and cannot alter deterministic decisions or review state.
 
 Validation gate:

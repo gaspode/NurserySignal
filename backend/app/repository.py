@@ -334,23 +334,41 @@ def get_raw_signal(settings: Settings, signal_id: str) -> dict[str, Any] | None:
 
 
 def list_vertical_backfill_candidates(
-    settings: Settings, *, from_vertical: str, days: int, limit: int
+    settings: Settings,
+    *,
+    from_vertical: str,
+    days: int,
+    limit: int,
+    recruitment_discovery_vertical: str | None = None,
 ) -> list[dict[str, Any]]:
     """Return a bounded stored-evidence corpus without contacting a provider."""
     from_vertical = validate_vertical(from_vertical)
     days = min(max(days, 1), 90)
     limit = min(max(limit, 1), 50)
+    discovery_clause = ""
+    params: list[Any] = [from_vertical, days]
+    if recruitment_discovery_vertical:
+        discovery_vertical = validate_vertical(recruitment_discovery_vertical)
+        discovery_clause = """
+                 AND (
+                    source_type <> 'recruitment'
+                    OR COALESCE(metadata -> 'discovery_verticals', '[]'::jsonb) ? %s
+                 )
+        """
+        params.append(discovery_vertical)
+    params.append(limit)
     with connection(settings) as conn:
         rows = conn.execute(
-            """SELECT id, schema_version, source_type, source_url, external_id, discovered_at,
+            f"""SELECT id, schema_version, source_type, source_url, external_id, discovered_at,
                       title, raw_text, location_hint, organisation_hint, metadata, vertical
                FROM raw_signals
                WHERE vertical = %s
                  AND source_type IN ('planning', 'recruitment')
                  AND discovered_at >= now() - (%s * interval '1 day')
+                 {discovery_clause}
                ORDER BY discovered_at DESC, id DESC
                LIMIT %s""",
-            (from_vertical, days, limit),
+            params,
         ).fetchall()
     fields = (
         "id",

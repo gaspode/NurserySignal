@@ -5,6 +5,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from io import BytesIO
 from urllib.error import HTTPError
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 from app.config import Settings
@@ -17,7 +18,7 @@ from app.recruitment import (
     normalize_gov_vacancy,
     recruitment_signal,
 )
-from app.recruitment_collector import collect_recruitment
+from app.recruitment_collector import collect_recruitment, recruitment_discovery_queries
 
 
 def vacancy(title: str, description: str = "A role at a childcare setting") -> RecruitmentRecord:
@@ -228,6 +229,38 @@ def test_gov_provider_paginates_bounded_results() -> None:
     assert requests[0].headers["User-agent"] == "NurserySignal/1.0"
 
 
+def test_gov_provider_sends_structured_route_filter() -> None:
+    requests = []
+
+    def opener(request, timeout):
+        requests.append(request)
+        return FakeResponse({"vacancies": []})
+
+    provider = GovApprenticeshipProvider("key", opener=opener, sleep=lambda _: None)
+    list(
+        provider.vacancies(
+            RecruitmentQuery(
+                max_records=10,
+                routes=("Care services",),
+                discovery_key="childrens_home-care-services",
+                discovery_verticals=("CHILDRENS_HOME",),
+            )
+        )
+    )
+
+    query = parse_qs(urlparse(requests[0].full_url).query)
+    assert query["Routes"] == ["Care services"]
+    assert query["PostedInLastNumberOfDays"] == ["7"]
+
+
+def test_vertical_discovery_queries_use_one_shared_provider_contract() -> None:
+    queries = recruitment_discovery_queries({}, RecruitmentQuery(max_records=50))
+    assert [(query.discovery_verticals, query.routes) for query in queries] == [
+        (("NURSERY",), ("Education and early years",)),
+        (("CHILDRENS_HOME",), ("Care services",)),
+    ]
+
+
 def test_gov_provider_reports_bounded_http_error_without_api_key(caplog) -> None:
     api_key = "secret-api-key"
 
@@ -255,7 +288,7 @@ def test_recruitment_collector_queues_only_childcare(monkeypatch) -> None:
     class Provider:
         def vacancies(self, query):
             yield vacancy("Nursery Manager")
-            yield vacancy("Plant Nursery Manager")
+            yield replace(vacancy("Plant Nursery Manager"), external_id="VAC-2")
 
     monkeypatch.setattr(
         "app.recruitment_collector.send_ingestion_message",
@@ -263,13 +296,57 @@ def test_recruitment_collector_queues_only_childcare(monkeypatch) -> None:
     )
     counts = collect_recruitment(
         Settings(ingestion_queue_url="https://sqs.example/q"),
-        {"source": "manual", "max_records": 10},
+        {"source": "manual", "max_records": 10, "verticals": ["NURSERY"]},
         Provider(),
     )
     assert counts["records_fetched"] == 2
     assert counts["candidates_matched"] == 1
     assert counts["excluded"] == 1
     assert queued[0].signal["source_type"] == "recruitment"
+
+
+def test_shared_collector_deduplicates_cross_query_vacancy_and_keeps_provenance(
+    monkeypatch,
+) -> None:
+    queued = []
+    shared = replace(
+        vacancy(
+            "Early Years Educator / Residential Childcare Worker",
+            "Role at a nursery and established residential children's home.",
+        ),
+        external_id="SHARED-1",
+    )
+
+    class Provider:
+        def vacancies(self, query):
+            yield replace(
+                shared,
+                discovery_queries=(query.discovery_key,),
+                discovery_verticals=query.discovery_verticals,
+            )
+
+    monkeypatch.setattr(
+        "app.recruitment_collector.send_ingestion_message",
+        lambda settings, message: queued.append(message),
+    )
+    counts = collect_recruitment(
+        Settings(ingestion_queue_url="https://sqs.example/q"),
+        {"source": "manual", "max_records": 10, "care_max_records": 10},
+        Provider(),
+    )
+
+    assert counts["records_fetched"] == 2
+    assert counts["unique_jobs"] == 1
+    assert counts["duplicates"] == 1
+    assert len({message.signal["external_id"] for message in queued}) == 1
+    assert {message.signal.get("vertical", "NURSERY") for message in queued} == {
+        "NURSERY",
+        "CHILDRENS_HOME",
+    }
+    assert queued[0].signal["metadata"]["discovery_verticals"] == [
+        "NURSERY",
+        "CHILDRENS_HOME",
+    ]
 
 
 def test_correlation_requires_postcode_and_compatible_name() -> None:

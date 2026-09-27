@@ -79,7 +79,13 @@ resource "aws_cloudwatch_event_target" "recruitment_collector" {
   rule      = aws_cloudwatch_event_rule.recruitment_schedule.name
   target_id = "recruitment-collector"
   arn       = aws_lambda_function.recruitment_collector.arn
-  input     = jsonencode({ source = "scheduled", posted_since_days = 7, max_records = 50, page_size = 25 })
+  input = jsonencode({
+    source            = "scheduled"
+    posted_since_days = 7
+    max_records       = 50
+    care_max_records  = 50
+    page_size         = 25
+  })
 }
 
 resource "aws_lambda_permission" "recruitment_collector_schedule" {

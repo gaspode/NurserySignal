@@ -93,6 +93,9 @@ class RecruitmentQuery:
     max_records: int = 50
     page_size: int = 25
     page: int = 1
+    routes: tuple[str, ...] = ()
+    discovery_key: str = "unfiltered-recent"
+    discovery_verticals: tuple[str, ...] = ()
 
     @classmethod
     def from_event(cls, event: dict[str, Any] | None = None) -> RecruitmentQuery:
@@ -125,6 +128,8 @@ class RecruitmentRecord:
     raw: dict[str, Any] = field(default_factory=dict)
     latitude: float | None = None
     longitude: float | None = None
+    discovery_queries: tuple[str, ...] = ()
+    discovery_verticals: tuple[str, ...] = ()
 
 
 class RecruitmentProvider(Protocol):
@@ -172,7 +177,13 @@ def _address_text(location: dict[str, Any], record: dict[str, Any]) -> str | Non
     return ", ".join(value for value in values if value) or None
 
 
-def normalize_gov_vacancy(record: dict[str, Any], base_url: str) -> RecruitmentRecord:
+def normalize_gov_vacancy(
+    record: dict[str, Any],
+    base_url: str,
+    *,
+    discovery_query: str | None = None,
+    discovery_verticals: tuple[str, ...] = (),
+) -> RecruitmentRecord:
     if not isinstance(record, dict):
         raise ValueError("vacancy must be an object")
     external_id = record.get("vacancyReference") or record.get("id") or record.get("reference")
@@ -219,6 +230,8 @@ def normalize_gov_vacancy(record: dict[str, Any], base_url: str) -> RecruitmentR
         raw=record,
         latitude=_number(location.get("latitude") or record.get("latitude")),
         longitude=_number(location.get("longitude") or record.get("longitude")),
+        discovery_queries=(discovery_query,) if discovery_query else (),
+        discovery_verticals=discovery_verticals,
     )
 
 
@@ -241,13 +254,14 @@ class GovApprenticeshipProvider:
         self.sleep = sleep
 
     def _page(self, query: RecruitmentQuery, page: int) -> dict[str, Any]:
-        params = {
-            "PageNumber": page,
-            "PageSize": query.page_size,
-            "PostedInLastNumberOfDays": query.posted_since_days,
-        }
+        params: list[tuple[str, Any]] = [
+            ("PageNumber", page),
+            ("PageSize", query.page_size),
+            ("PostedInLastNumberOfDays", query.posted_since_days),
+        ]
+        params.extend(("Routes", route) for route in query.routes)
         request = Request(
-            f"{self.base_url}/vacancy?{urlencode(params)}",
+            f"{self.base_url}/vacancy?{urlencode(params, doseq=True)}",
             headers={
                 "Accept": "application/json",
                 "X-Version": "2",
@@ -305,7 +319,12 @@ class GovApprenticeshipProvider:
             for item in records:
                 if fetched >= query.max_records:
                     break
-                yield normalize_gov_vacancy(item, self.base_url)
+                yield normalize_gov_vacancy(
+                    item,
+                    self.base_url,
+                    discovery_query=query.discovery_key,
+                    discovery_verticals=query.discovery_verticals,
+                )
                 fetched += 1
             if len(records) < query.page_size:
                 break
@@ -440,6 +459,8 @@ def recruitment_record_from_signal(raw: dict[str, Any]) -> RecruitmentRecord:
         description=str(raw.get("raw_text") or ""),
         employment_type=metadata.get("employment_type"),
         raw=provider_record if isinstance(provider_record, dict) else metadata,
+        discovery_queries=tuple(metadata.get("discovery_queries") or ()),
+        discovery_verticals=tuple(metadata.get("discovery_verticals") or ()),
     )
 
 
@@ -467,6 +488,8 @@ def recruitment_signal(record: RecruitmentRecord, decision: dict[str, Any]) -> d
         "expires_at": record.expires_at.isoformat() if record.expires_at else None,
         "salary": record.salary,
         "employment_type": record.employment_type,
+        "discovery_queries": list(record.discovery_queries),
+        "discovery_verticals": list(record.discovery_verticals),
         "recruitment_classification": decision,
     }
     return {

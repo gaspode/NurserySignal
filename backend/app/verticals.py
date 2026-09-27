@@ -15,11 +15,16 @@ class VerticalDefinition:
     display_name: str
     enabled: bool
     policy: str
+    recruitment_routes: tuple[str, ...] = ()
 
 
 VERTICAL_REGISTRY = {
-    NURSERY: VerticalDefinition(NURSERY, "NurserySignal", True, "nursery"),
-    CHILDRENS_HOME: VerticalDefinition(CHILDRENS_HOME, "CareSignal", True, "children-home"),
+    NURSERY: VerticalDefinition(
+        NURSERY, "NurserySignal", True, "nursery", ("Education and early years",)
+    ),
+    CHILDRENS_HOME: VerticalDefinition(
+        CHILDRENS_HOME, "CareSignal", True, "children-home", ("Care services",)
+    ),
     DENTAL: VerticalDefinition(DENTAL, "DentalSignal", False, "dental"),
 }
 

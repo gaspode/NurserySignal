@@ -24,7 +24,11 @@ def backfill_care_from_stored_evidence(
     days = min(max(int(days), 1), 90)
     limit = min(max(int(limit), 1), 50)
     rows = list_vertical_backfill_candidates(
-        settings, from_vertical="NURSERY", days=days, limit=limit
+        settings,
+        from_vertical="NURSERY",
+        days=days,
+        limit=limit,
+        recruitment_discovery_vertical="CHILDRENS_HOME",
     )
     counts = {
         "evaluated": len(rows),
@@ -35,6 +39,8 @@ def backfill_care_from_stored_evidence(
         "change_signals": 0,
         "irrelevant": 0,
         "errors": 0,
+        "planning_evaluated": sum(row["source_type"] == "planning" for row in rows),
+        "recruitment_evaluated": sum(row["source_type"] == "recruitment" for row in rows),
     }
     signal_ids: list[str] = []
     for raw in rows:

@@ -141,6 +141,58 @@ def test_support_worker_at_existing_home_is_routine_and_adult_role_is_irrelevant
     assert adult["relevance"] == "IRRELEVANT"
 
 
+def test_live_residential_childcare_wording_is_relevant_routine() -> None:
+    worker = classify_care_recruitment(
+        vacancy(
+            "Apprentice Residential Child Care Worker",
+            "Support children and young people in a residential care setting.",
+        )
+    )
+    deputy = classify_care_recruitment(
+        vacancy(
+            "Apprentice Deputy Manager - Residential Childcare",
+            "Support the day-to-day running of the home for children and young people.",
+        )
+    )
+    assert worker["role_category"] == "residential_childcare_worker"
+    assert worker["relevance"] == "RELEVANT_ROUTINE"
+    assert worker["commercial_change_evidence"] == "NONE"
+    assert deputy["role_category"] == "deputy_manager"
+    assert deputy["relevance"] == "RELEVANT_ROUTINE"
+
+
+def test_childrens_support_worker_is_relevant_but_generic_residential_support_is_not() -> None:
+    child = classify_care_recruitment(
+        vacancy(
+            "Childrens Support Worker apprentice",
+            "Support a child or young person while gaining a Residential Childcare qualification.",
+        )
+    )
+    generic = classify_care_recruitment(
+        RecruitmentRecord(
+            provider="govuk-apprenticeships",
+            external_id="VAC-GENERIC",
+            source_url="https://example.test/jobs/VAC-GENERIC",
+            title="Apprentice Residential Support Worker",
+            employer_name="Training Provider Ltd",
+            workplace_name=None,
+            address="1 Example Road",
+            postcode="BS4 5QU",
+            locality="Bristol",
+            region=None,
+            published_at=datetime(2026, 9, 20, tzinfo=UTC),
+            expires_at=None,
+            salary=None,
+            description="Support learners with day-to-day life and independence.",
+            employment_type="Full time",
+            raw={},
+        )
+    )
+    assert child["role_category"] == "childrens_support_worker"
+    assert child["relevance"] == "RELEVANT_ROUTINE"
+    assert generic["relevance"] == "IRRELEVANT"
+
+
 def test_care_enrichment_keeps_routine_recruitment_from_creating_opportunity():
     record = vacancy(
         "Registered Manager — Children's Home",
@@ -195,9 +247,13 @@ def test_care_backfill_is_bounded_and_uses_stored_evidence(monkeypatch):
             }
         },
     }
-    monkeypatch.setattr(
-        "app.care_backfill.list_vertical_backfill_candidates", lambda *args, **kwargs: [source]
-    )
+    selected = {}
+
+    def candidates(*args, **kwargs):
+        selected.update(kwargs)
+        return [source]
+
+    monkeypatch.setattr("app.care_backfill.list_vertical_backfill_candidates", candidates)
     accepted = type(
         "Result",
         (),
@@ -216,3 +272,6 @@ def test_care_backfill_is_bounded_and_uses_stored_evidence(monkeypatch):
     assert result["relevant"] == 1
     assert result["accepted"] == 1
     assert result["change_signals"] == 1
+    assert result["planning_evaluated"] == 1
+    assert result["recruitment_evaluated"] == 0
+    assert selected["recruitment_discovery_vertical"] == "CHILDRENS_HOME"

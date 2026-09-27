@@ -298,7 +298,7 @@ export function SourcesPage({ apiClient }) {
         method: "POST",
         body: JSON.stringify({ days: 60, limit: 25 }),
       });
-      setNotice(`CareSignal backfill evaluated ${result.evaluated} stored records; ${result.relevant} relevant and ${result.accepted} newly accepted.`);
+      setNotice(`CareSignal backfill evaluated ${result.evaluated} targeted stored records (${result.planning_evaluated || 0} planning, ${result.recruitment_evaluated || 0} recruitment); ${result.relevant} relevant and ${result.accepted} newly accepted.`);
     } catch (backfillError) {
       setError({ title: "CareSignal backfill could not be completed", message: backfillError.message || "Please try again later." });
     } finally { setBackfillBusy(false); }
@@ -313,14 +313,14 @@ export function SourcesPage({ apiClient }) {
       return <article className="panel source-card" key={source.key}>
         <div className="source-card-heading"><div><p className="eyebrow">{source.key}</p><h2>{source.display_name}</h2><p className="muted">Provider: {source.provider}</p><p className="muted small-text">Verticals: {(source.supported_verticals || []).map(verticalName).join(" · ")}</p></div><Badge tone={source.schedule_state === "ENABLED" ? "approved" : "neutral"}>{source.schedule_state}</Badge></div>
         <dl className="source-meta"><div><dt>Schedule</dt><dd>{source.schedule_expression}</dd></div><div><dt>Last status</dt><dd>{source.last_status || "No persisted run yet"}</dd></div><div><dt>Last attempt</dt><dd>{formatDate(source.last_attempt_at, true)}</dd></div><div><dt>Last successful</dt><dd>{formatDate(source.last_success_at, true)}</dd></div></dl>
-        {source.last_run && <><h3>Last result</h3><div className="source-counts"><span>Fetched <strong>{summary.records_fetched || 0}</strong></span><span>Matched <strong>{summary.candidates_matched || 0}</strong></span><span>NurserySignal <strong>{summary.nursery_matched || 0}</strong></span><span>CareSignal <strong>{summary.care_matched || 0}</strong></span><span>Queued <strong>{summary.signals_queued || 0}</strong></span><span>Excluded <strong>{summary.excluded || 0}</strong></span><span>Duplicates <strong>{summary.duplicates || 0}</strong></span><span>Errors <strong>{summary.errors || 0}</strong></span></div><p className="muted small-text">{titleCase(source.last_run.invocation_source)} run</p></>}
+        {source.last_run && <><h3>Last result</h3><div className="source-counts"><span>Fetched <strong>{summary.records_fetched || 0}</strong></span>{summary.unique_jobs != null && <span>Unique <strong>{summary.unique_jobs}</strong></span>}<span>Matched <strong>{summary.candidates_matched || 0}</strong></span><span>NurserySignal <strong>{summary.nursery_matched || 0}</strong></span><span>CareSignal <strong>{summary.care_matched || 0}</strong></span>{summary.care_relevant_routine != null && <span>Care routine <strong>{summary.care_relevant_routine}</strong></span>}{summary.care_relevant_change != null && <span>Care change <strong>{summary.care_relevant_change}</strong></span>}<span>Queued <strong>{summary.signals_queued || 0}</strong></span><span>Excluded <strong>{summary.excluded || 0}</strong></span><span>Duplicates <strong>{summary.duplicates || 0}</strong></span><span>Errors <strong>{summary.errors || 0}</strong></span></div><p className="muted small-text">{titleCase(source.last_run.invocation_source)} run</p></>}
         {source.last_error && <div className="notice error-state">{source.last_error.category}: {source.last_error.message}</div>}
         <button className="button primary" onClick={() => run(source)} disabled={Boolean(running)}>{active ? "Run in progress…" : "Run now"}</button>
         {source.recent_runs?.length > 0 && <details className="source-history"><summary>Recent runs ({source.recent_runs.length})</summary>{source.recent_runs.map((item) => <div className="source-history-row" key={item.id}><span>{formatDate(item.started_at, true)} · {titleCase(item.invocation_source)}</span><Badge tone={item.status === "SUCCESS" ? "approved" : item.status === "FAILED" ? "rejected" : "pending"}>{item.status}</Badge></div>)}</details>}
       </article>;
     })}</div>
     <article className="panel source-card">
-      <div className="source-card-heading"><div><p className="eyebrow">CareSignal activation</p><h2>Stored-evidence backfill</h2><p className="muted">Re-evaluate up to 25 preserved Planning and Recruitment records from the last 60 days. Providers are not called.</p></div><Badge>Bounded</Badge></div>
+      <div className="source-card-heading"><div><p className="eyebrow">CareSignal activation</p><h2>Stored-evidence backfill</h2><p className="muted">Re-evaluate up to 25 preserved Planning records and Care-targeted Recruitment records from the last 60 days. Providers are not called.</p></div><Badge>Bounded</Badge></div>
       <button className="button secondary" onClick={runCareBackfill} disabled={backfillBusy || Boolean(running)}>{backfillBusy ? "Evaluating…" : "Run CareSignal backfill"}</button>
     </article>
     {error && <AlertModal title={error.title} message={error.message} onClose={() => setError(null)} />}

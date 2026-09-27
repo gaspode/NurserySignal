@@ -5,6 +5,7 @@ from app.verticals import (
     CHILDRENS_HOME,
     DENTAL,
     NURSERY,
+    VERTICAL_REGISTRY,
     registry_payload,
     validate_vertical,
 )
@@ -15,6 +16,8 @@ def test_registry_contains_enabled_nursery_and_care_verticals():
     assert registry[NURSERY]["enabled"] is True
     assert registry[CHILDRENS_HOME]["enabled"] is True
     assert registry[DENTAL]["enabled"] is False
+    assert VERTICAL_REGISTRY[NURSERY].recruitment_routes == ("Education and early years",)
+    assert VERTICAL_REGISTRY[CHILDRENS_HOME].recruitment_routes == ("Care services",)
 
 
 def test_all_is_only_valid_for_admin_filters():

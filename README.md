@@ -49,18 +49,23 @@ elderly and nursing care, and treats routine recruitment as supporting evidence 
 Exact publicly sourced residential addresses are retained only in authenticated
 SignalHub evidence and marked `INTERNAL_EXACT` for future public/subscriber projections.
 The bounded admin endpoint `POST /admin/verticals/CHILDRENS_HOME/backfill` evaluates at
-most 50 preserved Planning/Recruitment records from no more than the last 90 days and
-does not call either provider.
+most 50 preserved Planning records and Care-targeted Recruitment records from no more
+than the last 90 days and does not call either provider. Recruitment rows are selected
+by stored discovery provenance rather than by their position in the NurserySignal queue.
 
 ### Recruitment and opportunities
 
 The first recruitment provider is the documented GOV.UK Find an Apprenticeship
 Display Advert API v2. It is accessed through its JSON API with an
-`Ocp-Apim-Subscription-Key`, bounded recent-vacancy/page parameters and stable
-vacancy references. Store the key only in the Secrets Manager secret
+`Ocp-Apim-Subscription-Key`, bounded recent-vacancy/page parameters, official course
+route filters and stable vacancy references. The shared collector uses `Education and
+early years` for NurserySignal and `Care services` for CareSignal, deduplicates vacancy
+references across queries, and retains the query/vertical discovery provenance. The API
+does not offer free-text vacancy searching, so role phrases are classifier evidence,
+not provider query parameters. Store the key only in the Secrets Manager secret
 `nurserysignal-prod/recruitment-provider` using `{"api_key":"REDACTED"}`.
-The collector schedule is deployed disabled until the key is configured and a
-bounded sample is reviewed. Recruitment adverts are supporting evidence, not
+The collector schedule runs daily with bounded per-vertical query limits. Recruitment
+adverts are supporting evidence, not
 standalone opening/expansion decisions. Reed and specialist/operator job pages
 remain deferred until their access and downstream-use terms are separately
 validated.

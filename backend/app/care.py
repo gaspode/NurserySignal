@@ -50,6 +50,14 @@ CARE_ROLE_PATTERNS = (
     ("deputy_manager", r"\bdeputy\s+manager\b"),
     ("senior_residential_support_worker", r"\bsenior\s+residential\s+support\s+worker\b"),
     ("residential_support_worker", r"\bresidential\s+(?:childcare\s+)?support\s+worker\b"),
+    (
+        "residential_childcare_worker",
+        r"\bresidential\s+child\s*care\s+worker\b",
+    ),
+    (
+        "childrens_support_worker",
+        r"\bchildren(?:['’]s|s)?\s+support\s+worker\b",
+    ),
     ("childrens_home_manager", r"\bchildren(?:['’]s|s)?\s+home\s+manager\b"),
 )
 CARE_RECRUITMENT_CHANGE = {
@@ -125,7 +133,10 @@ def classify_care_recruitment(record: RecruitmentRecord) -> dict[str, Any]:
     child_context = any(re.search(pattern, full_text) for pattern in CARE_CHILD_CONTEXT)
     home_context = bool(
         re.search(r"\b(?:residential\s+)?children(?:['’]s|s)?\s+home\b", full_text)
-        or (child_context and re.search(r"\bresidential\s+(?:care|home)\b", full_text))
+        or (
+            child_context
+            and re.search(r"\bresidential\s+(?:care|home|child\s*care)\b", full_text)
+        )
     )
     adult_exclusions = [
         pattern for pattern in CARE_ADULT_EXCLUSIONS if re.search(pattern, full_text)
