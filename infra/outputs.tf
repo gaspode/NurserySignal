@@ -62,6 +62,10 @@ output "companies_house_collector_function_name" {
   value = aws_lambda_function.companies_house_collector.function_name
 }
 
+output "procurement_collector_function_name" {
+  value = aws_lambda_function.procurement_collector.function_name
+}
+
 output "companies_house_secret_arn" {
   value = aws_secretsmanager_secret.companies_house.arn
 }

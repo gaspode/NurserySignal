@@ -532,6 +532,10 @@ def list_signals(
     if source_type:
         clauses.append("rs.source_type = %s")
         params.append(source_type)
+    else:
+        # Evaluation-only procurement evidence has its own admin surface and
+        # must not inflate the human signal-review inbox or overview counts.
+        clauses.append("rs.source_type <> 'procurement'")
     if discovered_from:
         clauses.append("rs.discovered_at >= %s::timestamptz")
         params.append(discovered_from)
@@ -636,6 +640,67 @@ def list_signals(
         "limit": limit,
         "offset": offset,
     }
+
+
+def list_procurement_evaluations(
+    settings: Settings, *, limit: int = 100, offset: int = 0
+) -> dict[str, Any]:
+    """Return bounded CareSignal shadow records with conservative incremental context."""
+    limit = min(max(limit, 1), 200)
+    offset = max(offset, 0)
+    with connection(settings) as conn:
+        total = conn.execute(
+            """SELECT count(*) FROM raw_signals
+               WHERE vertical = 'CHILDRENS_HOME' AND source_type = 'procurement'"""
+        ).fetchone()[0]
+        rows = conn.execute(
+            """SELECT rs.id, rs.title, rs.source_url, rs.discovered_at,
+                      rs.organisation_hint, rs.location_hint, rs.metadata,
+                      se.confidence, se.extracted_facts,
+                      (SELECT count(*) FROM raw_signals related
+                       WHERE related.vertical = rs.vertical
+                         AND related.source_type IN ('planning', 'recruitment')
+                         AND lower(COALESCE(related.organisation_hint, '')) =
+                             lower(COALESCE(rs.organisation_hint, ''))
+                         AND related.id <> rs.id) AS related_signal_count,
+                      (SELECT count(DISTINCT os.opportunity_id)
+                       FROM raw_signals related
+                       JOIN opportunity_signals os ON os.raw_signal_id = related.id
+                                                   AND os.status = 'ACTIVE'
+                       WHERE related.vertical = rs.vertical
+                         AND related.source_type IN ('planning', 'recruitment')
+                         AND lower(COALESCE(related.organisation_hint, '')) =
+                             lower(COALESCE(rs.organisation_hint, ''))) AS related_opportunity_count
+               FROM raw_signals rs
+               LEFT JOIN signal_enrichments se ON se.raw_signal_id = rs.id
+               WHERE rs.vertical = 'CHILDRENS_HOME' AND rs.source_type = 'procurement'
+               ORDER BY rs.discovered_at DESC, rs.id DESC
+               LIMIT %s OFFSET %s""",
+            (limit, offset),
+        ).fetchall()
+    fields = (
+        "id",
+        "title",
+        "source_url",
+        "publication_date",
+        "buyer",
+        "location",
+        "metadata",
+        "confidence",
+        "extracted_facts",
+        "related_signal_count",
+        "related_opportunity_count",
+    )
+    items = [dict(zip(fields, row)) for row in rows]
+    counts: dict[str, int] = {}
+    for item in items:
+        category = str((item.get("metadata") or {}).get("procurement_category") or "UNCERTAIN")
+        counts[category] = counts.get(category, 0) + 1
+        item["appears_incremental"] = not (
+            item["related_signal_count"] or item["related_opportunity_count"]
+        )
+        item["operator_known"] = bool((item.get("metadata") or {}).get("suppliers"))
+    return {"items": items, "total": total, "limit": limit, "offset": offset, "counts": counts}
 
 
 def signal_detail(settings: Settings, signal_id: str) -> dict[str, Any] | None:

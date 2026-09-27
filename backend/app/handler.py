@@ -36,6 +36,7 @@ from app.repository import (
     list_organisation_enrichment_candidates,
     list_organisation_match_reviews,
     list_organisations,
+    list_procurement_evaluations,
     list_signals,
     merge_opportunities,
     opportunity_detail,
@@ -115,6 +116,20 @@ SOURCE_DEFINITIONS = {
         "default_parameters": {"source": "manual", "max_organisations": 10},
         "queue_setting": "companies_house_manual_run_queue_url",
         "supported_verticals": ["NURSERY", "CHILDRENS_HOME"],
+    },
+    "procurement": {
+        "display_name": "Public procurement",
+        "provider": "Find a Tender + Contracts Finder",
+        "schedule_state": "DISABLED",
+        "schedule_expression": "Manual shadow evaluation only",
+        "default_parameters": {
+            "source": "manual",
+            "published_since_days": 548,
+            "max_records_per_source": 300,
+            "page_size": 100,
+        },
+        "queue_setting": "procurement_manual_run_queue_url",
+        "supported_verticals": ["CHILDRENS_HOME"],
     },
 }
 
@@ -211,6 +226,8 @@ def _admin_path(path: str) -> tuple[str, str | None]:
         return "organisation-detail", path[len("/admin/organisations/") :]
     if path == "/admin/sources":
         return "source-list", None
+    if path == "/admin/procurement-evaluation":
+        return "procurement-evaluation", None
     if path.startswith("/admin/sources/") and path.endswith("/run"):
         parts = path.split("/")
         if len(parts) == 5 and parts[3] in SOURCE_DEFINITIONS:
@@ -574,6 +591,21 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                         }
                     )
                 return _response(200, {"items": sources})
+            if action == "procurement-evaluation" and method == "GET":
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                vertical = validate_vertical_filter(_query(event, "vertical"))
+                if vertical not in {ALL_VERTICALS, "CHILDRENS_HOME"}:
+                    return _response(200, {"items": [], "total": 0, "counts": {}})
+                return _response(
+                    200,
+                    list_procurement_evaluations(
+                        settings,
+                        limit=min(max(int(_query(event, "limit") or "100"), 1), 200),
+                        offset=max(int(_query(event, "offset") or "0"), 0),
+                    ),
+                )
             if action == "source-run" and method == "POST" and signal_id in SOURCE_DEFINITIONS:
                 admin_error = _require_admin(claims, settings)
                 if admin_error:

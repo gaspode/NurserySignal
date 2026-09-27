@@ -370,6 +370,17 @@ resource "aws_sqs_queue" "companies_house_manual_runs" {
   tags = local.common_tags
 }
 
+resource "aws_sqs_queue" "procurement_manual_runs" {
+  name                       = "${local.name_prefix}-procurement-manual-runs"
+  visibility_timeout_seconds = 360
+  sqs_managed_sse_enabled    = true
+  redrive_policy = jsonencode({
+    deadLetterTargetArn = aws_sqs_queue.collector_manual_runs_dlq.arn
+    maxReceiveCount     = 3
+  })
+  tags = local.common_tags
+}
+
 resource "aws_cloudwatch_event_rule" "collector_schedule" {
   name                = "${local.name_prefix}-collector-schedule"
   description         = "Daily bounded Plota planning collector; uses a two-day overlapping window for safe idempotent collection"

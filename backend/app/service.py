@@ -49,7 +49,7 @@ def ingest_signal(
     )
 
     if existing and existing.content_sha256 and existing.content_sha256 != content_hash:
-        if signal.source_type not in {"planning", "ofsted"}:
+        if signal.source_type not in {"planning", "ofsted", "procurement"}:
             raise SignalConflictError(
                 "source_type and external_id already identify different content"
             )

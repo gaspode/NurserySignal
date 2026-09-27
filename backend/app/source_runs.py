@@ -63,7 +63,7 @@ def finish_run(
     run_id: str,
     started_at: str,
     status: str,
-    counts: dict[str, int],
+    counts: dict[str, Any],
     failure_category: str | None = None,
     failure_message: str | None = None,
 ) -> None:

@@ -281,11 +281,36 @@ def enrich_care_signal(raw: dict[str, Any]) -> dict[str, Any]:
         role = None
         setting = "childrens_home"
         changes = []
+    elif source_type == "procurement":
+        category = str(metadata.get("procurement_category") or "UNCERTAIN")
+        confidence = float(metadata.get("procurement_confidence") or 0.5)
+        matched = category != "IRRELEVANT"
+        relevance = (
+            "RELEVANT_CHANGE"
+            if category
+            in {
+                "NEW_HOME_COMMISSIONING",
+                "NEW_CAPACITY_MARKET_ENGAGEMENT",
+                "OPERATOR_PROCUREMENT",
+                "CONTRACT_AWARD",
+            }
+            else "RELEVANT_ROUTINE"
+            if category
+            in {"ROUTINE_PLACEMENT_FRAMEWORK", "EXISTING_SERVICE_REPROCUREMENT"}
+            else "UNCERTAIN"
+        )
+        change_type = "OPENING" if relevance == "RELEVANT_CHANGE" else "OTHER_CHANGE"
+        role = None
+        setting = "childrens_home" if matched else "unknown"
+        changes = [category] if relevance == "RELEVANT_CHANGE" else []
     else:
         raise ValueError("unsupported CareSignal source type")
     material_planning_change = source_type == "planning" and change_type != "OTHER_CHANGE"
     commercial_change = "STRONG" if material_planning_change or changes else "NONE"
     action = (
+        "REVIEW"
+        if source_type == "procurement" and matched
+        else
         "CREATE_OPPORTUNITY"
         if matched
         and (
@@ -305,6 +330,8 @@ def enrich_care_signal(raw: dict[str, Any]) -> dict[str, Any]:
         if action == "CREATE_OPPORTUNITY"
         else "Ofsted regulatory evidence can confirm registration of an existing opportunity"
         if source_type == "ofsted"
+        else "Procurement evidence is retained for shadow evaluation only"
+        if source_type == "procurement"
         else "Relevant evidence supports an existing CareSignal opportunity only"
     )
     facts = {
@@ -315,6 +342,8 @@ def enrich_care_signal(raw: dict[str, Any]) -> dict[str, Any]:
             else "care-recruitment"
             if source_type == "recruitment"
             else "care-regulatory"
+            if source_type == "ofsted"
+            else "care-procurement"
         ),
         "source_type": source_type,
         "children_home_relevance": relevance,
@@ -330,6 +359,12 @@ def enrich_care_signal(raw: dict[str, Any]) -> dict[str, Any]:
         "location_sensitivity": "INTERNAL_EXACT",
         "ofsted_urn": metadata.get("ofsted_urn"),
         "registration_status": metadata.get("registration_status"),
+        "procurement_category": metadata.get("procurement_category"),
+        "procurement_reason": metadata.get("procurement_reason"),
+        "procurement_platform": metadata.get("procurement_platform"),
+        "procurement_evaluation_mode": (
+            "SHADOW_ONLY" if source_type == "procurement" else None
+        ),
     }
     title = str(raw.get("title") or "Children's home signal")
     operator = raw.get("organisation_hint")
@@ -357,6 +392,8 @@ def enrich_care_signal(raw: dict[str, Any]) -> dict[str, Any]:
             else "RECRUITING"
             if source_type == "recruitment"
             else "REGISTRATION"
+            if source_type == "ofsted"
+            else "DISCOVERED"
         ),
         "confidence": confidence,
         "extracted_facts": facts,

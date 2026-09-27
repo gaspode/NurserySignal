@@ -1,7 +1,7 @@
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { BacktestingPage, Dashboard, LoginPage, MatchReviewPage, OpportunitiesPage, OpportunityDetail, OrganisationsPage, ReviewInboxPage, ReviewedSignalsPage, SignalDetail, SourcesPage, UnmatchedSignalsPage, restoredVertical, verticalScopedPath } from "./App.jsx";
+import { BacktestingPage, Dashboard, LoginPage, MatchReviewPage, OpportunitiesPage, OpportunityDetail, OrganisationsPage, ProcurementEvaluationPage, ReviewInboxPage, ReviewedSignalsPage, SignalDetail, SourcesPage, UnmatchedSignalsPage, restoredVertical, verticalScopedPath } from "./App.jsx";
 
 const pendingItem = {
   id: "signal-1",
@@ -741,5 +741,38 @@ describe("admin frontend", () => {
       body: expect.stringContaining('"max_signals":500'),
     });
     expect(await screen.findByText("450 days")).toBeInTheDocument();
+  });
+
+  it("shows procurement shadow evidence without live opportunity controls", async () => {
+    const apiClient = vi.fn().mockResolvedValue({
+      total: 1,
+      counts: { NEW_HOME_COMMISSIONING: 1 },
+      items: [{
+        id: "proc-1",
+        title: "Commission three new children's homes",
+        source_url: "https://www.find-tender.service.gov.uk/Notice/1",
+        publication_date: "2025-06-01T09:00:00Z",
+        buyer: "Example Council",
+        location: "Coventry",
+        confidence: 0.92,
+        related_signal_count: 0,
+        related_opportunity_count: 0,
+        appears_incremental: true,
+        operator_known: false,
+        metadata: {
+          procurement_platform: "find_a_tender",
+          notice_stage: "planning",
+          procurement_category: "NEW_HOME_COMMISSIONING",
+          procurement_reason: "Notice explicitly commissions new children's-home provision",
+          strong_candidate: true,
+        },
+      }],
+    });
+    render(<ProcurementEvaluationPage apiClient={apiClient} />);
+    expect(await screen.findByText("Commission three new children's homes")).toBeInTheDocument();
+    expect(screen.getByText(/Shadow-only/)).toBeInTheDocument();
+    expect(screen.getByText("No exact buyer evidence found")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /create opportunity/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "View official notice" })).toHaveAttribute("target", "_blank");
   });
 });

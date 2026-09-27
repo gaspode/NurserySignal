@@ -50,6 +50,7 @@ resource "aws_lambda_function" "backend" {
       RECRUITMENT_MANUAL_RUN_QUEUE_URL     = aws_sqs_queue.recruitment_manual_runs.url
       OFSTED_MANUAL_RUN_QUEUE_URL          = aws_sqs_queue.ofsted_manual_runs.url
       COMPANIES_HOUSE_MANUAL_RUN_QUEUE_URL = aws_sqs_queue.companies_house_manual_runs.url
+      PROCUREMENT_MANUAL_RUN_QUEUE_URL     = aws_sqs_queue.procurement_manual_runs.url
     }
   }
 

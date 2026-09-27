@@ -502,9 +502,34 @@ def test_care_sources_include_manual_ofsted_and_companies_house(monkeypatch) -> 
     )
     assert response["statusCode"] == 200
     items = {item["key"]: item for item in json.loads(response["body"])["items"]}
-    assert set(items) == {"planning", "recruitment", "ofsted", "companies_house"}
+    assert set(items) == {
+        "planning",
+        "recruitment",
+        "ofsted",
+        "companies_house",
+        "procurement",
+    }
     assert items["ofsted"]["schedule_state"] == "DISABLED"
     assert items["companies_house"]["schedule_expression"] == "Manual only"
+    assert items["procurement"]["schedule_state"] == "DISABLED"
+
+
+def test_procurement_evaluation_is_admin_only_and_bounded(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "app.handler.list_procurement_evaluations",
+        lambda settings, limit, offset: {"items": [{"id": "p-1"}], "total": 1},
+    )
+    assert handler(event("/admin/procurement-evaluation"), None)["statusCode"] == 403
+    response = handler(
+        event(
+            "/admin/procurement-evaluation",
+            query={"vertical": "CHILDRENS_HOME", "limit": "9999"},
+            claims={**CLAIMS, "cognito:groups": ["NurserySignalAdmins"]},
+        ),
+        None,
+    )
+    assert response["statusCode"] == 200
+    assert json.loads(response["body"])["total"] == 1
 
 
 def test_source_manual_run_uses_fixed_bounds_and_exact_lambda(monkeypatch) -> None:

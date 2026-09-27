@@ -109,6 +109,7 @@ class ChildrenHomeVerticalPolicy:
             "planning": "PLANNING",
             "recruitment": "RECRUITING",
             "ofsted": "REGISTRATION",
+            "procurement": "DISCOVERED",
         }.get(source_type, "DISCOVERED")
 
 

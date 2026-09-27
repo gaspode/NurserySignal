@@ -13,7 +13,7 @@ export function restoredVertical(storage = window.sessionStorage) {
 
 export function verticalScopedPath(requestPath, vertical) {
   const [pathname, queryString] = requestPath.split("?", 2);
-  if (!["/admin/signals", "/admin/opportunities", "/admin/match-review", "/admin/organisations", "/admin/sources", "/admin/backtesting"].includes(pathname)) return requestPath;
+  if (!["/admin/signals", "/admin/opportunities", "/admin/match-review", "/admin/organisations", "/admin/sources", "/admin/backtesting", "/admin/procurement-evaluation"].includes(pathname)) return requestPath;
   const params = new URLSearchParams(queryString || "");
   params.set("vertical", vertical);
   return `${pathname}?${params.toString()}`;
@@ -243,6 +243,7 @@ function Shell({ user, onLogout, onNavigate, currentPath, vertical, onVerticalCh
           <button className={route.startsWith("/unmatched") ? "nav-link active" : "nav-link"} onClick={() => onNavigate("/unmatched")}>Unmatched Signals</button>
           <button className={route.startsWith("/match-review") ? "nav-link active" : "nav-link"} onClick={() => onNavigate("/match-review")}>Match Review</button>
           <button className={route.startsWith("/sources") ? "nav-link active" : "nav-link"} onClick={() => onNavigate("/sources")}>Sources</button>
+          <button className={route.startsWith("/procurement") ? "nav-link active" : "nav-link"} onClick={() => onNavigate("/procurement")}>Procurement</button>
           <button className={route.startsWith("/organisations") ? "nav-link active" : "nav-link"} onClick={() => onNavigate("/organisations")}>Organisations</button>
           <button className={route.startsWith("/backtesting") ? "nav-link active" : "nav-link"} onClick={() => onNavigate("/backtesting")}>Backtesting</button>
         </nav>
@@ -343,6 +344,28 @@ export function SourcesPage({ apiClient, selectedVertical = "NURSERY" }) {
       <button className="button secondary" onClick={runCareBackfill} disabled={backfillBusy || Boolean(running)}>{backfillBusy ? "Evaluating…" : "Run CareSignal backfill"}</button>
     </article>
     {error && <AlertModal title={error.title} message={error.message} onClose={() => setError(null)} />}
+  </section>;
+}
+
+export function ProcurementEvaluationPage({ apiClient }) {
+  const [result, setResult] = useState({ items: [], counts: {}, total: 0 });
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState("");
+  const load = async ({ initial = false } = {}) => {
+    if (initial) setLoading(true); else setRefreshing(true);
+    setError("");
+    try { setResult(await apiClient("/admin/procurement-evaluation?limit=100")); }
+    catch (loadError) { setError(loadError.message || "Procurement evaluation could not be loaded."); }
+    finally { setLoading(false); setRefreshing(false); }
+  };
+  useEffect(() => { load({ initial: true }); }, [apiClient]);
+  if (loading) return <LoadingState label="Loading procurement evaluation" />;
+  if (error) return <ErrorState message={error} onRetry={() => load({ initial: true })} />;
+  return <section>
+    <div className="page-heading"><div><p className="eyebrow">CareSignal shadow source</p><h1>Procurement evaluation</h1><p className="muted">Official Find a Tender and Contracts Finder evidence. Shadow-only: these records cannot create live opportunities.</p></div><RefreshButton busy={refreshing} onClick={load} /></div>
+    <div className="source-counts">{Object.entries(result.counts || {}).map(([key, value]) => <span key={key}>{titleCase(key)} <strong>{value}</strong></span>)}<span>Total retained <strong>{result.total || 0}</strong></span></div>
+    {(result.items || []).length === 0 ? <div className="state-card"><strong>No procurement evaluation records yet.</strong><p>Run the bounded Public procurement source from Sources.</p></div> : <div className="table-wrap"><table><thead><tr><th>Notice</th><th>Buyer</th><th>Stage</th><th>Assessment</th><th>Incremental context</th></tr></thead><tbody>{result.items.map((item) => { const metadata = item.metadata || {}; return <tr key={item.id}><td><strong>{item.title}</strong><span className="cell-subtitle">{formatDate(item.publication_date)} · {titleCase(metadata.procurement_platform)}</span>{item.source_url && <a href={item.source_url} target="_blank" rel="noreferrer">View official notice</a>}</td><td>{item.buyer || "Unknown"}<span className="cell-subtitle">{item.location || "Location not stated"}</span></td><td>{titleCase(metadata.notice_stage)}</td><td><Badge tone={metadata.strong_candidate ? "approved" : metadata.procurement_category === "UNCERTAIN" ? "pending" : "neutral"}>{titleCase(metadata.procurement_category)}</Badge><span className="cell-subtitle">Rule confidence {Math.round(Number(item.confidence || metadata.procurement_confidence || 0) * 100)}%</span><span className="cell-subtitle">{metadata.procurement_reason}</span></td><td><strong>{item.appears_incremental ? "No exact buyer evidence found" : "Related evidence exists"}</strong><span className="cell-subtitle">{item.related_signal_count || 0} planning/recruitment signals · {item.related_opportunity_count || 0} opportunities</span><span className="cell-subtitle">Operator {item.operator_known ? "named at award" : "not yet known"}</span></td></tr>; })}</tbody></table></div>}
   </section>;
 }
 
@@ -1032,6 +1055,6 @@ export default function App() {
   const detailNotice = new URLSearchParams(listQuery).get("notice") || "";
   const showVertical = vertical === "ALL";
   return <Shell user={auth.user} onLogout={auth.logout} onNavigate={navigate} currentPath={path} vertical={vertical} onVerticalChange={onVerticalChange}>
-    {detailMatch ? <SignalDetail key={vertical} signalId={detailMatch[2]} apiClient={scopedApiClient} queueMode={detailMode === "inbox"} unmatchedMode={detailMode === "unmatched"} initialNotice={detailNotice} onBack={() => navigate(detailMode === "inbox" ? "/inbox" : detailMode === "unmatched" ? "/unmatched" : "/history")} onReviewed={({ message, nextId }) => navigate(nextId ? `/inbox/${nextId}?notice=${encodeURIComponent(message)}` : `/inbox?notice=${encodeURIComponent(message)}`)} /> : opportunityMatch ? <OpportunityDetail key={vertical} opportunityId={opportunityMatch[1]} apiClient={scopedApiClient} onBack={() => navigate("/opportunities")} /> : route === "/inbox" ? <ReviewInboxPage key={vertical} apiClient={scopedApiClient} onNavigate={navigate} initialQuery={listQuery} showVertical={showVertical} /> : route === "/history" ? <ReviewedSignalsPage key={vertical} apiClient={scopedApiClient} onNavigate={navigate} initialQuery={listQuery} showVertical={showVertical} /> : route === "/unmatched" ? <UnmatchedSignalsPage key={vertical} apiClient={scopedApiClient} onNavigate={navigate} initialQuery={listQuery} showVertical={showVertical} /> : route === "/match-review" ? <MatchReviewPage key={vertical} apiClient={scopedApiClient} onNavigate={navigate} showVertical={showVertical} /> : route === "/opportunities" ? <OpportunitiesPage key={vertical} apiClient={scopedApiClient} onNavigate={navigate} showVertical={showVertical} /> : route === "/sources" ? <SourcesPage key={vertical} apiClient={scopedApiClient} selectedVertical={vertical} /> : route === "/organisations" ? <OrganisationsPage key={vertical} apiClient={scopedApiClient} /> : route === "/backtesting" ? <BacktestingPage key={vertical} apiClient={scopedApiClient} selectedVertical={vertical} /> : <Dashboard key={vertical} apiClient={scopedApiClient} onNavigate={navigate} />}
+    {detailMatch ? <SignalDetail key={vertical} signalId={detailMatch[2]} apiClient={scopedApiClient} queueMode={detailMode === "inbox"} unmatchedMode={detailMode === "unmatched"} initialNotice={detailNotice} onBack={() => navigate(detailMode === "inbox" ? "/inbox" : detailMode === "unmatched" ? "/unmatched" : "/history")} onReviewed={({ message, nextId }) => navigate(nextId ? `/inbox/${nextId}?notice=${encodeURIComponent(message)}` : `/inbox?notice=${encodeURIComponent(message)}`)} /> : opportunityMatch ? <OpportunityDetail key={vertical} opportunityId={opportunityMatch[1]} apiClient={scopedApiClient} onBack={() => navigate("/opportunities")} /> : route === "/inbox" ? <ReviewInboxPage key={vertical} apiClient={scopedApiClient} onNavigate={navigate} initialQuery={listQuery} showVertical={showVertical} /> : route === "/history" ? <ReviewedSignalsPage key={vertical} apiClient={scopedApiClient} onNavigate={navigate} initialQuery={listQuery} showVertical={showVertical} /> : route === "/unmatched" ? <UnmatchedSignalsPage key={vertical} apiClient={scopedApiClient} onNavigate={navigate} initialQuery={listQuery} showVertical={showVertical} /> : route === "/match-review" ? <MatchReviewPage key={vertical} apiClient={scopedApiClient} onNavigate={navigate} showVertical={showVertical} /> : route === "/opportunities" ? <OpportunitiesPage key={vertical} apiClient={scopedApiClient} onNavigate={navigate} showVertical={showVertical} /> : route === "/sources" ? <SourcesPage key={vertical} apiClient={scopedApiClient} selectedVertical={vertical} /> : route === "/procurement" ? <ProcurementEvaluationPage key={vertical} apiClient={scopedApiClient} /> : route === "/organisations" ? <OrganisationsPage key={vertical} apiClient={scopedApiClient} /> : route === "/backtesting" ? <BacktestingPage key={vertical} apiClient={scopedApiClient} selectedVertical={vertical} /> : <Dashboard key={vertical} apiClient={scopedApiClient} onNavigate={navigate} />}
   </Shell>;
 }
