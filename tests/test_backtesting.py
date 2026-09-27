@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
+from pathlib import Path
 
 from app.backtesting import (
     BacktestBounds,
@@ -13,6 +14,12 @@ from app.backtesting import (
     replay_case,
     run_fingerprint,
 )
+
+
+def test_backtest_insert_targets_partial_idempotency_index() -> None:
+    source = Path("backend/app/backtest_repository.py").read_text(encoding="utf-8")
+    assert "ON CONFLICT (run_fingerprint)" in source
+    assert "WHERE status IN ('RUNNING', 'SUCCESS')" in source
 
 
 def case(**overrides):

@@ -308,7 +308,9 @@ def execute_backtest(
                    run_fingerprint, benchmark_version, engine_version, vertical,
                    as_of, status, parameters, corpus_version
                ) VALUES (%s, %s, %s, %s, %s, 'RUNNING', %s, %s)
-               ON CONFLICT (run_fingerprint) DO NOTHING RETURNING id""",
+               ON CONFLICT (run_fingerprint)
+               WHERE status IN ('RUNNING', 'SUCCESS')
+               DO NOTHING RETURNING id""",
             (
                 fingerprint,
                 benchmark_version,
