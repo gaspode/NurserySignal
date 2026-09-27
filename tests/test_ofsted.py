@@ -63,6 +63,16 @@ def _tagged_report() -> bytes:
     )
 
 
+def _tagged_report_without_county() -> bytes:
+    return (
+        b"%PDF-1.7 /ActualText(Registered provider: ) "
+        b"/ActualText(Within Reach Services Limited) "
+        b"/ActualText(Registered provider address: ) "
+        b"/ActualText(c/o Hazlewoods LLP, Windsor House, Bayshill Road, "
+        b"Cheltenham GL50 3AT) /ActualText(Responsible individual: )"
+    )
+
+
 def _ods(path: Path) -> None:
     headers = [
         "Web link",
@@ -182,6 +192,11 @@ def test_known_urn_page_and_report_extract_provider_identity_without_home_addres
     assert "home_address" not in report
     assert "manager" not in report
 
+    no_county = parse_report_pdf(_tagged_report_without_county())
+    assert no_county["provider_registered_locality"] == "Cheltenham"
+    assert no_county["provider_registered_region"] is None
+    assert no_county["provider_registered_postcode"] == "GL50 3AT"
+
 
 def test_urn_enrichment_uses_latest_public_report_and_handles_no_report() -> None:
     requested = []
@@ -227,7 +242,7 @@ def test_urn_enrichment_evidence_identity_ignores_retrieval_time(monkeypatch) ->
         **parse_provider_page(_provider_page(), "2766766"),
         **parse_report_pdf(_tagged_report()),
         "status": "SUCCEEDED",
-        "parser_version": "ofsted-urn-v1",
+        "parser_version": "ofsted-urn-v2",
     }
     settings = Settings(evidence_bucket="private-evidence")
     assert persist_ofsted_urn_enrichment(

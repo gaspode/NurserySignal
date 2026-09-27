@@ -14,10 +14,55 @@ from app.repository import store_ofsted_urn_enrichment
 from app.storage import put_raw_evidence
 
 OFSTED_PROVIDER_URL = "https://reports.ofsted.gov.uk/provider/2/{urn}"
-PARSER_VERSION = "ofsted-urn-v1"
+PARSER_VERSION = "ofsted-urn-v2"
 USER_AGENT = "SignalHub/1.0"
 MAX_PAGE_BYTES = 2 * 1024 * 1024
 MAX_REPORT_BYTES = 12 * 1024 * 1024
+KNOWN_PROVIDER_REGIONS = {
+    "bedfordshire",
+    "berkshire",
+    "buckinghamshire",
+    "cambridgeshire",
+    "cheshire",
+    "cornwall",
+    "cumbria",
+    "derbyshire",
+    "devon",
+    "dorset",
+    "east sussex",
+    "essex",
+    "gloucestershire",
+    "greater london",
+    "greater manchester",
+    "hampshire",
+    "herefordshire",
+    "hertfordshire",
+    "isle of wight",
+    "kent",
+    "lancashire",
+    "leicestershire",
+    "lincolnshire",
+    "merseyside",
+    "norfolk",
+    "north yorkshire",
+    "northamptonshire",
+    "northumberland",
+    "nottinghamshire",
+    "oxfordshire",
+    "shropshire",
+    "somerset",
+    "south yorkshire",
+    "staffordshire",
+    "suffolk",
+    "surrey",
+    "tyne and wear",
+    "warwickshire",
+    "west midlands",
+    "west sussex",
+    "west yorkshire",
+    "wiltshire",
+    "worcestershire",
+}
 
 
 class OfstedUrnEnrichmentError(RuntimeError):
@@ -232,8 +277,12 @@ def parse_report_pdf(report: bytes) -> dict[str, Any]:
         else provider_address
     )
     parts = [part.strip() for part in (address_without_postcode or "").split(",") if part.strip()]
-    provider_region = parts[-1] if len(parts) >= 2 else None
-    provider_locality = parts[-2] if len(parts) >= 2 else (parts[-1] if parts else None)
+    provider_region = (
+        parts[-1] if parts and parts[-1].lower() in KNOWN_PROVIDER_REGIONS else None
+    )
+    provider_locality = (
+        parts[-2] if provider_region and len(parts) >= 2 else (parts[-1] if parts else None)
+    )
     return {
         "registered_provider_name": provider_name,
         "provider_registered_address": provider_address,
