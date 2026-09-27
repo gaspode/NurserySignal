@@ -249,3 +249,67 @@ Initial validation gate passed:
 - two ambiguous Companies House candidates remain for explicit admin review;
 - keep both sources manual-only while regulatory matching quality is assessed, then decide a
   cadence aligned with Ofsted's publication frequency and the 30-day company-profile cache.
+
+## Phase 11 — Historical backtesting and architecture evidence — NEXT
+
+Before adding more collectors or undertaking a substantial matching/data-model redesign, build a
+historical backtesting framework that measures how well SignalHub could actually have discovered
+and resolved known real-world openings using only information available at the time.
+
+The backtest must explicitly prevent hindsight/data leakage. For each historical evaluation date,
+SignalHub may use only source records and source-state that would genuinely have been available on
+or before that date. Current Companies House state, later Ofsted registration data, later website
+content, later recruitment adverts and other future evidence must not be allowed to improve an
+earlier historical decision.
+
+Start with a bounded benchmark set of known NurserySignal and CareSignal openings/registrations
+from approximately 2025–2026, subject to source-history availability and reliable outcome labels.
+
+For each known opening, capture:
+- first date SignalHub could have discovered the opportunity;
+- which source produced the first useful signal;
+- exactly what evidence was available at that point;
+- whether the operator could be identified correctly at that point;
+- whether the physical site/project could be identified correctly at that point;
+- when later independent evidence corroborated or contradicted the opportunity;
+- how many false opportunities and Match/Organisation Review items were generated along the way;
+- final outcome and whether SignalHub's opportunity lifecycle matched reality.
+
+Aggregate at least:
+- recall of genuine openings/material expansions;
+- precision of generated opportunities;
+- lead-time distribution, including median and useful percentiles;
+- organisation-resolution accuracy;
+- site/project-resolution accuracy;
+- manual reviews required per genuine opportunity;
+- incremental source value: discoveries/corroborations uniquely contributed by each source.
+
+The framework should preserve per-source provenance and make benchmark runs reproducible so later
+matching/policy changes can be compared against the same historical cases.
+
+Architecture gate:
+- do not begin a broad rewrite solely from theoretical design preferences;
+- use backtest results to decide which weakness materially limits performance;
+- specifically evaluate whether the next priority should be:
+  - a first-class Site entity with UPRN/address/geospatial identity;
+  - explicit Observation → Event → Opportunity separation;
+  - separate organisation-resolution and opportunity-resolution scoring;
+  - explainable probabilistic match weights calibrated from human decisions;
+  - lifecycle derived from positive and negative/counter-evidence;
+  - or another bottleneck exposed by the benchmark.
+
+Manual Link/Reject/organisation-resolution decisions should increasingly be retained as labelled
+relationship outcomes suitable for evaluation and future calibration, without making automated AI
+decisions authoritative.
+
+Until the benchmark exists:
+- finish the current Ofsted/Companies House validation and enrichment refinements;
+- keep CareSignal/NurserySignal production behaviour stable;
+- avoid broad automatic matching-threshold changes;
+- avoid adding additional sources unless they close an immediately demonstrated operational gap.
+
+Revised sequencing:
+1. Finish current Ofsted/Companies House enrichment validation.
+2. Build and run historical backtesting.
+3. Use measured results to prioritise data-model/matching architecture changes.
+4. Only then add further collectors where the backtest demonstrates a coverage or lead-time gap.
