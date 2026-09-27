@@ -424,6 +424,27 @@ describe("admin frontend", () => {
     expect(screen.getByText("The stored planning evidence is commercially ambiguous.")).toBeInTheDocument();
   });
 
+  it("marks Ofsted regulatory evidence as outside AI shadow scope", async () => {
+    const ofsted = detail("APPROVED");
+    ofsted.source_type = "ofsted";
+    ofsted.vertical = "CHILDRENS_HOME";
+    ofsted.title = "Ofsted children's home registration";
+    ofsted.ai_reviews = [];
+    const apiClient = vi.fn().mockResolvedValue(ofsted);
+    render(<SignalDetail signalId="signal-1" apiClient={apiClient} onBack={vi.fn()} />);
+    expect(await screen.findByText(/Not applicable to Ofsted regulatory evidence/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Run AI/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Change to Rejected" })).toBeInTheDocument();
+    expect(apiClient).toHaveBeenCalledTimes(1);
+  });
+
+  it("labels Ofsted list rows as not applicable rather than missing AI", async () => {
+    const item = { ...approvedItem, source_type: "ofsted", vertical: "CHILDRENS_HOME" };
+    const apiClient = vi.fn().mockResolvedValue(listResult([item]));
+    render(<ReviewedSignalsPage apiClient={apiClient} onNavigate={vi.fn()} />);
+    expect(await screen.findByText("Not applicable")).toBeInTheDocument();
+  });
+
   it("links dashboard metrics to the inbox and reviewed history", async () => {
     const apiClient = vi.fn()
       .mockResolvedValueOnce({ total: 2 })

@@ -3,9 +3,10 @@ from __future__ import annotations
 import json
 from uuid import uuid4
 
+import pytest
 from app.config import Settings
 from app.handler import handler
-from app.shadow_review import reevaluate_ai_shadow
+from app.shadow_review import UnsupportedShadowSourceError, reevaluate_ai_shadow
 
 
 def event(path: str, claims: dict | None = None) -> dict:
@@ -50,11 +51,25 @@ def test_ai_review_endpoint_returns_shadow_result(monkeypatch):
     assert json.loads(response["body"]) == expected
 
 
+def test_ai_review_endpoint_rejects_unsupported_source(monkeypatch):
+    signal_id = str(uuid4())
+    monkeypatch.setattr(
+        "app.handler.reevaluate_ai_shadow",
+        lambda settings, value: (_ for _ in ()).throw(UnsupportedShadowSourceError("ofsted")),
+    )
+    response = handler(event(f"/admin/signals/{signal_id}/ai-review"), None)
+    assert response["statusCode"] == 400
+    assert json.loads(response["body"]) == {
+        "error": "ai_shadow_not_supported_for_source"
+    }
+
+
 def test_re_evaluation_is_idempotent_and_does_not_call_bedrock(monkeypatch):
     signal_id = str(uuid4())
     stored = {"id": uuid4(), **review()}
     monkeypatch.setattr(
-        "app.shadow_review.get_raw_signal", lambda settings, value: {"id": signal_id}
+        "app.shadow_review.get_raw_signal",
+        lambda settings, value: {"id": signal_id, "source_type": "planning"},
     )
     monkeypatch.setattr("app.shadow_review.get_ai_review", lambda *args: stored)
     monkeypatch.setattr("app.shadow_review.get_signal_review_status", lambda *args: "PENDING")
@@ -72,7 +87,8 @@ def test_re_evaluation_saves_success_without_changing_review_status(monkeypatch)
     signal_id = str(uuid4())
     saved = []
     monkeypatch.setattr(
-        "app.shadow_review.get_raw_signal", lambda settings, value: {"id": signal_id}
+        "app.shadow_review.get_raw_signal",
+        lambda settings, value: {"id": signal_id, "source_type": "planning"},
     )
     monkeypatch.setattr("app.shadow_review.get_ai_review", lambda *args: None)
     monkeypatch.setattr("app.shadow_review.get_signal_review_status", lambda *args: "PENDING")
@@ -91,7 +107,8 @@ def test_bedrock_failure_is_saved_without_changing_review_status(monkeypatch):
     failed = review("FAILED")
     saved = []
     monkeypatch.setattr(
-        "app.shadow_review.get_raw_signal", lambda settings, value: {"id": signal_id}
+        "app.shadow_review.get_raw_signal",
+        lambda settings, value: {"id": signal_id, "source_type": "planning"},
     )
     monkeypatch.setattr("app.shadow_review.get_ai_review", lambda *args: None)
     monkeypatch.setattr("app.shadow_review.get_signal_review_status", lambda *args: "PENDING")
@@ -104,3 +121,21 @@ def test_bedrock_failure_is_saved_without_changing_review_status(monkeypatch):
     assert result["failure_category"] == "THROTTLED"
     assert result["human_review_status"] == "PENDING"
     assert len(saved) == 1
+
+
+def test_ofsted_re_evaluation_is_not_supported(monkeypatch):
+    signal_id = str(uuid4())
+    monkeypatch.setattr(
+        "app.shadow_review.get_raw_signal",
+        lambda settings, value: {
+            "id": signal_id,
+            "source_type": "ofsted",
+            "vertical": "CHILDRENS_HOME",
+        },
+    )
+    monkeypatch.setattr(
+        "app.shadow_review.evaluate_shadow",
+        lambda *args: (_ for _ in ()).throw(AssertionError("Bedrock must not be called")),
+    )
+    with pytest.raises(UnsupportedShadowSourceError):
+        reevaluate_ai_shadow(Settings(), signal_id)

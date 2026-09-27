@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.ai_shadow import evaluate_shadow, prompt_version_for
+from app.ai_shadow import SUPPORTED_SHADOW_SOURCE_TYPES, evaluate_shadow, prompt_version_for
 from app.config import Settings
 from app.repository import (
     get_ai_review,
@@ -10,6 +10,10 @@ from app.repository import (
     get_signal_review_status,
     save_ai_review,
 )
+
+
+class UnsupportedShadowSourceError(ValueError):
+    pass
 
 
 def _result(
@@ -40,6 +44,8 @@ def reevaluate_ai_shadow(settings: Settings, signal_id: str) -> dict[str, Any] |
     if raw is None:
         return None
     source_type = str(raw.get("source_type") or "").lower()
+    if source_type not in SUPPORTED_SHADOW_SOURCE_TYPES:
+        raise UnsupportedShadowSourceError(source_type)
     prompt_version = prompt_version_for(source_type, settings, raw.get("vertical"))
     existing = get_ai_review(settings, signal_id, settings.ai_model_id, prompt_version)
     review_status = get_signal_review_status(settings, signal_id)

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from app.ai_shadow import evaluate_shadow, prompt_version_for
+from app.ai_shadow import SUPPORTED_SHADOW_SOURCE_TYPES, evaluate_shadow, prompt_version_for
 from app.config import Settings
 from app.logging import configure_logging
 from app.queueing import EnrichmentMessage
@@ -42,10 +42,10 @@ def process_message(settings: Settings, body: str) -> None:
         opportunity["opportunity_id"],
         opportunity["linked"],
     )
-    if getattr(settings, "ai_shadow_enabled", False) and raw.get("source_type") in {
-        "planning",
-        "recruitment",
-    }:
+    if (
+        getattr(settings, "ai_shadow_enabled", False)
+        and raw.get("source_type") in SUPPORTED_SHADOW_SOURCE_TYPES
+    ):
         model_id = getattr(settings, "ai_model_id", "eu.amazon.nova-lite-v1:0")
         source_type = str(raw.get("source_type") or "").lower()
         prompt_version = prompt_version_for(source_type, settings, raw.get("vertical"))

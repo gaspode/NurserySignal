@@ -237,6 +237,8 @@ Validation gate:
 - Organisation resolution review now compares cached official company profiles with the
   originating SignalHub signals, locations, aliases and opportunities. Rejected candidate sets
   remain historical and are not re-offered until the upstream candidate set materially changes.
+- Ofsted regulatory evidence is explicitly outside the planning/recruitment AI shadow scope;
+  SignalHub labels it not applicable and prevents cross-source prompt fallback.
 
 Initial validation gate passed:
 - credentials, bounded source runs, idempotency, source health and queue/DLQ state are verified;

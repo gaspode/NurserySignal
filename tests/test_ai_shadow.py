@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from uuid import uuid4
 
+import pytest
 from app.ai_shadow import evaluate_shadow, prompt_version_for, system_prompt_for
 from app.config import Settings
 from app.worker import handler
@@ -105,6 +106,13 @@ def test_care_prompts_are_vertical_and_source_specific():
     assert "residential care home" in system_prompt_for("planning", "CHILDRENS_HOME")
     assert "RELEVANT_ROUTINE" in system_prompt_for("recruitment", "CHILDRENS_HOME")
     assert "nursery/early-years" in system_prompt_for("planning", "NURSERY")
+
+
+def test_ofsted_does_not_fall_through_to_a_planning_or_recruitment_prompt():
+    with pytest.raises(ValueError, match="not supported"):
+        system_prompt_for("ofsted", "CHILDRENS_HOME")
+    with pytest.raises(ValueError, match="not supported"):
+        evaluate_shadow({**raw(), "source_type": "ofsted"}, settings())
 
 
 def test_shadow_accepts_each_allowed_recommendation(monkeypatch):

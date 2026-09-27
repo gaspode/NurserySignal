@@ -24,6 +24,7 @@ RECRUITMENT_PROMPT_VERSION = "recruitment-shadow-v3"
 PLANNING_PROMPT_VERSION = "planning-shadow-v3"
 CARE_PLANNING_PROMPT_VERSION = "care-planning-shadow-v1"
 CARE_RECRUITMENT_PROMPT_VERSION = "care-recruitment-shadow-v1"
+SUPPORTED_SHADOW_SOURCE_TYPES = frozenset({"planning", "recruitment"})
 RECRUITMENT_SYSTEM_PROMPT = """NurserySignal recruitment shadow review,
 prompt version recruitment-shadow-v3.
 Answer ONLY: is this a genuine and commercially relevant recruitment signal associated
@@ -105,6 +106,8 @@ def prompt_version_for(
 
 
 def system_prompt_for(source_type: str | None, vertical: str | None = None) -> str:
+    if source_type not in SUPPORTED_SHADOW_SOURCE_TYPES:
+        raise ValueError("AI shadow review is not supported for this source type")
     if vertical == "CHILDRENS_HOME":
         return (
             CARE_PLANNING_SYSTEM_PROMPT
@@ -257,6 +260,8 @@ def _parse(
 def evaluate_shadow(raw: dict[str, Any], settings: Settings) -> dict[str, Any]:
     started = time.perf_counter()
     source_type = str(raw.get("source_type") or "").lower()
+    if source_type not in SUPPORTED_SHADOW_SOURCE_TYPES:
+        raise ValueError("AI shadow review is not supported for this source type")
     vertical = str(raw.get("vertical") or "NURSERY").upper()
     try:
         client = boto3.client(

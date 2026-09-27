@@ -40,7 +40,7 @@ from app.repository import (
     unlink_signal_from_opportunity,
 )
 from app.service import EnrichmentQueueError, SignalConflictError, ingest_signal, parse_json_payload
-from app.shadow_review import reevaluate_ai_shadow
+from app.shadow_review import UnsupportedShadowSourceError, reevaluate_ai_shadow
 from app.source_runs import finish_run, list_runs, start_run
 from app.storage import EvidencePersistenceError, presigned_evidence_url
 from app.verticals import ALL_VERTICALS, registry_payload, validate_vertical_filter
@@ -550,7 +550,10 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 admin_error = _require_admin(claims, settings)
                 if admin_error:
                     return admin_error
-                result = reevaluate_ai_shadow(settings, signal_id)
+                try:
+                    result = reevaluate_ai_shadow(settings, signal_id)
+                except UnsupportedShadowSourceError:
+                    return _response(400, {"error": "ai_shadow_not_supported_for_source"})
                 return _response(200, result) if result else _response(404, {"error": "not_found"})
             if action == "bulk-review" and method == "POST":
                 admin_error = _require_admin(claims, settings)
