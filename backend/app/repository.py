@@ -1892,15 +1892,30 @@ def _consolidate_system_duplicates(settings: Settings, *, actor: str) -> int:
 
 
 def recalculate_opportunity_creation(
-    settings: Settings, *, actor: str, limit: int = 100, signal_ids: list[str] | None = None
+    settings: Settings,
+    *,
+    actor: str,
+    limit: int = 25,
+    offset: int = 0,
+    signal_ids: list[str] | None = None,
+    vertical: str = "ALL",
 ) -> dict[str, Any]:
     """Boundedly recalculate opportunity creation from stored signal evidence."""
-    limit = min(max(limit, 1), 100)
-    merged = _consolidate_system_duplicates(settings, actor=actor)
-    review_cleanup = _cleanup_match_reviews(settings, limit=limit, actor=actor)
+    limit = min(max(limit, 1), 25)
+    offset = min(max(offset, 0), 75)
+    vertical = validate_vertical_filter(vertical)
+    merged = _consolidate_system_duplicates(settings, actor=actor) if offset == 0 else 0
+    review_cleanup = (
+        _cleanup_match_reviews(settings, limit=limit, actor=actor)
+        if offset == 0
+        else {"closed_superseded": 0, "closed_linked": 0}
+    )
     with connection(settings) as conn:
         params: list[Any] = []
         where = "rs.source_type IN ('planning', 'recruitment')"
+        if vertical != "ALL":
+            where += " AND rs.vertical = %s"
+            params.append(vertical)
         if signal_ids:
             where += " AND rs.id = ANY(%s::uuid[])"
             params.append(signal_ids[:limit])
@@ -1909,8 +1924,8 @@ def recalculate_opportunity_creation(
                        rs.discovered_at, rs.title, rs.raw_text, rs.location_hint,
                        rs.organisation_hint, rs.metadata, rs.vertical, se.review_status
                 FROM raw_signals rs LEFT JOIN signal_enrichments se ON se.raw_signal_id = rs.id
-                WHERE {where} ORDER BY rs.discovered_at DESC LIMIT %s""",
-            [*params, limit],
+                WHERE {where} ORDER BY rs.discovered_at DESC, rs.id LIMIT %s OFFSET %s""",
+            [*params, limit, offset],
         ).fetchall()
     selected = 0
     created = 0
@@ -2040,6 +2055,8 @@ def recalculate_opportunity_creation(
         target_type="signal",
         details={
             "selected": selected,
+            "offset": offset,
+            "vertical": vertical,
             "created": created,
             "linked": linked,
             "reused": reused,
@@ -2056,6 +2073,8 @@ def recalculate_opportunity_creation(
     return {
         "operation_id": operation,
         "selected": selected,
+        "offset": offset,
+        "vertical": vertical,
         "created": created,
         "linked": linked,
         "reused": reused,

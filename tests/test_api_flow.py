@@ -261,7 +261,13 @@ def test_opportunity_recalculate_requires_admin_and_is_bounded(monkeypatch) -> N
         None,
     )
     assert response["statusCode"] == 200
-    assert captured == {"actor": "staff", "limit": 100, "signal_ids": [signal_id]}
+    assert captured == {
+        "actor": "staff",
+        "limit": 25,
+        "offset": 0,
+        "signal_ids": [signal_id],
+        "vertical": "NURSERY",
+    }
 
     denied = handler(
         event(

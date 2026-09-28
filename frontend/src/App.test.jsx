@@ -210,7 +210,7 @@ describe("admin frontend", () => {
     expect(screen.getByText("There are no pending signals waiting for review.")).toBeInTheDocument();
   });
 
-  it("uses a custom confirmation modal and opens the next pending signal after approval", async () => {
+  it("reviews a signal directly from detail and opens the next pending signal", async () => {
     const nativeConfirm = vi.spyOn(window, "confirm");
     const onReviewed = vi.fn();
     const apiClient = vi.fn()
@@ -220,12 +220,8 @@ describe("admin frontend", () => {
     render(<SignalDetail signalId="signal-1" apiClient={apiClient} queueMode onReviewed={onReviewed} onBack={vi.fn()} />);
     expect(await screen.findByText("A new nursery is proposed.")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Approve" }));
-    expect(screen.getByRole("dialog")).toHaveTextContent("Approve this signal?");
-    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
-    expect(apiClient).toHaveBeenCalledTimes(1);
-    await userEvent.click(screen.getByRole("button", { name: "Approve" }));
-    await userEvent.click(screen.getByRole("dialog").querySelector(".button.approve"));
     await waitFor(() => expect(onReviewed).toHaveBeenCalledWith({ message: "Signal approved successfully.", nextId: "signal-2" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(nativeConfirm).not.toHaveBeenCalled();
   });
 
@@ -237,9 +233,8 @@ describe("admin frontend", () => {
     render(<SignalDetail signalId="signal-1" apiClient={apiClient} onBack={vi.fn()} />);
     expect(await screen.findByText("Decision recorded")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Change to Rejected" }));
-    expect(screen.getByRole("dialog")).toHaveTextContent("Current decision: APPROVED");
-    await userEvent.click(screen.getByRole("dialog").querySelector(".button.reject"));
     expect(await screen.findByRole("status")).toHaveTextContent("Signal rejected successfully.");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(screen.queryByText("rejeced")).not.toBeInTheDocument();
     expect(apiClient).toHaveBeenCalledWith("/admin/signals/signal-1/reject", { method: "POST" });
   });
@@ -550,6 +545,7 @@ describe("admin frontend", () => {
     expect(restoredVertical({ getItem: () => "DENTAL" })).toBe("NURSERY");
     expect(verticalScopedPath("/admin/signals?review_status=PENDING", "NURSERY")).toContain("vertical=NURSERY");
     expect(verticalScopedPath("/admin/opportunities?limit=10", "ALL")).toContain("vertical=ALL");
+    expect(verticalScopedPath("/admin/opportunities/recalculate", "CHILDRENS_HOME")).toContain("vertical=CHILDRENS_HOME");
   });
 
   it("refreshes the pending inbox without changing its pagination state or navigation", async () => {
@@ -634,7 +630,7 @@ describe("admin frontend", () => {
   it("refreshes opportunity data after recalculation succeeds", async () => {
     const apiClient = vi.fn()
       .mockResolvedValueOnce({ items: [], total: 0 })
-      .mockResolvedValueOnce({ selected: 26, created: 5, routine_only_demoted: 15 })
+      .mockResolvedValueOnce({ selected: 24, created: 5, routine_only_demoted: 15 })
       .mockResolvedValueOnce({ items: [{ id: "opp-2", name: "New nursery", lifecycle_stage: "PLANNING", change_type: "OPENING", confidence: 0.86, signal_count: 1 }], total: 1 });
     render(<OpportunitiesPage apiClient={apiClient} onNavigate={vi.fn()} />);
     await screen.findByRole("heading", { name: "Opportunities" });
@@ -642,6 +638,25 @@ describe("admin frontend", () => {
     await userEvent.click(screen.getByRole("dialog").querySelector(".button.approve"));
     expect(await screen.findByText("New nursery")).toBeInTheDocument();
     expect(apiClient).toHaveBeenLastCalledWith("/admin/opportunities?limit=10&offset=0");
+  });
+
+  it("recalculates opportunities in bounded sequential batches", async () => {
+    const apiClient = vi.fn()
+      .mockResolvedValueOnce({ items: [], total: 0 })
+      .mockResolvedValueOnce({ selected: 25, created: 1, reused: 2, merged: 1, routine_only_demoted: 0 })
+      .mockResolvedValueOnce({ selected: 3, created: 0, reused: 1, merged: 0, routine_only_demoted: 1 })
+      .mockResolvedValueOnce({ items: [], total: 0 });
+    render(<OpportunitiesPage apiClient={apiClient} onNavigate={vi.fn()} />);
+    await screen.findByRole("heading", { name: "Opportunities" });
+    await userEvent.click(screen.getByRole("button", { name: "Recalculate opportunities" }));
+    await userEvent.click(screen.getByRole("dialog").querySelector(".button.approve"));
+    expect(await screen.findByRole("status")).toHaveTextContent("Recalculated 28 signals");
+    expect(apiClient).toHaveBeenCalledWith("/admin/opportunities/recalculate", {
+      method: "POST", body: JSON.stringify({ limit: 25, offset: 0 }),
+    });
+    expect(apiClient).toHaveBeenCalledWith("/admin/opportunities/recalculate", {
+      method: "POST", body: JSON.stringify({ limit: 25, offset: 25 }),
+    });
   });
 
   it("shows unmatched signals and can create an opportunity from preserved evidence", async () => {

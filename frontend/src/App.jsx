@@ -14,7 +14,7 @@ export function restoredVertical(storage = window.sessionStorage) {
 
 export function verticalScopedPath(requestPath, vertical) {
   const [pathname, queryString] = requestPath.split("?", 2);
-  if (!["/admin/signals", "/admin/opportunities", "/admin/match-review", "/admin/organisations", "/admin/sources", "/admin/backtesting", "/admin/procurement-evaluation"].includes(pathname)) return requestPath;
+  if (!["/admin/signals", "/admin/opportunities", "/admin/opportunities/recalculate", "/admin/match-review", "/admin/organisations", "/admin/sources", "/admin/backtesting", "/admin/procurement-evaluation"].includes(pathname)) return requestPath;
   const params = new URLSearchParams(queryString || "");
   params.set("vertical", vertical);
   return `${pathname}?${params.toString()}`;
@@ -532,12 +532,21 @@ function OpportunityRecalculateTool({ apiClient, onComplete }) {
   const [open, setOpen] = useState(false); const [busy, setBusy] = useState(false); const [error, setError] = useState("");
   async function recalculate() {
     setBusy(true); setError("");
-    try { const result = await apiClient("/admin/opportunities/recalculate", { method: "POST", body: JSON.stringify({ limit: 100 }) }); setOpen(false); onComplete(`Recalculated ${result.selected} signals; ${result.created} opportunities created, ${result.reused || 0} opportunities reused, ${result.merged || 0} merged, and ${result.routine_only_demoted} routine-only opportunities demoted.`); } catch (e) { setError(e.message); } finally { setBusy(false); }
+    try {
+      const result = { selected: 0, created: 0, reused: 0, merged: 0, routine_only_demoted: 0 };
+      for (let offset = 0; offset < 100; offset += 25) {
+        const batch = await apiClient("/admin/opportunities/recalculate", { method: "POST", body: JSON.stringify({ limit: 25, offset }) });
+        for (const key of Object.keys(result)) result[key] += Number(batch[key] || 0);
+        if (Number(batch.selected || 0) < 25) break;
+      }
+      setOpen(false);
+      onComplete(`Recalculated ${result.selected} signals; ${result.created} opportunities created, ${result.reused} opportunities reused, ${result.merged} merged, and ${result.routine_only_demoted} routine-only opportunities demoted.`);
+    } catch (e) { setError(e.message); } finally { setBusy(false); }
   }
   const displayError = error === "admin_request_failed"
     ? "The recalculation could not be completed. Please try again."
     : error;
-  return <><button className="button secondary" onClick={() => { setError(""); setOpen(true); }}>Recalculate opportunities</button>{open && <ConfirmationModal title="Recalculate opportunities?" message="Up to 100 stored planning and recruitment signals will be re-evaluated from preserved evidence. Review history and source evidence remain intact." confirmLabel="Recalculate" busy={busy} error={displayError} onCancel={() => setOpen(false)} onConfirm={recalculate} />}</>;
+  return <><button className="button secondary" onClick={() => { setError(""); setOpen(true); }}>Recalculate opportunities</button>{open && <ConfirmationModal title="Recalculate opportunities?" message="Up to 100 stored planning and recruitment signals in the selected vertical will be re-evaluated in safe bounded batches. Review history and source evidence remain intact." confirmLabel="Recalculate" busy={busy} error={displayError} onCancel={() => setOpen(false)} onConfirm={recalculate} />}</>;
 }
 
 function SignalListPage({ apiClient, onNavigate, initialQuery = "", mode, showVertical = false }) {
@@ -861,21 +870,17 @@ export function SignalDetail({ signalId, apiClient, onBack, queueMode = false, u
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState(initialNotice);
-  const [modalAction, setModalAction] = useState(null);
   const [busy, setBusy] = useState(false);
   const [aiBusy, setAiBusy] = useState(false);
   const [opportunityBusy, setOpportunityBusy] = useState(false);
   const load = async () => { setLoading(true); setError(""); try { setSignal(await apiClient(`/admin/signals/${signalId}`)); } catch (loadError) { setError(loadError.message); } finally { setLoading(false); } };
   useEffect(() => { load(); }, [signalId]);
-  async function confirmReview() {
-    const action = modalAction;
-    if (!action) return;
+  async function review(action) {
     setBusy(true);
     setError("");
     try {
       await apiClient(`/admin/signals/${signalId}/${action}`, { method: "POST" });
       const message = `Signal ${action === "approve" ? "approved" : "rejected"} successfully.`;
-      setModalAction(null);
       if (queueMode) {
         let nextId = null;
         try {
@@ -927,19 +932,13 @@ export function SignalDetail({ signalId, apiClient, onBack, queueMode = false, u
   const latestDocument = signal.documents?.[signal.documents.length - 1];
   const reviewStatus = enrichment?.review_status;
   const correctionAction = reviewStatus === "APPROVED" ? "reject" : "approve";
-  const modalTitle = modalAction === "approve" ? "Approve this signal?" : "Reject this signal?";
-  const modalMessage = !queueMode && ["APPROVED", "REJECTED"].includes(reviewStatus)
-    ? `Current decision: ${reviewStatus}. Change it to ${correctionAction === "approve" ? "APPROVED" : "REJECTED"}? Preserved evidence remains unchanged.`
-    : modalAction === "approve"
-      ? "This will mark the candidate approved for the current review workflow."
-      : "This will mark the candidate rejected. The preserved evidence and review history remain available.";
   return <section>
     <button className="back-link" onClick={onBack}>← Back to {queueMode ? "Review Inbox" : "Reviewed Signals"}</button>
     <div className="page-heading detail-heading"><div><p className="eyebrow">{queueMode ? "Inbox review" : "Reviewed signal"}</p><h1>{signal.title}</h1><p className="muted">{signal.source_type} · {signal.external_id}</p></div><Badge tone={reviewTone(enrichment?.review_status)}>{enrichment?.review_status || "PROCESSING"}</Badge></div>
     {notice && <div className="notice toast" role="status">{notice}</div>}{error && <div className="notice toast error-state" role="alert">{error}</div>}
-    {queueMode && reviewStatus === "PENDING" && <div className="review-action-bar"><div><strong>Ready for decision</strong><span className="muted">Approve or reject this candidate.</span></div><div className="review-actions"><button className="button approve" onClick={() => setModalAction("approve")}>Approve</button><button className="button reject" onClick={() => setModalAction("reject")}>Reject</button></div></div>}
+    {queueMode && reviewStatus === "PENDING" && <div className="review-action-bar"><div><strong>Ready for decision</strong><span className="muted">Approve or reject this candidate.</span></div><div className="review-actions"><button className="button approve" disabled={busy} onClick={() => review("approve")}>Approve</button><button className="button reject" disabled={busy} onClick={() => review("reject")}>Reject</button></div></div>}
     {unmatchedMode && <div className="review-action-bar"><div><strong>No active opportunity</strong><span className="muted">Create a conservative opportunity from this preserved signal.</span></div><button className="button primary" onClick={createOpportunity} disabled={opportunityBusy}>{opportunityBusy ? "Creating…" : "Create opportunity"}</button></div>}
-    {!queueMode && ["APPROVED", "REJECTED"].includes(reviewStatus) && <div className="review-action-bar"><div><strong>Decision recorded</strong><span className="muted">This reviewed decision can be deliberately corrected.</span></div><div className="review-actions">{aiSupported && <button className="button secondary" onClick={runAiAssessment} disabled={aiBusy}>{aiBusy ? "Running AI…" : "Run AI shadow assessment"}</button>}<button className={`button ${correctionAction === "reject" ? "reject" : "approve"}`} onClick={() => setModalAction(correctionAction)}>Change to {correctionAction === "approve" ? "Approved" : "Rejected"}</button></div></div>}
+    {!queueMode && ["APPROVED", "REJECTED"].includes(reviewStatus) && <div className="review-action-bar"><div><strong>Decision recorded</strong><span className="muted">This reviewed decision can be deliberately corrected.</span></div><div className="review-actions">{aiSupported && <button className="button secondary" onClick={runAiAssessment} disabled={aiBusy}>{aiBusy ? "Running AI…" : "Run AI shadow assessment"}</button>}<button className={`button ${correctionAction === "reject" ? "reject" : "approve"}`} disabled={busy} onClick={() => review(correctionAction)}>Change to {correctionAction === "approve" ? "Approved" : "Rejected"}</button></div></div>}
     <div className="detail-grid">
       <DetailPanel title="Raw signal"><Field label="Source type" value={titleCase(signal.source_type)} /><Field label="Source URL" value={<a href={signal.source_url} target="_blank" rel="noreferrer">{signal.source_url}</a>} /><Field label="External ID" value={signal.external_id} /><Field label="Discovered" value={formatDate(signal.discovered_at, true)} /><Field label="Title" value={signal.title} /><Field label="Raw text" value={<p className="raw-text">{signal.raw_text}</p>} /><Field label="Organisation hint" value={signal.organisation_hint} /><Field label="Location hint" value={signal.location_hint} /><Field label="Metadata" value={<pre>{JSON.stringify(signal.metadata || {}, null, 2)}</pre>} /></DetailPanel>
       {planning && <DetailPanel title="Planning application"><Field label="Provider reference" value={planning.provider_application_id} /><Field label="Council" value={planning.council} /><Field label="Application date" value={planning.application_date} /><Field label="Planning status" value={planning.planning_status} /><Field label="Decision" value={planning.decision} /><Field label="Postcode" value={planning.postcode} /><Field label="Coordinates" value={planning.latitude == null ? null : `${planning.latitude}, ${planning.longitude}`} /><Field label="Tracked revisions" value={signal.planning_revisions?.length || 0} /></DetailPanel>}
@@ -949,7 +948,6 @@ export function SignalDetail({ signalId, apiClient, onBack, queueMode = false, u
       <DetailPanel title="Evidence & provenance"><Field label="First seen" value={formatDate(signal.created_at, true)} /><Field label="Latest update" value={formatDate(signal.planning_revisions?.[0]?.observed_at || enrichment?.updated_at, true)} /><Field label="Evidence key" value={<code>{latestDocument?.s3_key || "—"}</code>} /><Field label="Evidence checksum" value={<code>{latestDocument?.sha256 || "—"}</code>} /><button className="button secondary" onClick={openEvidence} disabled={!signal.documents?.length}>View preserved JSON</button><p className="muted small-text">Access uses a short-lived authenticated download URL. The evidence bucket remains private.</p></DetailPanel>
       <DetailPanel title="Review"><Field label="Current state" value={<Badge tone={reviewTone(enrichment?.review_status)}>{enrichment?.review_status || "PROCESSING"}</Badge>} /><Field label="Reviewer" value={enrichment?.reviewed_by} /><Field label="Reviewed at" value={formatDate(enrichment?.reviewed_at, true)} /></DetailPanel>
     </div>
-    {modalAction && <ConfirmationModal title={modalTitle} message={modalMessage} confirmLabel={modalAction === "approve" ? "Approve" : "Reject"} danger={modalAction === "reject"} busy={busy} onCancel={() => setModalAction(null)} onConfirm={confirmReview} />}
   </section>;
 }
 
@@ -1101,7 +1099,7 @@ export default function App() {
   }, []);
   const scopedApiClient = useMemo(() => async (requestPath, options = {}) => {
     const method = String(options.method || "GET").toUpperCase();
-    if (method !== "GET") return apiClient(requestPath, options);
+    if (method !== "GET" && requestPath !== "/admin/opportunities/recalculate") return apiClient(requestPath, options);
     return apiClient(verticalScopedPath(requestPath, vertical), options);
   }, [apiClient, vertical]);
   if (auth.loading) return <div className="app-loading"><span className="spinner" /> Checking session…</div>;

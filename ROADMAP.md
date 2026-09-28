@@ -523,3 +523,9 @@ Paid-pilot activation check (2026-09-28):
   invitations and temporary-password invalidation. The fix was deployed and one explicit replacement
   invitation was sent at 16:21 UTC; only that newest temporary password should be used for the
   first-login challenge. Customer provisioning, digest, ingestion and enrichment queues/DLQs are empty.
+- A production opportunity recalculation reached the API Lambda's exact 15-second timeout after the
+  multi-vertical evidence set grew. Recalculation now remains synchronous but runs as sequential,
+  selected-vertical batches of at most 25 signals (100 total), performs global maintenance only in
+  the first batch, aggregates accurate counters and refreshes the opportunity list on completion.
+  Signal-detail Approve/Reject and deliberate decision corrections now execute immediately without a
+  confirmation dialog; bulk review and destructive opportunity operations retain confirmation.

@@ -1157,7 +1157,8 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 if admin_error:
                     return admin_error
                 payload = parse_json_payload(_raw_body(event))
-                limit = min(max(int(payload.get("limit", 50)), 1), 100)
+                limit = min(max(int(payload.get("limit", 25)), 1), 25)
+                offset = min(max(int(payload.get("offset", 0)), 0), 75)
                 signal_ids = payload.get("signal_ids")
                 if signal_ids is not None:
                     if (
@@ -1171,7 +1172,12 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 return _response(
                     200,
                     recalculate_opportunity_creation(
-                        settings, actor=actor, limit=limit, signal_ids=signal_ids
+                        settings,
+                        actor=actor,
+                        limit=limit,
+                        offset=offset,
+                        signal_ids=signal_ids,
+                        vertical=validate_vertical_filter(_query(event, "vertical")),
                     ),
                 )
             if action == "opportunity-detail" and method == "GET" and signal_id:
