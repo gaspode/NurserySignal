@@ -9,6 +9,7 @@ from uuid import UUID
 
 import boto3
 
+from app.access_requests import create_access_request, list_access_requests
 from app.authorization import normalized_groups
 from app.backtest_repository import (
     CARE_BENCHMARK_VERSION,
@@ -231,6 +232,8 @@ def _query(event: dict[str, Any], name: str) -> str | None:
 
 
 def _admin_path(path: str) -> tuple[str, str | None]:
+    if path == "/admin/access-requests":
+        return "access-request-list", None
     if path == "/admin/customer-accounts":
         return "customer-account-list", None
     if path == "/admin/customer-readiness":
@@ -386,6 +389,18 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     if path == "/" and method == "GET":
         return _response(200, {"service": settings.service_name, "status": "ready"})
 
+    if path == "/public/access-requests" and method == "POST":
+        try:
+            return _response(
+                202,
+                create_access_request(settings, parse_json_payload(_raw_body(event))),
+            )
+        except (ValueError, TypeError) as exc:
+            return _response(400, {"error": str(exc) or "invalid_access_request"})
+        except Exception:
+            logger.exception("public_access_request_failed")
+            return _response(500, {"error": "access_request_failed"})
+
     if path == "/signals" and method == "POST":
         claims, auth_error = _require_claims(event)
         if auth_error:
@@ -531,6 +546,8 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                             settings, parse_json_payload(_raw_body(event)), actor
                         ),
                     )
+            if action == "access-request-list" and method == "GET":
+                return _response(200, {"items": list_access_requests(settings)})
             if action == "customer-account-detail" and method == "PATCH" and signal_id:
                 admin_error = _require_admin(claims, settings)
                 if admin_error:

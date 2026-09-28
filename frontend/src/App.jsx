@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { useApi } from "./api.js";
 import { displayAttributeName, useAuth } from "./auth.js";
 import CustomerApp from "./CustomerApp.jsx";
+import PublicSite, { CareProspectMark, PublicLegalPage } from "./PublicSite.jsx";
 
 const PAGE_SIZE = 10;
 const ACTIVE_VERTICALS = new Set(["ALL", "NURSERY", "CHILDRENS_HOME"]);
@@ -148,12 +149,12 @@ export function LoginPage({ onLogin, authError = "", configured = true, password
   }
 
   return (
-    <main className="login-page">
+    <main className={`login-page${customerBrand ? " care-customer-login" : ""}`}>
       <section className="login-card">
-        <div className="brand-mark">{customerBrand ? "CP" : "SH"}</div>
+        <div className={customerBrand ? "care-login-mark" : "brand-mark"}>{customerBrand ? <CareProspectMark /> : "SH"}</div>
         <p className="eyebrow">{customerBrand ? "Early intelligence on new children’s homes" : "Secure intelligence workspace"}</p>
         <h1>{customerBrand ? "CareProspect" : "SignalHub"}</h1>
-        <p className="muted">Sign in to your invited workspace.</p>
+        <p className="muted">{customerBrand ? "Sign in to your CareProspect account." : "Sign in to your secure intelligence workspace."}</p>
         {!configured ? (
           <ErrorState message="This deployment has no Cognito configuration." />
         ) : passwordChallenge ? (
@@ -178,7 +179,8 @@ export function LoginPage({ onLogin, authError = "", configured = true, password
             <button className="button primary full-width" disabled={busy}>{busy ? "Signing in…" : "Sign in"}</button>
           </form>
         )}
-        <p className="login-footnote">Access is restricted to invited staff accounts.</p>
+        <p className="login-footnote">{customerBrand ? "CareProspect customer access is provided by invitation." : "SignalHub is an internal administration service."}</p>
+        {customerBrand && <button type="button" className="care-login-home" onClick={() => navigate("/")}>← Back to CareProspect</button>}
       </section>
     </main>
   );
@@ -728,6 +730,7 @@ function CustomerPublicationEditor({ opportunity, apiClient, onUpdated }) {
 
 export function CustomersPage({ apiClient }) {
   const [accounts, setAccounts] = useState([]);
+  const [accessRequests, setAccessRequests] = useState([]);
   const [readiness, setReadiness] = useState(null);
   const [form, setForm] = useState({ name: "", email: "", plan: "STARTER", allowed_regions: "", allowed_local_authorities: "" });
   const [busy, setBusy] = useState(false);
@@ -736,8 +739,8 @@ export function CustomersPage({ apiClient }) {
   const load = useCallback(async () => {
     setError("");
     try {
-      const [accountResult, readinessResult] = await Promise.all([apiClient("/admin/customer-accounts"), apiClient("/admin/customer-readiness")]);
-      setAccounts(accountResult.items || []); setReadiness(readinessResult);
+      const [accountResult, readinessResult, accessResult] = await Promise.all([apiClient("/admin/customer-accounts"), apiClient("/admin/customer-readiness"), apiClient("/admin/access-requests")]);
+      setAccounts(accountResult.items || []); setReadiness(readinessResult); setAccessRequests(accessResult.items || []);
     } catch (loadError) { setError(loadError.message || "Customer accounts could not be loaded."); }
   }, [apiClient]);
   useEffect(() => { load(); }, [load]);
@@ -757,7 +760,7 @@ export function CustomersPage({ apiClient }) {
     catch (updateError) { setError(updateError.message || "Customer status could not be updated."); }
     finally { setBusy(false); }
   }
-  return <section><div className="page-heading"><div><p className="eyebrow">Commercial pilot</p><h1>CareProspect customers</h1><p className="muted">Invite named users, assign account-level plans and enforce customer geography.</p></div><RefreshButton busy={busy} onClick={load} /></div>{notice && <div className="notice" role="status">{notice}</div>}{error && <ErrorState message={error} />}<div className="metric-grid"><article className="metric-card"><span>Customer-ready</span><strong>{readiness?.customer_eligible ?? "—"}</strong><small>Published and evidence-approved</small></article><article className="metric-card"><span>Draft candidates</span><strong>{readiness?.draft_candidates ?? "—"}</strong><small>Require explicit publication</small></article><article className="metric-card"><span>Email delivery</span><strong>{readiness?.email_delivery_configured ? "Ready" : "Preview"}</strong><small>{readiness?.email_delivery_configured ? "Verified sender configured" : "Verified SES sender required"}</small></article></div><div className="dashboard-grid"><form className="panel login-form" onSubmit={provision}><h2>Invite pilot customer</h2><label>Organisation<input required value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></label><label>Owner email<input required type="email" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} /></label><label>Plan<select value={form.plan} onChange={(event) => setForm({ ...form, plan: event.target.value })}><option>STARTER</option><option>PRO</option><option>BUSINESS</option></select></label><label>Allowed regions<input value={form.allowed_regions} onChange={(event) => setForm({ ...form, allowed_regions: event.target.value })} placeholder="Comma-separated; required for Starter unless local authorities are set" /></label><label>Allowed local authorities<input value={form.allowed_local_authorities} onChange={(event) => setForm({ ...form, allowed_local_authorities: event.target.value })} /></label><button className="button primary" disabled={busy}>{busy ? "Inviting…" : "Create account and invite"}</button></form><div className="panel"><h2>Pilot accounts</h2>{accounts.length === 0 ? <p className="muted">No customer accounts have been provisioned.</p> : accounts.map((account) => <div className="customer-account-row" key={account.id}><div><strong>{account.name}</strong><span className="cell-subtitle">{account.plan} · {account.user_count} user{account.user_count === 1 ? "" : "s"} · {account.usage_events} usage events</span><span className="cell-subtitle">{[...(account.allowed_regions || []), ...(account.allowed_local_authorities || [])].join(", ") || "National coverage"}</span></div><div><Badge tone={account.status === "SUSPENDED" ? "rejected" : "approved"}>{account.status}</Badge> <button className="button ghost" disabled={busy} onClick={() => toggleAccount(account)}>{account.status === "SUSPENDED" ? "Reactivate" : "Suspend"}</button></div></div>)}</div></div></section>;
+  return <section><div className="page-heading"><div><p className="eyebrow">Commercial pilot</p><h1>CareProspect customers</h1><p className="muted">Invite named users, assign account-level plans and enforce customer geography.</p></div><RefreshButton busy={busy} onClick={load} /></div>{notice && <div className="notice" role="status">{notice}</div>}{error && <ErrorState message={error} />}<div className="metric-grid"><article className="metric-card"><span>Customer-ready</span><strong>{readiness?.customer_eligible ?? "—"}</strong><small>Published and evidence-approved</small></article><article className="metric-card"><span>Access requests</span><strong>{accessRequests.length}</strong><small>Public pilot enquiries</small></article><article className="metric-card"><span>Draft candidates</span><strong>{readiness?.draft_candidates ?? "—"}</strong><small>Require explicit publication</small></article><article className="metric-card"><span>Email delivery</span><strong>{readiness?.email_delivery_configured ? "Ready" : "Preview"}</strong><small>{readiness?.email_delivery_configured ? "Verified sender configured" : "Verified SES sender required"}</small></article></div><div className="dashboard-grid"><form className="panel login-form" onSubmit={provision}><h2>Invite pilot customer</h2><label>Organisation<input required value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></label><label>Owner email<input required type="email" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} /></label><label>Plan<select value={form.plan} onChange={(event) => setForm({ ...form, plan: event.target.value })}><option>STARTER</option><option>PRO</option><option>BUSINESS</option></select></label><label>Allowed regions<input value={form.allowed_regions} onChange={(event) => setForm({ ...form, allowed_regions: event.target.value })} placeholder="Comma-separated; required for Starter unless local authorities are set" /></label><label>Allowed local authorities<input value={form.allowed_local_authorities} onChange={(event) => setForm({ ...form, allowed_local_authorities: event.target.value })} /></label><button className="button primary" disabled={busy}>{busy ? "Inviting…" : "Create account and invite"}</button></form><div className="panel"><h2>Pilot accounts</h2>{accounts.length === 0 ? <p className="muted">No customer accounts have been provisioned.</p> : accounts.map((account) => <div className="customer-account-row" key={account.id}><div><strong>{account.name}</strong><span className="cell-subtitle">{account.plan} · {account.user_count} user{account.user_count === 1 ? "" : "s"} · {account.usage_events} usage events</span><span className="cell-subtitle">{[...(account.allowed_regions || []), ...(account.allowed_local_authorities || [])].join(", ") || "National coverage"}</span></div><div><Badge tone={account.status === "SUSPENDED" ? "rejected" : "approved"}>{account.status}</Badge> <button className="button ghost" disabled={busy} onClick={() => toggleAccount(account)}>{account.status === "SUSPENDED" ? "Reactivate" : "Suspend"}</button></div></div>)}</div></div><div className="panel"><h2>Public access requests</h2>{accessRequests.length === 0 ? <p className="muted">No public pilot requests yet.</p> : <div className="table-wrap"><table><thead><tr><th>Received</th><th>Contact</th><th>Company</th><th>Category</th><th>Message</th></tr></thead><tbody>{accessRequests.map((request) => <tr key={request.id}><td>{formatDate(request.created_at, true)}</td><td><strong>{request.name}</strong><span className="cell-subtitle">{request.work_email}</span></td><td>{request.company}</td><td>{titleCase(request.supplier_category)}</td><td>{request.message || "—"}</td></tr>)}</tbody></table></div>}</div></section>;
 }
 
 export function OpportunityDetail({ opportunityId, apiClient, onBack }) {
@@ -1126,7 +1129,9 @@ export default function App() {
   const [vertical, setVertical] = useState(() => restoredVertical());
   const customerHostname = window.location.hostname === "careprospect.co.uk";
   useEffect(() => {
-    if (customerHostname) document.title = "CareProspect — Early intelligence on new children’s homes";
+    document.title = customerHostname
+      ? "CareProspect — Early intelligence on new children’s homes"
+      : "SignalHub — Internal intelligence";
   }, [customerHostname]);
   const onVerticalChange = useCallback((value) => {
     setVertical(value);
@@ -1138,6 +1143,9 @@ export default function App() {
     return apiClient(verticalScopedPath(requestPath, vertical), options);
   }, [apiClient, vertical]);
   if (auth.loading) return <div className="app-loading"><span className="spinner" /> Checking session…</div>;
+  if (!auth.user && customerHostname && path === "/privacy") return <PublicLegalPage page="privacy" />;
+  if (!auth.user && customerHostname && path === "/terms") return <PublicLegalPage page="terms" />;
+  if (!auth.user && customerHostname && !path.startsWith("/care/login")) return <PublicSite />;
   if (!auth.user) return <LoginPage onLogin={auth.login} authError={auth.authError} configured={auth.configured} passwordChallenge={auth.passwordChallenge} onCompleteNewPassword={auth.completeNewPassword} onCancelPasswordChallenge={auth.cancelPasswordChallenge} customerBrand={customerHostname || path.startsWith("/care")} />;
   const isAdmin = auth.groups.includes("NurserySignalAdmins");
   const isCustomer = auth.groups.includes("CareSignalCustomers");

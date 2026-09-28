@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useApi } from "./api.js";
+import { CareProspectMark } from "./PublicSite.jsx";
 
 function go(path) {
   window.location.hash = path;
@@ -17,7 +18,7 @@ function CustomerShell({ account, user, path, onLogout, children }) {
   const route = path.split("?")[0];
   return <div className="care-app">
     <header className="care-header">
-      <button className="care-brand" onClick={() => go("/care/opportunities")}><span className="care-logo">C</span><span>CareProspect<small>Early intelligence on new children’s homes</small></span></button>
+      <button className="care-brand" onClick={() => go("/care/opportunities")}><CareProspectMark compact /><span>CareProspect<small>Early intelligence on new children’s homes</small></span></button>
       <nav aria-label="CareProspect navigation">
         <button className={route.startsWith("/care/opportunities") ? "active" : ""} onClick={() => go("/care/opportunities")}>Opportunities</button>
         <button className={route === "/care/saved" ? "active" : ""} onClick={() => go("/care/saved")}>Saved</button>

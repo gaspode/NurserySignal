@@ -72,9 +72,11 @@ describe("admin frontend", () => {
     const apiClient = vi.fn()
       .mockResolvedValueOnce({ items: [] })
       .mockResolvedValueOnce({ customer_eligible: 6, draft_candidates: 0, email_delivery_configured: true })
+      .mockResolvedValueOnce({ items: [] })
       .mockResolvedValueOnce({ status: "QUEUED", owner_email: "pilot@example.test", name: "Pilot supplier" })
       .mockResolvedValueOnce({ items: [] })
-      .mockResolvedValueOnce({ customer_eligible: 6, draft_candidates: 0, email_delivery_configured: true });
+      .mockResolvedValueOnce({ customer_eligible: 6, draft_candidates: 0, email_delivery_configured: true })
+      .mockResolvedValueOnce({ items: [] });
     render(<CustomersPage apiClient={apiClient} />);
     await screen.findByRole("heading", { name: "CareProspect customers" });
     await userEvent.type(screen.getByLabelText("Organisation"), "Pilot supplier");
@@ -84,6 +86,13 @@ describe("admin frontend", () => {
     expect(await screen.findByRole("status")).toHaveTextContent(
       "Invitation queued for pilot@example.test to join Pilot supplier"
     );
+  });
+
+  it("uses customer language on the CareProspect sign-in boundary", () => {
+    render(<LoginPage onLogin={vi.fn()} customerBrand />);
+    expect(screen.getByRole("heading", { name: "CareProspect" })).toBeInTheDocument();
+    expect(screen.getByText("Sign in to your CareProspect account.")).toBeInTheDocument();
+    expect(screen.queryByText(/staff accounts/i)).not.toBeInTheDocument();
   });
 
   it("shows only pending records in the review inbox", async () => {

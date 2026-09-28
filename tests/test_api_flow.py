@@ -51,6 +51,42 @@ def signal_payload(external_id: str = "fixture-1") -> dict:
     }
 
 
+def test_public_access_request_is_unauthenticated_and_bounded(monkeypatch) -> None:
+    captured = {}
+
+    def fake_create(settings, payload):
+        captured.update(payload)
+        return {"status": "accepted", "request_id": "request-1"}
+
+    monkeypatch.setattr("app.handler.create_access_request", fake_create)
+    response = handler(
+        event(
+            "/public/access-requests",
+            "POST",
+            claims={},
+            body=json.dumps(
+                {
+                    "name": "Alex Supplier",
+                    "company": "Example Ltd",
+                    "email": "alex@example.test",
+                    "supplier_category": "SOFTWARE",
+                }
+            ),
+        ),
+        None,
+    )
+    assert response["statusCode"] == 202
+    assert captured["company"] == "Example Ltd"
+
+
+def test_access_request_list_remains_admin_only(monkeypatch) -> None:
+    monkeypatch.setattr("app.handler.list_access_requests", lambda settings: [{"id": "lead-1"}])
+    denied = handler(event("/admin/access-requests", claims={"sub": "outsider"}), None)
+    assert denied["statusCode"] == 403
+    allowed = handler(event("/admin/access-requests"), None)
+    assert allowed["statusCode"] == 200
+
+
 def test_signal_requires_authentication() -> None:
     response = handler(
         {"rawPath": "/signals", "requestContext": {"http": {"method": "POST"}}}, None

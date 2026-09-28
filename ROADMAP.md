@@ -604,3 +604,13 @@ Paid-pilot activation check (2026-09-28):
   had already been authoritatively resolved by an administrator, so validation preserved those
   decisions rather than recreating pending reviews. API/database health passes, the post-deployment
   Terraform plan is clean, and every production queue and DLQ is empty.
+- The CareProspect commercial-validation milestone now includes a public, product-led website using
+  the approved Planning Register visual system: editorial typography, restrained stage colours,
+  realistic customer-safe opportunity records, benchmark caveats, indicative pilot pricing, FAQ,
+  evidence commitments and responsive customer sign-in. The existing authenticated portal shares
+  the same visual language without changing customer entitlements, tenant isolation or SignalHub.
+  Public pilot requests are bounded, deduplicated and stored separately from customer accounts for
+  authenticated SignalHub review; no self-service signup, billing or unauthenticated admin action was
+  introduced. The next gate is production deployment plus desktop/mobile, sign-in and form-flow
+  verification on `careprospect.co.uk`; after that, commercial pilot recruitment remains the primary
+  milestone while procurement and larger matching architecture stay deferred.
