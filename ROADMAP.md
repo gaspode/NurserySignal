@@ -593,3 +593,14 @@ Paid-pilot activation check (2026-09-28):
   sanitizer retained human-readable reasons but not the new machine-readable match feature/best-match
   flag. Those fields are now retained as well. Production Bedspace/Bright Path verification is the
   final gate for this pass.
+- The final hardening pass is deployed. A bounded URN `2813108` refresh added the missing Bedspace
+  provider evidence, and the unchanged matcher selected company `04457083` as `STRONG` at `0.99` with
+  exact normalized legal name, exact provider-office postcode, compatible address/locality and
+  pre-registration incorporation evidence. The candidate is marked best supported and no suffix-
+  mismatch wording remains. An unchanged repeat reused the same content-addressed result and created
+  no additional evidence version. Bright Path company `13962842` remains rank one across ten unique
+  candidates with provider-office postcode/locality/address and incorporation corroboration; its
+  spacing difference remains honestly `PROBABLE`, with no threshold relaxation. Both named records
+  had already been authoritatively resolved by an administrator, so validation preserved those
+  decisions rather than recreating pending reviews. API/database health passes, the post-deployment
+  Terraform plan is clean, and every production queue and DLQ is empty.
