@@ -520,5 +520,6 @@ Paid-pilot activation check (2026-09-28):
   invalidated by identity rollback/recreation during three provisioning retries. Provisioning now
   retains a successfully created Cognito identity when downstream tenant persistence fails: the
   encrypted SQS retry reuses that identity and the transactional account write, preventing repeated
-  invitations and temporary-password invalidation. One explicit replacement invitation is required
-  after deployment; only that newest temporary password should be used for the first-login challenge.
+  invitations and temporary-password invalidation. The fix was deployed and one explicit replacement
+  invitation was sent at 16:21 UTC; only that newest temporary password should be used for the
+  first-login challenge. Customer provisioning, digest, ingestion and enrichment queues/DLQs are empty.
