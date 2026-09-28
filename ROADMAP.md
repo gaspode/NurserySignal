@@ -516,3 +516,9 @@ Paid-pilot activation check (2026-09-28):
   first-login password challenge and clean-session journey, inspect the delivered Gmail headers for
   SPF/DKIM/DMARC alignment, and obtain SES production access (still pending/sandboxed) before inviting
   unverified supplier recipients. Until those checks pass, status remains `NOT_READY_FOR_PAID_PILOT`.
+- Pilot login validation exposed four Cognito invitation emails whose temporary passwords had been
+  invalidated by identity rollback/recreation during three provisioning retries. Provisioning now
+  retains a successfully created Cognito identity when downstream tenant persistence fails: the
+  encrypted SQS retry reuses that identity and the transactional account write, preventing repeated
+  invitations and temporary-password invalidation. One explicit replacement invitation is required
+  after deployment; only that newest temporary password should be used for the first-login challenge.

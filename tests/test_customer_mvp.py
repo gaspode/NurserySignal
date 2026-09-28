@@ -18,6 +18,7 @@ from app.customer import (
 from app.customer_digest import _safe_provider_error, queue_weekly_digests, sender_handler
 from app.customer_provisioning import handler as provisioning_handler
 from app.handler import handler
+from botocore.exceptions import ClientError
 
 ADMIN = {"sub": "admin", "cognito:groups": ["NurserySignalAdmins"]}
 CUSTOMER = {"sub": "customer", "cognito:groups": ["CareSignalCustomers"]}
@@ -401,9 +402,11 @@ def test_customer_provisioning_worker_creates_identity_and_records_account(monke
     monkeypatch.setenv("COGNITO_USER_POOL_ID", "pool-1")
     monkeypatch.setenv("CUSTOMER_GROUP", "CareSignalCustomers")
     monkeypatch.setenv("BACKEND_FUNCTION_NAME", "backend")
+    cognito = Cognito()
+    lambda_client = Lambda()
     monkeypatch.setattr(
         "app.customer_provisioning.boto3.client",
-        lambda service: Cognito() if service == "cognito-idp" else Lambda(),
+        lambda service: cognito if service == "cognito-idp" else lambda_client,
     )
     request = {
         "name": "Pilot supplier",
@@ -424,56 +427,90 @@ def test_customer_provisioning_worker_creates_identity_and_records_account(monke
     assert invoked["email"] == "pilot@example.test"
 
 
-def test_customer_provisioning_worker_rolls_back_new_identity_on_persistence_failure(
+def test_customer_provisioning_worker_retains_identity_on_persistence_failure_for_retry(
     monkeypatch,
 ) -> None:
     calls = []
+    attempts = 0
 
     class Cognito:
-        def admin_create_user(self, **_kwargs):
+        def admin_create_user(self, **kwargs):
+            nonlocal attempts
+            attempts += 1
+            calls.append(("create", kwargs))
+            if attempts > 1:
+                raise ClientError(
+                    {"Error": {"Code": "UsernameExistsException", "Message": "exists"}},
+                    "AdminCreateUser",
+                )
             return {"User": {"Attributes": [{"Name": "sub", "Value": "sub-1"}]}}
 
-        def admin_add_user_to_group(self, **_kwargs):
+        def admin_get_user(self, **kwargs):
+            calls.append(("get", kwargs))
+            return {"UserAttributes": [{"Name": "sub", "Value": "sub-1"}]}
+
+        def admin_add_user_to_group(self, **kwargs):
+            calls.append(("group", kwargs))
             return None
 
-        def admin_delete_user(self, **kwargs):
-            calls.append(kwargs)
-
     class Payload:
+        def __init__(self, value):
+            self.value = value
+
         def read(self):
-            return b'{"errorMessage":"database unavailable"}'
+            return self.value
 
     class Lambda:
+        attempts = 0
+
         def invoke(self, **_kwargs):
-            return {"StatusCode": 200, "FunctionError": "Unhandled", "Payload": Payload()}
+            self.attempts += 1
+            calls.append(("invoke", {}))
+            if self.attempts == 1:
+                return {
+                    "StatusCode": 200,
+                    "FunctionError": "Unhandled",
+                    "Payload": Payload(b'{"errorMessage":"database unavailable"}'),
+                }
+            return {"StatusCode": 200, "Payload": Payload(b'{"status":"PILOT"}')}
 
     monkeypatch.setenv("COGNITO_USER_POOL_ID", "pool-1")
     monkeypatch.setenv("CUSTOMER_GROUP", "CareSignalCustomers")
     monkeypatch.setenv("BACKEND_FUNCTION_NAME", "backend")
+    cognito = Cognito()
+    lambda_client = Lambda()
     monkeypatch.setattr(
         "app.customer_provisioning.boto3.client",
-        lambda service: Cognito() if service == "cognito-idp" else Lambda(),
+        lambda service: cognito if service == "cognito-idp" else lambda_client,
     )
-    result = provisioning_handler(
-        {
-            "Records": [
-                {
-                    "messageId": "message-1",
-                    "body": json.dumps(
-                        {
-                            "name": "Pilot supplier",
-                            "email": "pilot@example.test",
-                            "plan": "STARTER",
-                            "allowed_local_authorities": ["Liverpool"],
-                        }
-                    ),
-                }
-            ]
-        },
-        None,
-    )
-    assert result == {"batchItemFailures": [{"itemIdentifier": "message-1"}]}
-    assert calls == [{"UserPoolId": "pool-1", "Username": "pilot@example.test"}]
+    event = {
+        "Records": [
+            {
+                "messageId": "message-1",
+                "body": json.dumps(
+                    {
+                        "name": "Pilot supplier",
+                        "email": "pilot@example.test",
+                        "plan": "STARTER",
+                        "allowed_local_authorities": ["Liverpool"],
+                    }
+                ),
+            }
+        ]
+    }
+    assert provisioning_handler(event, None) == {
+        "batchItemFailures": [{"itemIdentifier": "message-1"}]
+    }
+    assert provisioning_handler(event, None) == {"batchItemFailures": []}
+    assert [item[0] for item in calls] == [
+        "create",
+        "group",
+        "invoke",
+        "create",
+        "get",
+        "group",
+        "invoke",
+    ]
 
 
 def test_digest_sender_uses_ses_and_reports_delivery(monkeypatch) -> None:

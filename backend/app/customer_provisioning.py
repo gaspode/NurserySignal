@@ -49,7 +49,6 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     failures = []
     for record in event.get("Records", []):
         message_id = record.get("messageId")
-        created = False
         email = ""
         try:
             request = json.loads(record.get("body") or "{}")
@@ -65,7 +64,6 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
                     DesiredDeliveryMediums=["EMAIL"],
                 )
                 user = response["User"]
-                created = True
             except ClientError as exc:
                 if exc.response.get("Error", {}).get("Code") != "UsernameExistsException":
                     raise
@@ -75,10 +73,10 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
             _record_account(lambda_client, backend_function, request, sub)
         except Exception as exc:
             logger.error("customer_provisioning_failed error_type=%s", type(exc).__name__)
-            if created and email:
-                try:
-                    cognito.admin_delete_user(UserPoolId=pool_id, Username=email)
-                except Exception:
-                    logger.error("customer_provisioning_rollback_failed")
+            # Keep a newly-created Cognito identity if downstream persistence fails.
+            # SQS will retry, admin_create_user will resolve the existing identity,
+            # and record_customer_account is transactional/idempotent. Deleting here
+            # invalidates the temporary password and sends another invitation on each
+            # retry, which is both confusing and unsafe for the invited customer.
             failures.append({"itemIdentifier": message_id})
     return {"batchItemFailures": failures}
