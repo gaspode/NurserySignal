@@ -14,6 +14,11 @@ output "frontend_distribution_id" {
   value = aws_cloudfront_distribution.frontend.id
 }
 
+output "careprospect_nameservers" {
+  description = "Authoritative nameservers used to delegate careprospect.co.uk."
+  value       = aws_route53_zone.careprospect.name_servers
+}
+
 output "raw_evidence_bucket" {
   value = aws_s3_bucket.raw_evidence.bucket
 }
