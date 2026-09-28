@@ -80,11 +80,6 @@ resource "aws_route53_record" "careprospect_ses_verification" {
   records = [aws_ses_domain_identity.careprospect.verification_token]
 }
 
-resource "aws_ses_domain_identity_verification" "careprospect" {
-  domain     = aws_ses_domain_identity.careprospect.id
-  depends_on = [aws_route53_record.careprospect_ses_verification]
-}
-
 resource "aws_ses_domain_dkim" "careprospect" {
   domain = aws_ses_domain_identity.careprospect.domain
 }
