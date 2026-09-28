@@ -173,7 +173,16 @@ resource "aws_iam_policy" "github_actions" {
           "iam:CreateRole", "iam:DeleteRole", "iam:Get*",
           "iam:List*", "iam:PassRole", "iam:PutRolePolicy", "iam:DeleteRolePolicy",
           "iam:AttachRolePolicy", "iam:DetachRolePolicy", "lambda:*", "logs:*", "rds:*",
-          "s3:*", "sqs:*", "sts:GetCallerIdentity"
+          "s3:*", "sqs:*", "sts:GetCallerIdentity",
+          "acm:AddTagsToCertificate", "acm:DeleteCertificate", "acm:DescribeCertificate",
+          "acm:ListTagsForCertificate", "acm:RequestCertificate",
+          "route53:ChangeResourceRecordSets", "route53:ChangeTagsForResource",
+          "route53:CreateHostedZone", "route53:DeleteHostedZone", "route53:GetChange",
+          "route53:GetHostedZone", "route53:ListResourceRecordSets", "route53:ListTagsForResource",
+          "ses:DeleteIdentity", "ses:GetIdentityDkimAttributes", "ses:GetIdentityMailFromDomainAttributes",
+          "ses:GetIdentityNotificationAttributes", "ses:GetIdentityVerificationAttributes",
+          "ses:SetIdentityDkimEnabled", "ses:SetIdentityMailFromDomain", "ses:VerifyDomainDkim",
+          "ses:VerifyDomainIdentity"
         ]
         Resource = "*"
       },
