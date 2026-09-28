@@ -502,3 +502,7 @@ Paid-pilot activation check (2026-09-28):
   but SES rejected the worker call despite verified domain/recipient and an allowed IAM simulation.
   Delivery retry was paused and bounded, email-redacting SES diagnostics were added to identify the
   provider rejection before retrying. A delivered digest and customer first-login remain launch gates.
+- Safe diagnostics established that SES sandbox authorization evaluates the verified recipient identity
+  as well as the sender. The sender role is therefore allowed over SES identities only when the exact
+  configured `alerts@careprospect.co.uk` From address is used; it cannot send from another identity.
+  This replaces the sender-domain-only resource statement that rejected the controlled recipient.

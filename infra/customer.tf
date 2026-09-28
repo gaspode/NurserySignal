@@ -151,7 +151,12 @@ resource "aws_iam_role_policy" "customer_digest_sender" {
       {
         Effect   = "Allow"
         Action   = ["ses:SendEmail"]
-        Resource = "arn:aws:ses:${var.aws_region}:${data.aws_caller_identity.current.account_id}:identity/${aws_ses_domain_identity.careprospect.domain}"
+        Resource = "arn:aws:ses:${var.aws_region}:${data.aws_caller_identity.current.account_id}:identity/*"
+        Condition = {
+          StringEquals = {
+            "ses:FromAddress" = var.caresignal_email_from
+          }
+        }
       },
       {
         Effect   = "Allow"

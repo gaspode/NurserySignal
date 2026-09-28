@@ -225,7 +225,10 @@ def test_digest_provider_diagnostics_redact_recipient() -> None:
         {
             "Error": {
                 "Code": "MessageRejected",
-                "Message": "Email address willypayne@gmail.com is not verified",
+                "Message": (
+                    "Email address willypayne@gmail.com is not verified; resource "
+                    "arn:aws:ses:eu-west-1:123456789012:identity/willypayne@gmail.com"
+                ),
             }
         },
         "SendEmail",
@@ -234,6 +237,7 @@ def test_digest_provider_diagnostics_redact_recipient() -> None:
     assert code == "MessageRejected"
     assert "willypayne@gmail.com" not in message
     assert "[redacted-email]" in message
+    assert "identity/[redacted]" in message
 
 
 def test_pilot_publication_is_explicit_bounded_and_audited(monkeypatch) -> None:

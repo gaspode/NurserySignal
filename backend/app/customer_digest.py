@@ -23,6 +23,7 @@ def _safe_provider_error(exc: Exception) -> tuple[str, str]:
     error = exc.response.get("Error", {})
     code = str(error.get("Code") or "ClientError")[:80]
     message = str(error.get("Message") or "")[:240]
+    message = re.sub(r"identity/[^\s'\"]+", "identity/[redacted]", message)
     message = re.sub(r"[^\s@]+@[^\s,;]+", "[redacted-email]", message)
     return code, message
 
