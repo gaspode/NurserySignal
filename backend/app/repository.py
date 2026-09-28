@@ -57,6 +57,14 @@ def _postgres_text(value: Any) -> Any:
     return value.replace("\x00", "")
 
 
+def _validated_organisation_name(value: Any) -> str:
+    """Reject parser run-on text before it becomes indexed organisation identity."""
+    name = str(_postgres_text(value) or "").strip()
+    if not name or len(name) > 300 or len(normalize_identity(name)) > 300:
+        return ""
+    return name
+
+
 def _resolve_operator_id(conn: Any, name: Any, metadata: dict[str, Any]) -> Any | None:
     """Resolve a shared organisation without weakening vertical isolation."""
     display_name = str(name or "").strip()
@@ -112,21 +120,24 @@ def store_ofsted_urn_enrichment(
         if signal[0] != "CHILDRENS_HOME" or signal[1] != "ofsted":
             raise ValueError("Ofsted enrichment references an incompatible signal")
         observed_name = str(signal[2] or "").strip()
-        provider_name = str(database_value.get("registered_provider_name") or "").strip()
+        provider_name = _validated_organisation_name(
+            database_value.get("registered_provider_name")
+        )
         operator_id = _resolve_operator_id(conn, observed_name or provider_name, {})
         if operator_id:
             for alias, source in (
                 (observed_name, "OFSTED_REGISTER"),
                 (provider_name, "OFSTED_REPORT"),
             ):
-                normalized = normalize_identity(alias)
+                safe_alias = _validated_organisation_name(alias)
+                normalized = normalize_identity(safe_alias)
                 if normalized:
                     conn.execute(
                         """INSERT INTO organisation_aliases
                            (operator_id, alias, normalized_alias, source)
                            VALUES (%s, %s, %s, %s)
                            ON CONFLICT (operator_id, normalized_alias) DO NOTHING""",
-                        (operator_id, alias, normalized, source),
+                        (operator_id, safe_alias, normalized, source),
                     )
         inserted = conn.execute(
             """INSERT INTO ofsted_urn_enrichments (

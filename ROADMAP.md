@@ -548,7 +548,10 @@ Paid-pilot activation check (2026-09-28):
   lacked permission to create the required private Lambda endpoint. The scoped deploy policy now
   permits VPC-endpoint create/modify/delete and their resource tags in addition to its existing EC2
   reads, and Terraform explicitly updates that self-managed policy before creating the endpoint.
-- Final health checks found four Ofsted URN-enrichment messages in the ingestion DLQ. All failed on
-  NUL control bytes extracted from public report PDFs, not on organisation matching. Normalized
-  database text now strips only PostgreSQL-incompatible NUL bytes while immutable source evidence and
-  content identity remain unchanged; the bounded four-message redrive is the final operational gate.
+- Final health checks found four Ofsted URN-enrichment messages in the ingestion DLQ. The first pass
+  removed only PostgreSQL-incompatible NUL bytes from normalized database text while leaving immutable
+  source evidence and content identity unchanged. A bounded redrive then showed that two malformed PDF
+  fields also contained run-on report text too large for an indexed organisation alias. Extracted
+  organisation names now have a conservative identity-boundary check: malformed run-on text is not
+  admitted as organisation identity, while the original report evidence remains preserved. Two items
+  completed on the first redrive; the remaining two require the corrected worker deployment and retry.

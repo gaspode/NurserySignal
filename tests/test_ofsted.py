@@ -15,7 +15,7 @@ from app.ofsted_enrichment import (
     parse_report_pdf,
     persist_ofsted_urn_enrichment,
 )
-from app.repository import _postgres_text
+from app.repository import _postgres_text, _validated_organisation_name
 
 
 class Response(io.BytesIO):
@@ -261,6 +261,12 @@ def test_normalized_ofsted_text_removes_nul_without_rewriting_source_value() -> 
     source = "Provider\x00 Office"
     assert _postgres_text(source) == "Provider Office"
     assert source == "Provider\x00 Office"
+
+
+def test_run_on_ofsted_provider_text_is_not_used_as_organisation_identity() -> None:
+    malformed = "Provider name " + ("report text " * 400)
+    assert _validated_organisation_name(malformed) == ""
+    assert _validated_organisation_name("Example Care Limited") == "Example Care Limited"
 
 
 def test_ofsted_is_supporting_regulatory_evidence_not_a_new_opportunity() -> None:
