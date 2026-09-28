@@ -664,6 +664,8 @@ def test_ofsted_provider_identity_and_office_can_make_company_match_strong() -> 
     assert result.confidence == 0.99
     assert "Ofsted provider address" in result.reason
     assert result.company["company_number"] == "10445560"
+    assert result.candidates[0]["best_supported_match"] is True
+    assert "EXACT_NORMALIZED_LEGAL_NAME" in result.candidates[0]["match_features"]
 
 
 def test_exact_ofsted_provider_office_postcode_ranks_above_name_only_candidate() -> None:

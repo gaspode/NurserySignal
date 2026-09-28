@@ -588,5 +588,8 @@ Paid-pilot activation check (2026-09-28):
   provider-office address/locality and incorporation timing, and marks a materially stronger candidate
   as best supported without changing the automatic-resolution thresholds. Missing URN-specific
   evidence can be requested from a pending review through a bounded, audited, deduplicated Ofsted run;
-  the review remains usable if that enrichment fails. Production Bedspace/Bright Path verification is
-  the final gate for this pass.
+  the review remains usable if that enrichment fails. The first bounded Bedspace validation found the
+  expected company as a strong match and exposed one final provenance omission: the stable evidence
+  sanitizer retained human-readable reasons but not the new machine-readable match feature/best-match
+  flag. Those fields are now retained as well. Production Bedspace/Bright Path verification is the
+  final gate for this pass.

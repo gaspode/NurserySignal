@@ -538,7 +538,9 @@ class CompaniesHouseProvider:
             if normalize_uk_legal_name(item.get("company_name")) == target
         ]
         if len(exact) == 1:
-            compared_exact = compare_company_candidate(candidate, exact[0])
+            compared_exact = rank_company_candidates(
+                [compare_company_candidate(candidate, exact[0])]
+            )[0]
             ofsted_location_agrees = any(
                 (compared_exact.get("location_agreement") or {}).get(key)
                 for key in ("ofsted_provider_locality", "ofsted_provider_postcode")

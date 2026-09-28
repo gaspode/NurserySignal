@@ -39,6 +39,8 @@ def _safe_candidates(values: Any) -> list[dict[str, Any]]:
             "name_similarity": item.get("name_similarity"),
             "match_reasons": item.get("match_reasons") or [],
             "match_cautions": item.get("match_cautions") or [],
+            "match_features": item.get("match_features") or [],
+            "best_supported_match": bool(item.get("best_supported_match")),
             "location_agreement": item.get("location_agreement") or {},
             "selection_source": item.get("selection_source") or "SUGGESTED",
             "discovery_sources": item.get("discovery_sources") or [],
