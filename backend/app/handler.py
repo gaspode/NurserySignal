@@ -25,6 +25,7 @@ from app.backtesting import BacktestBounds
 from app.care_backfill import backfill_care_from_stored_evidence
 from app.config import Settings
 from app.customer import (
+    apply_pilot_publications,
     create_saved_search,
     customer_context,
     customer_opportunity_detail,
@@ -34,6 +35,7 @@ from app.customer import (
     list_customer_accounts,
     list_customer_opportunities,
     list_saved_searches,
+    pilot_curation_inventory,
     provision_customer_account,
     record_customer_event,
     save_customer_opportunity,
@@ -315,6 +317,14 @@ def _admin_path(path: str) -> tuple[str, str | None]:
 
 def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     settings = Settings.from_env()
+    if event.get("operation") == "customer_pilot_inventory" and not event.get("requestContext"):
+        return pilot_curation_inventory(settings, limit=int(event.get("limit") or 100))
+    if event.get("operation") == "customer_pilot_publish" and not event.get("requestContext"):
+        return apply_pilot_publications(
+            settings,
+            event.get("publications"),
+            actor=str(event.get("actor") or "iam-operational-pilot-activation")[:200],
+        )
     if event.get("operation") == "customer_weekly_digest" and not event.get("requestContext"):
         return queue_weekly_digests(settings)
     if event.get("operation") == "customer_digest_delivery" and not event.get("requestContext"):

@@ -921,3 +921,178 @@ def customer_readiness(settings: Settings) -> dict[str, Any]:
         "published_postcodes": geography[1],
         "email_delivery_configured": bool(settings.caresignal_email_from),
     }
+
+
+def pilot_curation_inventory(settings: Settings, *, limit: int = 100) -> dict[str, Any]:
+    """Return a bounded internal-only inventory for the paid-pilot quality gate.
+
+    This deliberately returns source summaries rather than raw evidence documents. It is invoked
+    through the IAM-protected Lambda operational path, not exposed as a customer or admin HTTP API.
+    """
+    bounded_limit = min(max(int(limit), 1), 100)
+    with connection(settings) as conn:
+        opportunity_rows = conn.execute(
+            """SELECT o.id, o.name, o.customer_title, o.customer_summary,
+                      o.operator_name, o.town, o.postcode, o.change_type,
+                      o.lifecycle_stage, o.confidence, o.review_status,
+                      o.publication_status, o.first_seen_at, o.latest_update_at,
+                      o.location_sensitivity, o.creation_reason, o.stage_reason,
+                      o.created_at
+               FROM opportunities o
+               WHERE o.vertical = 'CHILDRENS_HOME'
+                 AND o.review_status NOT IN ('REJECTED', 'MERGED')
+                 AND o.merged_into_opportunity_id IS NULL
+               ORDER BY o.latest_update_at DESC, o.id
+               LIMIT %s""",
+            (bounded_limit,),
+        ).fetchall()
+        evidence_rows = conn.execute(
+            """SELECT os.opportunity_id, rs.id, rs.source_type, rs.discovered_at,
+                      rs.title, rs.source_url, rs.external_id, rs.metadata,
+                      se.review_status, se.confidence, se.extracted_facts,
+                      os.created_by, os.match_reason
+               FROM opportunity_signals os
+               JOIN raw_signals rs ON rs.id = os.raw_signal_id
+               LEFT JOIN signal_enrichments se ON se.raw_signal_id = rs.id
+               WHERE os.status = 'ACTIVE'
+                 AND os.opportunity_id = ANY(%s::uuid[])
+               ORDER BY os.opportunity_id, rs.discovered_at, rs.id""",
+            ([str(row[0]) for row in opportunity_rows],),
+        ).fetchall() if opportunity_rows else []
+
+    evidence_by_opportunity: dict[str, list[dict[str, Any]]] = {}
+    for row in evidence_rows:
+        opportunity_id = str(row[0])
+        metadata = row[7] if isinstance(row[7], dict) else {}
+        evidence_by_opportunity.setdefault(opportunity_id, []).append(
+            {
+                "signal_id": str(row[1]),
+                "source_type": row[2],
+                "discovered_at": row[3].isoformat() if row[3] else None,
+                "title": str(row[4] or "")[:500],
+                "source_url": row[5]
+                if str(row[5] or "").startswith(("https://", "http://"))
+                else None,
+                "external_id": row[6],
+                "region": metadata.get("region") or metadata.get("provider_region"),
+                "local_authority": (
+                    metadata.get("local_authority")
+                    or metadata.get("council")
+                    or (metadata.get("authority") or {}).get("name")
+                    if isinstance(metadata.get("authority"), dict)
+                    else metadata.get("local_authority") or metadata.get("council")
+                ),
+                "review_status": row[8],
+                "rule_confidence": float(row[9]) if row[9] is not None else None,
+                "event_type": (row[10] or {}).get("event_type")
+                if isinstance(row[10], dict)
+                else None,
+                "linked_by": row[11],
+                "match_reason": row[12],
+            }
+        )
+
+    items = []
+    for row in opportunity_rows:
+        opportunity_id = str(row[0])
+        evidence = evidence_by_opportunity.get(opportunity_id, [])
+        approved = [
+            item
+            for item in evidence
+            if item["review_status"] == "APPROVED" and item["source_type"] != "procurement"
+        ]
+        source_types = sorted({item["source_type"] for item in approved})
+        regions = sorted({item["region"] for item in evidence if item.get("region")})
+        authorities = sorted(
+            {item["local_authority"] for item in evidence if item.get("local_authority")}
+        )
+        row_map = {
+            "id": opportunity_id,
+            "name": row[1],
+            "customer_title": row[2],
+            "customer_summary": row[3],
+            "operator_name": row[4],
+            "town": row[5],
+            "postcode": row[6],
+            "change_type": row[7],
+            "lifecycle_stage": row[8],
+            "confidence": float(row[9]) if row[9] is not None else None,
+            "review_status": row[10],
+            "publication_status": row[11],
+            "first_seen_at": row[12],
+            "latest_update_at": row[13],
+            "location_sensitivity": row[14],
+            "creation_reason": row[15],
+            "stage_reason": row[16],
+        }
+        projected = _project_opportunity(
+            {
+                **row_map,
+                "region": regions[0] if len(regions) == 1 else None,
+                "local_authority": authorities[0] if len(authorities) == 1 else None,
+                "source_types": source_types,
+            },
+            saved=False,
+        )
+        issues = []
+        if not approved:
+            issues.append("no approved non-procurement evidence")
+        if not (row[5] or row[6] or regions or authorities):
+            issues.append("unclear geography")
+        if not source_types:
+            issues.append("no customer-safe evidence source")
+        if not all(item.get("source_url") for item in approved):
+            issues.append("one or more official source links missing")
+        items.append(
+            {
+                "id": opportunity_id,
+                "internal_name": row[1],
+                "publication_status": row[11],
+                "review_status": row[10],
+                "customer_preview": {
+                    **projected,
+                    "first_detected": row[12].isoformat() if row[12] else None,
+                    "last_updated": row[13].isoformat() if row[13] else None,
+                },
+                "creation_reason": row[15],
+                "stage_reason": row[16],
+                "approved_source_types": source_types,
+                "evidence": evidence,
+                "quality_issues": issues,
+                "eligible_for_publication": not issues,
+            }
+        )
+    return {"count": len(items), "limit": bounded_limit, "items": items}
+
+
+def apply_pilot_publications(
+    settings: Settings, publications: Any, *, actor: str
+) -> dict[str, Any]:
+    """Apply an explicit, bounded operational publication list with normal audit semantics."""
+    if not isinstance(publications, list) or not publications or len(publications) > 30:
+        raise ValueError("pilot publications must contain 1 to 30 explicit items")
+    seen: set[str] = set()
+    for value in publications:
+        if not isinstance(value, dict):
+            raise ValueError("invalid pilot publication")
+        opportunity_id = str(value.get("id") or "")
+        if not re.fullmatch(r"[0-9a-fA-F-]{36}", opportunity_id):
+            raise ValueError("invalid pilot publication")
+        if opportunity_id in seen:
+            raise ValueError("duplicate pilot publication")
+        seen.add(opportunity_id)
+    results = []
+    for value in publications:
+        opportunity_id = str(value["id"])
+        result = set_opportunity_publication(
+            settings,
+            opportunity_id,
+            {
+                "status": "PUBLISHED",
+                "customer_title": value.get("customer_title"),
+                "customer_summary": value.get("customer_summary"),
+            },
+            actor,
+        )
+        results.append(result)
+    return {"published": len(results), "items": results}

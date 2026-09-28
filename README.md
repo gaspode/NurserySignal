@@ -255,6 +255,9 @@ remain disabled until `caresignal_email_from` names a verified SES identity.
 This avoids NAT and a paid SES VPC endpoint. The customer Alerts page provides
 a safe digest preview while delivery is disabled.
 
+The manual launch, publication, provisioning, digest and health procedures for
+the first paid-pilot accounts are in `docs/caresignal-pilot-operations.md`.
+
 The admin UI presents pending candidates as a Review Inbox. Approved and
 rejected candidates are kept in a separate, paginated Reviewed Signals history
 with source/date filters and bounded text search. Review actions use an
