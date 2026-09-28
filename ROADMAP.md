@@ -491,4 +491,6 @@ Paid-pilot activation check (2026-09-28):
   DLQ-backed bounded queue and a least-privilege non-VPC identity worker; the worker calls the backend
   synchronously for idempotent tenant/preferences/audit persistence and rolls back only identities it
   created when persistence fails. The admin UI reports the invitation as queued rather than delivered.
-  Production deployment and the real invite/digest/customer-session checks remain the immediate gate.
+  The first production apply safely stopped when the GitHub OIDC role lacked `iam:TagRole` for the new
+  provisioner role; the scoped deployment policy and dependency ordering were corrected before retry.
+  Production completion and the real invite/digest/customer-session checks remain the immediate gate.

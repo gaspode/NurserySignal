@@ -32,6 +32,7 @@ resource "aws_cloudwatch_log_group" "customer_provisioner" {
 resource "aws_iam_role" "customer_provisioner" {
   name               = "${local.name_prefix}-customer-provisioner"
   assume_role_policy = data.aws_iam_policy_document.lambda_assume_role.json
+  depends_on         = [aws_iam_policy.github_actions]
   tags               = local.common_tags
 }
 
