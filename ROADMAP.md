@@ -628,4 +628,6 @@ Paid-pilot activation check (2026-09-28):
   the dark serif wordmark. A shared native CSS/text component covers public header/footer, customer
   portal and sign-in variants, while the favicon is reduced to the same dot on deep green. The former
   three-stage line/square/diamond artwork has been removed from customer-facing code; SignalHub
-  branding is unchanged. Production deployment and responsive verification are the remaining gate.
+  branding is unchanged. Commit `ba52ccf` is deployed through the normal workflow; live desktop,
+  tablet, iPhone-width and sign-in checks confirm crisp proportions, unwrapped navigation and no
+  horizontal overflow, completing the brand update.
