@@ -705,7 +705,7 @@ def test_ofsted_provider_name_expands_discovery_and_deduplicates_candidates() ->
         items = [
             {"title": "NORTH STAR SERVICES LIMITED", "company_number": "22222222"}
         ]
-        if query == "North Star Care Limited":
+        if query == "northstar care limited":
             items.insert(
                 0,
                 {"title": "NORTHSTAR CARE LIMITED", "company_number": "11111111"},
@@ -716,6 +716,7 @@ def test_ofsted_provider_name_expands_discovery_and_deduplicates_candidates() ->
 
     assert "North Star Services Ltd" in searched
     assert "North Star Care Limited" in searched
+    assert "northstar care limited" in searched
     assert "North Star Services" in searched
     assert result.status == "MATCHED"
     assert result.outcome == "STRONG"
@@ -723,7 +724,7 @@ def test_ofsted_provider_name_expands_discovery_and_deduplicates_candidates() ->
         "11111111",
         "22222222",
     ]
-    assert "OFSTED_REGISTERED_PROVIDER_NAME" in result.candidates[0][
+    assert "OFSTED_REGISTERED_PROVIDER_NAME_VARIANT" in result.candidates[0][
         "discovery_sources"
     ]
     assert "Exact Ofsted provider-office postcode match" in result.candidates[0][
@@ -736,6 +737,7 @@ def test_ofsted_provider_name_expands_discovery_and_deduplicates_candidates() ->
         "APPROVED_ALIAS",
         "OBSERVED_PROVIDER_NAME",
         "OFSTED_REGISTERED_PROVIDER_NAME",
+        "OFSTED_REGISTERED_PROVIDER_NAME_VARIANT",
     }
     assert len(result.candidates) == 2
 

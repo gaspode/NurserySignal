@@ -571,3 +571,7 @@ Paid-pilot activation check (2026-09-28):
   thresholds. Discovery provenance is retained with immutable enrichment evidence; provider-office
   identity remains strictly separate from opportunity/site geography. Production refresh of the
   existing URN `2806691` review is the final validation gate for this refinement.
+- The first bounded production refresh still returned the previous five weak candidates because the
+  official Ofsted identity and Companies House legal name differ in token spacing. Discovery now also
+  tries one generic, bounded leading-token spacing variant for the authoritative Ofsted provider name
+  and requests at most ten results per query; no matching or automatic-resolution threshold changed.

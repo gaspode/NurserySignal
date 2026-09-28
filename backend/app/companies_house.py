@@ -154,11 +154,23 @@ def _identity_names(candidate: OrganisationCandidate) -> tuple[str, ...]:
     return tuple(names)
 
 
+def _compact_leading_name_variant(value: Any) -> str:
+    """Handle public-provider/legal-name spacing differences without name-specific rules."""
+    words = normalize_identity(value).split()
+    if len(words) < 3:
+        return ""
+    return " ".join((f"{words[0]}{words[1]}", *words[2:]))
+
+
 def _discovery_queries(candidate: OrganisationCandidate) -> tuple[tuple[str, str], ...]:
     values = (
         (candidate.name, "OBSERVED_PROVIDER_NAME"),
         (normalize_identity(candidate.name), "NORMALIZED_OBSERVED_PROVIDER_NAME"),
         (candidate.provider_registered_name, "OFSTED_REGISTERED_PROVIDER_NAME"),
+        (
+            _compact_leading_name_variant(candidate.provider_registered_name),
+            "OFSTED_REGISTERED_PROVIDER_NAME_VARIANT",
+        ),
         *((alias, "APPROVED_ALIAS") for alias in candidate.aliases[:10]),
     )
     queries: list[tuple[str, str]] = []
@@ -360,7 +372,7 @@ class CompaniesHouseProvider:
         """Search every bounded identity name and merge results by company number."""
         merged: dict[str, dict[str, Any]] = {}
         for query, source in _discovery_queries(candidate):
-            for item in self.search(query):
+            for item in self.search(query, limit=10):
                 company_number = str(item.get("company_number") or "").strip().upper()
                 if not company_number:
                     continue
