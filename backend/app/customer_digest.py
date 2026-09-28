@@ -124,6 +124,7 @@ def update_digest_delivery(
 
 def sender_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     sender = os.environ.get("CARESIGNAL_EMAIL_FROM", "").strip()
+    sender_name = os.environ.get("CARESIGNAL_EMAIL_FROM_NAME", "CareSignal").strip()
     backend_function = os.environ.get("BACKEND_FUNCTION_NAME", "").strip()
     ses = boto3.client("sesv2")
     lambda_client = boto3.client("lambda")
@@ -135,7 +136,7 @@ def sender_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
             if not sender or not payload.get("to") or not payload.get("run_id"):
                 raise ValueError("digest sender is not configured")
             ses.send_email(
-                FromEmailAddress=sender,
+                FromEmailAddress=f"{sender_name} <{sender}>" if sender_name else sender,
                 Destination={"ToAddresses": [payload["to"]]},
                 Content={
                     "Simple": {

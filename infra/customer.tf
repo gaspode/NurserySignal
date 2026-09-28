@@ -73,8 +73,9 @@ resource "aws_lambda_function" "customer_digest_sender" {
 
   environment {
     variables = {
-      CARESIGNAL_EMAIL_FROM = var.caresignal_email_from
-      BACKEND_FUNCTION_NAME = aws_lambda_function.backend.function_name
+      CARESIGNAL_EMAIL_FROM      = var.caresignal_email_from
+      CARESIGNAL_EMAIL_FROM_NAME = var.caresignal_email_from_name
+      BACKEND_FUNCTION_NAME      = aws_lambda_function.backend.function_name
     }
   }
 

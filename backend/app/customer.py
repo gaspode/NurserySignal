@@ -161,6 +161,9 @@ def _customer_title(row: dict[str, Any]) -> str:
     if row.get("customer_title"):
         return str(row["customer_title"])
     location = row.get("town") or row.get("local_authority") or row.get("region")
+    postcode_area = _outward_postcode(row.get("postcode"))
+    if postcode_area and postcode_area.lower() not in str(location or "").lower():
+        location = f"{location} {postcode_area}" if location else postcode_area
     subject = {
         "OPENING": "new children’s home",
         "EXPANSION": "children’s-home expansion",
@@ -673,9 +676,19 @@ def digest_preview(
         )
         for item in items
     )
+    preferences_url = f"{portal_url}/#/care/alerts" if portal_url else ""
     body = (
-        f"<h1>CareSignal weekly update</h1><p>{len(items)} opportunities were added "
-        f"or meaningfully updated in the last seven days.</p><ul>{rows}</ul>"
+        "<div style=\"font-family:Arial,sans-serif;max-width:680px;margin:auto\">"
+        "<h1 style=\"color:#193d35\">CareSignal weekly update</h1>"
+        f"<p>{len(items)} opportunities were added or meaningfully updated in the "
+        f"last seven days.</p><ul>{rows}</ul>"
+        + (
+            f'<p style="color:#5d6b66;font-size:13px">Manage or turn off alerts in '
+            f'<a href="{html.escape(preferences_url)}">CareSignal preferences</a>.</p>'
+            if preferences_url
+            else ""
+        )
+        + "</div>"
     )
     return {
         "subject": f"CareSignal weekly update — {len(items)} opportunities",

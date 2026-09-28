@@ -52,6 +52,12 @@ variable "caresignal_email_from" {
   description = "Verified SES sender for CareSignal digests. Empty keeps delivery in preview mode."
 }
 
+variable "caresignal_email_from_name" {
+  description = "Customer-visible display name for CareSignal digest email."
+  type        = string
+  default     = "CareSignal"
+}
+
 variable "ai_model_id" {
   type        = string
   default     = "eu.amazon.nova-lite-v1:0"

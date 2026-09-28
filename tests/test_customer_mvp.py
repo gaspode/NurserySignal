@@ -114,6 +114,7 @@ def test_customer_projection_redacts_internal_exact_location() -> None:
         saved=False,
     )
     assert item["postcode"] == "CV1"
+    assert item["title"] == "Example Care Ltd — new children’s home, Coventry CV1"
     assert item["location_precision"] == "AREA_ONLY"
     assert "address" not in item
     assert "confidence" not in item
@@ -316,6 +317,7 @@ def test_digest_sender_uses_ses_and_reports_delivery(monkeypatch) -> None:
             invoked.append(kwargs)
 
     monkeypatch.setenv("CARESIGNAL_EMAIL_FROM", "updates@example.test")
+    monkeypatch.setenv("CARESIGNAL_EMAIL_FROM_NAME", "CareSignal")
     monkeypatch.setenv("BACKEND_FUNCTION_NAME", "nurserysignal-prod-backend")
     monkeypatch.setattr(
         "app.customer_digest.boto3.client",
@@ -340,7 +342,7 @@ def test_digest_sender_uses_ses_and_reports_delivery(monkeypatch) -> None:
         None,
     )
     assert result == {"batchItemFailures": []}
-    assert sent[0]["FromEmailAddress"] == "updates@example.test"
+    assert sent[0]["FromEmailAddress"] == "CareSignal <updates@example.test>"
     assert sent[0]["Destination"] == {"ToAddresses": ["pilot@example.test"]}
     notification = json.loads(invoked[0]["Payload"])
     assert notification["operation"] == "customer_digest_delivery"

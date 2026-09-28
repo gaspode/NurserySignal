@@ -43,9 +43,9 @@ an HTTP route and each publication uses the normal audit event.
 1. Confirm the configured SES sender identity is verified in `eu-west-1`. If the SES account is in
    sandbox, the recipient must also be verified; request production access before inviting external
    pilot customers.
-2. Configure Terraform variable `caresignal_email_from`, review the plan, deploy through GitHub
-   Actions, and verify both the weekly EventBridge rule and digest SQS event-source mapping are
-   enabled.
+2. Configure Terraform variable `caresignal_email_from` (and, if needed, the customer-visible
+   `caresignal_email_from_name`), review the plan, deploy through GitHub Actions, and verify both the
+   weekly EventBridge rule and digest SQS event-source mapping are enabled.
 3. Set the authorised test user's preference to `WEEKLY` and invoke the bounded
    `customer_weekly_digest` backend operation once.
 4. Confirm one digest run progresses `QUEUED → SENT`, the email is delivered, links open the
