@@ -2,18 +2,12 @@ import { useState } from "react";
 import { apiRequest } from "./api.js";
 
 export function CareProspectMark({ compact = false }) {
-  return <span className={`cp-mark${compact ? " compact" : ""}`} aria-hidden="true">
-    <svg viewBox="0 0 58 30" focusable="false">
-      <path d="M5 23 28 16 51 7" />
-      <circle className="planning" cx="7" cy="22" r="4" />
-      <rect className="recruitment" x="24" y="12" width="8" height="8" />
-      <path className="registration" d="m51 2 6 6-6 6-6-6Z" />
-    </svg>
-  </span>;
+  return <span className={`cp-mark${compact ? " compact" : ""}`} aria-hidden="true" />;
 }
 
-function Brand() {
-  return <span className="cp-wordmark"><CareProspectMark /><span>CareProspect</span></span>;
+export function CareProspectLogo({ compact = false, variant = "", tagline = "" }) {
+  const classes = ["cp-wordmark", compact ? "compact" : "", variant ? `cp-wordmark-${variant}` : ""].filter(Boolean).join(" ");
+  return <span className={classes} aria-label="CareProspect"><CareProspectMark compact={compact} /><span className="cp-logo-copy"><span aria-hidden="true">CareProspect</span>{tagline && <small>{tagline}</small>}</span></span>;
 }
 
 function go(path) {
@@ -78,11 +72,11 @@ function RequestAccessForm() {
 }
 
 function PublicHeader() {
-  return <header className="cp-public-header"><a className="cp-brand-link" href="#/" aria-label="CareProspect home"><Brand /></a><nav aria-label="Main navigation"><a href="#how-early">How early</a><a href="#how-it-works">How it works</a><a href="#who-its-for">Who it’s for</a><a href="#pricing">Pricing</a><a href="#faq">FAQ</a></nav><div className="cp-header-actions"><button className="cp-sign-in" onClick={() => go("/care/login")}>Sign in</button><a className="cp-button primary" href="#request-access">Request access</a></div></header>;
+  return <header className="cp-public-header"><a className="cp-brand-link" href="#/" aria-label="CareProspect home"><CareProspectLogo /></a><nav aria-label="Main navigation"><a href="#how-early">How early</a><a href="#how-it-works">How it works</a><a href="#who-its-for">Who it’s for</a><a href="#pricing">Pricing</a><a href="#faq">FAQ</a></nav><div className="cp-header-actions"><button className="cp-sign-in" onClick={() => go("/care/login")}>Sign in</button><a className="cp-button primary" href="#request-access">Request access</a></div></header>;
 }
 
 function Footer() {
-  return <footer className="cp-footer"><div><Brand /><p>Early intelligence on new children’s homes.</p><small>A product of Mugwump.net Ltd</small></div><nav aria-label="Footer navigation"><button onClick={() => go("/privacy")}>Privacy</button><button onClick={() => go("/terms")}>Terms</button><a href="#request-access">Contact</a><button onClick={() => go("/care/login")}>Sign in</button></nav></footer>;
+  return <footer className="cp-footer"><div><CareProspectLogo variant="footer" /><p>Early intelligence on new children’s homes.</p><small>A product of Mugwump.net Ltd</small></div><nav aria-label="Footer navigation"><button onClick={() => go("/privacy")}>Privacy</button><button onClick={() => go("/terms")}>Terms</button><a href="#request-access">Contact</a><button onClick={() => go("/care/login")}>Sign in</button></nav></footer>;
 }
 
 export function PublicLegalPage({ page }) {

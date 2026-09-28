@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { useApi } from "./api.js";
 import { displayAttributeName, useAuth } from "./auth.js";
 import CustomerApp from "./CustomerApp.jsx";
-import PublicSite, { CareProspectMark, PublicLegalPage } from "./PublicSite.jsx";
+import PublicSite, { CareProspectLogo, PublicLegalPage } from "./PublicSite.jsx";
 
 const PAGE_SIZE = 10;
 const ACTIVE_VERTICALS = new Set(["ALL", "NURSERY", "CHILDRENS_HOME"]);
@@ -151,9 +151,9 @@ export function LoginPage({ onLogin, authError = "", configured = true, password
   return (
     <main className={`login-page${customerBrand ? " care-customer-login" : ""}`}>
       <section className="login-card">
-        <div className={customerBrand ? "care-login-mark" : "brand-mark"}>{customerBrand ? <CareProspectMark /> : "SH"}</div>
+        <div className={customerBrand ? "care-login-mark" : "brand-mark"}>{customerBrand ? <CareProspectLogo variant="login" /> : "SH"}</div>
         <p className="eyebrow">{customerBrand ? "Early intelligence on new children’s homes" : "Secure intelligence workspace"}</p>
-        <h1>{customerBrand ? "CareProspect" : "SignalHub"}</h1>
+        <h1>{customerBrand ? "Sign in" : "SignalHub"}</h1>
         <p className="muted">{customerBrand ? "Sign in to your CareProspect account." : "Sign in to your secure intelligence workspace."}</p>
         {!configured ? (
           <ErrorState message="This deployment has no Cognito configuration." />

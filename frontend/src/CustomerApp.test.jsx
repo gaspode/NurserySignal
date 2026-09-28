@@ -1,7 +1,7 @@
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AlertsPage, CustomerOpportunityDetail, OpportunityFeed } from "./CustomerApp.jsx";
+import { AlertsPage, CustomerOpportunityDetail, CustomerShell, OpportunityFeed } from "./CustomerApp.jsx";
 
 const opportunity = {
   id: "opportunity-1",
@@ -26,6 +26,13 @@ const opportunity = {
 
 describe("CareProspect customer portal", () => {
   afterEach(() => cleanup());
+
+  it("uses the simplified CareProspect logo in the customer shell", () => {
+    const { container } = render(<CustomerShell account={{ account_name: "Pilot supplier" }} path="/care/opportunities" onLogout={vi.fn()}><p>Portal</p></CustomerShell>);
+    expect(screen.getByRole("button", { name: "CareProspect opportunities" })).toBeInTheDocument();
+    expect(container.querySelector(".care-brand .cp-mark")).toBeInTheDocument();
+    expect(container.querySelector(".care-brand svg")).not.toBeInTheDocument();
+  });
 
   it("renders a customer-safe opportunity feed with commercial filters", async () => {
     const api = vi.fn().mockResolvedValue({ items: [opportunity], total: 1 });

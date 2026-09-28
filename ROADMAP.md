@@ -624,3 +624,8 @@ Paid-pilot activation check (2026-09-28):
   Frontend regression coverage prevents viewport-height sizing from returning. Commit `71dca1a` is
   deployed through the normal workflow; live checks at 1280, 1440, 1920, 1024, 768 and 390 pixels
   confirm content-driven flow and no horizontal overflow, completing this focused correction.
+- CareProspect customer branding now uses the approved simplified mark: one planning-ochre dot with
+  the dark serif wordmark. A shared native CSS/text component covers public header/footer, customer
+  portal and sign-in variants, while the favicon is reduced to the same dot on deep green. The former
+  three-stage line/square/diamond artwork has been removed from customer-facing code; SignalHub
+  branding is unchanged. Production deployment and responsive verification are the remaining gate.

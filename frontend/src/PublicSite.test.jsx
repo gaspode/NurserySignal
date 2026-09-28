@@ -13,7 +13,7 @@ describe("CareProspect public website", () => {
   });
 
   it("presents the approved evidence-led homepage structure", () => {
-    render(<PublicSite />);
+    const { container } = render(<PublicSite />);
     expect(screen.getByRole("heading", { name: "Find new children’s homes before they appear on the register." })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Registration is the last signal, not the first" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Built for suppliers to children’s homes" })).toBeInTheDocument();
@@ -21,6 +21,9 @@ describe("CareProspect public website", () => {
     expect(screen.getByRole("heading", { name: "How we handle evidence" })).toBeInTheDocument();
     expect(screen.getByText("£149")).toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: "Sign in" }).length).toBeGreaterThan(0);
+    expect(screen.getAllByLabelText("CareProspect")).toHaveLength(2);
+    expect(container.querySelector(".cp-brand-link .cp-mark")).toBeInTheDocument();
+    expect(container.querySelector(".cp-brand-link svg")).not.toBeInTheDocument();
   });
 
   it("keeps the hero content-driven rather than viewport-height-driven", () => {

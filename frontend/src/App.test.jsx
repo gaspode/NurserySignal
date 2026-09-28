@@ -90,7 +90,8 @@ describe("admin frontend", () => {
 
   it("uses customer language on the CareProspect sign-in boundary", () => {
     render(<LoginPage onLogin={vi.fn()} customerBrand />);
-    expect(screen.getByRole("heading", { name: "CareProspect" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Sign in" })).toBeInTheDocument();
+    expect(screen.getByLabelText("CareProspect")).toBeInTheDocument();
     expect(screen.getByText("Sign in to your CareProspect account.")).toBeInTheDocument();
     expect(screen.queryByText(/staff accounts/i)).not.toBeInTheDocument();
   });
