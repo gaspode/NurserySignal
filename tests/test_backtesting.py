@@ -176,6 +176,11 @@ def test_planning_finds_case_before_recruitment_and_sources_are_explainable() ->
     assert metrics["recall"] == 1.0
     assert sources["planning"]["first_discoveries"] == 1
     assert sources["recruitment"]["corroborations"] == 1
+    assert metrics["lead_time_days"]["minimum"] == 199
+    assert metrics["lead_time_days"]["maximum"] == 199
+    assert metrics["lead_time_distribution"]["180_to_269_days"] == 1
+    assert "Across 1 reconstructable historical registrations" in metrics["marketing_safe_summary"]
+    assert metrics["representative_cases"][0]["source_type"] == "planning"
     # Persisted case results are JSONB-safe; datetime objects must not escape replay.
     json.dumps(result)
 
@@ -351,3 +356,33 @@ def test_reliable_negative_case_makes_labelled_precision_measurable() -> None:
     metrics, _ = aggregate_results([positive, negative])
     assert metrics["known_false_opportunities"] == 1
     assert metrics["precision"] == 0.5
+
+
+def test_distribution_and_source_contribution_are_deterministic() -> None:
+    dates = ("2026-08-20", "2026-05-05", "2026-01-01", "2025-11-01", "2025-07-01")
+    results = []
+    for index, value in enumerate(dates):
+        results.append(
+            replay_case(
+                case(
+                    id=f"{index + 1:08d}-1111-4111-8111-111111111111",
+                    benchmark_case_id=f"ofsted:{index}",
+                ),
+                [planning_signal(date_value=value)],
+                [],
+                BacktestBounds.from_values(
+                    as_of="2026-09-01T23:59:59Z",
+                    lookback_days=540,
+                    max_cases=50,
+                    max_signals=1000,
+                    max_lookback_days=540,
+                ),
+            )
+        )
+    first = aggregate_results(results)
+    second = aggregate_results(results)
+    assert first == second
+    metrics, contribution = first
+    assert sum(metrics["lead_time_distribution"].values()) == 5
+    assert contribution["planning"]["p25_lead_time_days"] is not None
+    assert contribution["planning"]["p75_lead_time_days"] is not None

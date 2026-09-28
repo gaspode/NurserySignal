@@ -1028,7 +1028,7 @@ export function BacktestingPage({ apiClient, selectedVertical = "CHILDRENS_HOME"
     try {
       const value = await apiClient("/admin/backtesting/seed", {
         method: "POST",
-        body: JSON.stringify({ vertical: "CHILDRENS_HOME", benchmark_version: "care-ofsted-v1", limit: 30 }),
+        body: JSON.stringify({ vertical: "CHILDRENS_HOME", benchmark_version: "care-ofsted-v2", limit: 50 }),
       });
       setNotice(`Benchmark ready: ${value.inserted} cases added and ${value.existing} already present.`);
       await load();
@@ -1043,11 +1043,11 @@ export function BacktestingPage({ apiClient, selectedVertical = "CHILDRENS_HOME"
         method: "POST",
         body: JSON.stringify({
           vertical: benchmarkVertical,
-          benchmark_version: benchmarkVertical === "CHILDRENS_HOME" ? "care-ofsted-v1" : "nursery-outcomes-v1",
+          benchmark_version: benchmarkVertical === "CHILDRENS_HOME" ? "care-ofsted-v2" : "nursery-outcomes-v1",
           as_of: `${asOf}T23:59:59Z`,
           lookback_days: 365,
-          max_cases: 30,
-          max_signals: 500,
+          max_cases: 50,
+          max_signals: 1000,
         }),
       });
       setNotice(value.idempotent ? "Identical bounded run reused reproducibly." : "Bounded historical replay completed.");
@@ -1060,7 +1060,10 @@ export function BacktestingPage({ apiClient, selectedVertical = "CHILDRENS_HOME"
   async function importResearch() {
     setBusy(true); setError(""); setNotice("");
     try {
-      const value = await apiClient("/admin/backtesting/research/import", { method: "POST" });
+      const value = await apiClient("/admin/backtesting/research/import", {
+        method: "POST",
+        body: JSON.stringify({ manifest_name: "care_historical_research_v2.json" }),
+      });
       const corpus = value.summary || {};
       setNotice(value.idempotent
         ? "The reviewed historical corpus is already imported."
@@ -1077,10 +1080,10 @@ export function BacktestingPage({ apiClient, selectedVertical = "CHILDRENS_HOME"
         method: "POST",
         body: JSON.stringify({
           vertical: "CHILDRENS_HOME",
-          benchmark_version: "care-ofsted-v1",
+          benchmark_version: "care-ofsted-v2",
           as_of: `${asOf}T23:59:59Z`,
-          max_cases: 30,
-          max_signals: 500,
+          max_cases: 50,
+          max_signals: 1000,
         }),
       });
       setSensitivity(value);
@@ -1109,13 +1112,15 @@ export function BacktestingPage({ apiClient, selectedVertical = "CHILDRENS_HOME"
       <article className="metric-card"><span>Organisation accuracy</span><strong>{metricPercent(metrics.organisation_accuracy)}</strong><small>Operator identity measured separately</small></article>
       <article className="metric-card"><span>Site accuracy</span><strong>{metricPercent(metrics.site_accuracy)}</strong><small>No inferred redacted locations</small></article>
     </div>
+    {metrics.lead_time_distribution && <div className="panel"><div className="section-heading"><div><h2>Lead-time distribution</h2><p className="muted">Detected, replay-eligible cases only. Excluded cases are not treated as misses.</p></div></div><div className="source-counts"><span>Under 90 days <strong>{metrics.lead_time_distribution.under_90_days || 0}</strong></span><span>90–179 <strong>{metrics.lead_time_distribution["90_to_179_days"] || 0}</strong></span><span>180–269 <strong>{metrics.lead_time_distribution["180_to_269_days"] || 0}</strong></span><span>270–364 <strong>{metrics.lead_time_distribution["270_to_364_days"] || 0}</strong></span><span>365+ <strong>{metrics.lead_time_distribution["365_plus_days"] || 0}</strong></span></div>{metrics.marketing_safe_summary && <p>{metrics.marketing_safe_summary}</p>}</div>}
     {recruitmentShadow && <div className="panel"><div className="section-heading"><div><h2>Current recruitment policy preview</h2><p className="muted">Read-only evaluation of the latest {recruitmentShadow.evaluated} stored CareProspect recruitment records.</p></div><Badge>{recruitmentShadow.changed_count} changed</Badge></div><div className="source-counts"><span>Change <strong>{recruitmentShadow.counts?.RELEVANT_CHANGE || 0}</strong></span><span>Routine <strong>{recruitmentShadow.counts?.RELEVANT_ROUTINE || 0}</strong></span><span>Uncertain <strong>{recruitmentShadow.counts?.UNCERTAIN || 0}</strong></span><span>Irrelevant <strong>{recruitmentShadow.counts?.IRRELEVANT || 0}</strong></span></div>{recruitmentShadow.changed?.length > 0 && <div className="table-wrap"><table><thead><tr><th>Vacancy</th><th>Employer</th><th>Previous</th><th>Preview</th><th>Evidence</th></tr></thead><tbody>{recruitmentShadow.changed.map((item) => <tr key={item.signal_id}><td>{item.title}<span className="cell-subtitle">{item.location || "—"}</span></td><td>{item.employer || "—"}</td><td>{titleCase(item.previous_relevance)}</td><td><Badge tone={item.new_relevance === "RELEVANT_CHANGE" ? "approved" : "pending"}>{titleCase(item.new_relevance)}</Badge></td><td>{(item.change_terms || []).map(titleCase).join(", ") || "Role/setting context"}</td></tr>)}</tbody></table></div>}</div>}
     {sensitivity?.runs?.length > 0 && <div className="panel"><h2>Lookback sensitivity</h2><p className="muted">Read-only comparison; the canonical benchmark remains 365 days.</p><div className="table-wrap"><table><thead><tr><th>Window</th><th>Usable</th><th>Detected</th><th>Recall</th><th>Median lead</th></tr></thead><tbody>{sensitivity.runs.map((item) => <tr key={item.lookback_days}><td>{item.lookback_days} days</td><td>{item.metrics?.cases_usable ?? "—"}</td><td>{item.metrics?.detected_cases ?? "—"}</td><td>{metricPercent(item.metrics?.recall)}</td><td>{item.metrics?.lead_time_days?.median == null ? "—" : `${item.metrics.lead_time_days.median} days`}</td></tr>)}</tbody></table></div></div>}
     {detail && <>
       <div className="dashboard-grid">
-        <div className="panel"><h2>Source contribution</h2>{["planning", "recruitment"].map((source) => <div className="field" key={source}><dt>{titleCase(source)}</dt><dd>{contribution[source]?.first_discoveries ?? 0} first · {contribution[source]?.corroborations ?? 0} corroborations · {contribution[source]?.missed ?? 0} missed</dd></div>)}<div className="field"><dt>Combined</dt><dd>{contribution.combined?.found_by_either ?? 0} found · {contribution.combined?.neither_detected ?? 0} neither source</dd></div></div>
+        <div className="panel"><h2>Source contribution</h2>{["planning", "recruitment"].map((source) => <div className="field" key={source}><dt>{titleCase(source)}</dt><dd>{contribution[source]?.first_discoveries ?? 0} first · {contribution[source]?.corroborations ?? 0} corroborations · {contribution[source]?.missed ?? 0} missed<span className="cell-subtitle">Median {contribution[source]?.median_lead_time_days ?? "—"} · p25 {contribution[source]?.p25_lead_time_days ?? "—"} · p75 {contribution[source]?.p75_lead_time_days ?? "—"} days</span></dd></div>)}<div className="field"><dt>Combined</dt><dd>{contribution.combined?.found_by_either ?? 0} found · {contribution.combined?.neither_detected ?? 0} neither source</dd></div></div>
         <div className="panel"><h2>Run provenance</h2><Field label="Benchmark" value={detail.benchmark_version} /><Field label="Corpus" value={detail.corpus_version} /><Field label="Engine" value={detail.engine_version} /><Field label="Status" value={<Badge>{detail.status}</Badge>} /><Field label="As of" value={formatDate(detail.as_of, true)} /><Field label="Review burden" value={`${metrics.reviews_per_genuine_opportunity ?? "—"} per genuine opportunity`} /></div>
       </div>
+      {metrics.representative_cases?.length > 0 && <div className="panel"><h2>Representative public examples</h2><p className="muted">Internal candidates only; privacy-safe and not automatically published.</p><div className="table-wrap"><table><thead><tr><th>Geography</th><th>First source</th><th>Lead time</th><th>Operator at detection</th><th>Evidence</th></tr></thead><tbody>{metrics.representative_cases.map((item) => <tr key={item.case_key}><td>{item.geography || "Withheld"}</td><td>{titleCase(item.source_type)}</td><td>{item.lead_time_days} days</td><td>{item.operator_known ? "Known / probable" : "Unresolved"}</td><td>{item.evidence_description || "Official public evidence"}</td></tr>)}</tbody></table></div></div>}
       {comparison && <div className="panel"><h2>Latest run comparison</h2><p className="muted">Measured deltas only; positive does not automatically mean better.</p><div className="source-counts"><span>Recall <strong>{comparison.delta?.recall ?? "—"}</strong></span><span>Precision <strong>{comparison.delta?.precision ?? "—"}</strong></span><span>Median lead time <strong>{comparison.delta?.median_lead_time_days ?? "—"} days</strong></span><span>Organisation <strong>{comparison.delta?.organisation_accuracy ?? "—"}</strong></span><span>Site <strong>{comparison.delta?.site_accuracy ?? "—"}</strong></span><span>Review burden <strong>{comparison.delta?.reviews_per_genuine_opportunity ?? "—"}</strong></span></div></div>}
       <div className="panel"><h2>Case results</h2><div className="table-wrap"><table><thead><tr><th>Outcome</th><th>Provider</th><th>Result</th><th>First source</th><th>Lead time</th><th>Organisation</th><th>Site/project</th><th>Reviews</th></tr></thead><tbody>{(detail.case_results || []).map((item) => <tr key={item.benchmark_case_uuid}><td><strong>{item.outcome_type}</strong><span className="cell-subtitle">{formatDate(item.outcome_date)} · {item.known_regulatory_id || "—"}</span></td><td>{item.known_operator || "—"}<span className="cell-subtitle">{item.known_location || "—"}</span></td><td>{item.usable ? <Badge tone={item.detected ? "approved" : "pending"}>{item.detected ? "Detected" : "Missed"}</Badge> : <Badge>Excluded</Badge>}<span className="cell-subtitle">{item.exclusion_reason || (item.opportunity_created ? "Opportunity created" : "No opportunity")}</span></td><td>{titleCase(item.first_source)}</td><td>{item.lead_time_days == null ? "—" : `${item.lead_time_days} days`}</td><td>{titleCase(item.organisation_resolution)}</td><td>{titleCase(item.site_resolution)}</td><td>{item.review_items}</td></tr>)}</tbody></table></div></div>
     </>}

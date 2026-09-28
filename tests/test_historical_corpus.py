@@ -133,3 +133,41 @@ def test_bundled_corpus_is_bounded_unique_and_reproducibly_eligible() -> None:
                 case_link_confidence=candidate["case_link_confidence"],
             )
             assert calculated == candidate["eligibility"]
+
+
+def test_expanded_v2_manifest_preserves_v1_and_adds_bounded_outcomes() -> None:
+    baseline = json.loads(
+        Path("backend/app/data/care_historical_research_v1.json").read_text(encoding="utf-8")
+    )
+    expanded = json.loads(
+        Path("backend/app/data/care_historical_research_v2.json").read_text(encoding="utf-8")
+    )
+    assert expanded["benchmark_version"] == "care-ofsted-v2"
+    assert expanded["corpus_version"] == "care-historical-research-v2"
+    assert len(expanded["cases"]) == 50
+    assert len({item["benchmark_case_id"] for item in expanded["cases"]}) == 50
+    assert {item["benchmark_case_id"] for item in baseline["cases"]} <= {
+        item["benchmark_case_id"] for item in expanded["cases"]
+    }
+    assert expanded["research_method"]["matcher_or_classifier_changed"] is False
+    records = {
+        (item["provider"], item["source_type"], item["external_id"]): item
+        for item in expanded["records"]
+    }
+    for case_item, outcome_at in (
+        ("ofsted:2775281", "2024-11-05"),
+        ("ofsted:2774759", "2024-11-08"),
+    ):
+        candidate = next(
+            item for item in expanded["cases"] if item["benchmark_case_id"] == case_item
+        )["candidates"][0]
+        record = records[
+            (candidate["provider"], candidate["source_type"], candidate["external_id"])
+        ]
+        assert evidence_eligibility(
+            outcome_at=outcome_at,
+            available_at=record["available_at"],
+            source_url=record["source_url"],
+            provider=record["provider"],
+            case_link_confidence=candidate["case_link_confidence"],
+        ) == "ELIGIBLE"

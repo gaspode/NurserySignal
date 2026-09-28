@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from dataclasses import asdict
 from datetime import date
 from pathlib import Path
@@ -17,17 +18,21 @@ from app.planning import PlanningQuery, PlotaProvider  # noqa: E402
 from app.secrets import provider_api_key_from_secret  # noqa: E402
 
 
-def month_windows(start: date, end: date) -> list[tuple[date, date]]:
+def month_windows(start: date, end: date, window_months: int = 1) -> list[tuple[date, date]]:
     windows: list[tuple[date, date]] = []
     cursor = start.replace(day=1)
     while cursor <= end:
-        next_month = (
-            date(cursor.year + 1, 1, 1)
-            if cursor.month == 12
-            else date(cursor.year, cursor.month + 1, 1)
+        next_window = cursor
+        for _ in range(window_months):
+            next_window = (
+                date(next_window.year + 1, 1, 1)
+                if next_window.month == 12
+                else date(next_window.year, next_window.month + 1, 1)
+            )
+        windows.append(
+            (max(start, cursor), min(end, date.fromordinal(next_window.toordinal() - 1)))
         )
-        windows.append((max(start, cursor), min(end, date.fromordinal(next_month.toordinal() - 1))))
-        cursor = next_month
+        cursor = next_window
     return windows
 
 
@@ -39,16 +44,31 @@ def main() -> int:
     parser.add_argument("--term", action="append", required=True)
     parser.add_argument("--max-records-per-window", type=int, default=500)
     parser.add_argument("--page-size", type=int, default=250)
+    parser.add_argument("--window-months", type=int, default=1)
+    parser.add_argument("--delay-seconds", type=float, default=1.0)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     if args.to_date < args.from_date:
         parser.error("--to-date must not precede --from-date")
     maximum = min(max(args.max_records_per_window, 1), 500)
     page_size = min(max(args.page_size, 1), 250)
+    window_months = min(max(args.window_months, 1), 12)
+    delay_seconds = min(max(args.delay_seconds, 0.0), 30.0)
     provider = PlotaProvider(provider_api_key_from_secret(args.secret_arn))
     records: dict[str, dict[str, object]] = {}
     searches: list[dict[str, object]] = []
-    for start, end in month_windows(args.from_date, args.to_date):
+    def write_checkpoint() -> None:
+        output = {
+            "provider": "PLOTA",
+            "retrieval_date": date.today().isoformat(),
+            "bounded": True,
+            "window_months": window_months,
+            "searches": searches,
+            "records": sorted(records.values(), key=lambda item: str(item["application_id"])),
+        }
+        args.output.write_text(json.dumps(output, indent=2, sort_keys=True), encoding="utf-8")
+
+    for start, end in month_windows(args.from_date, args.to_date, window_months):
         for term in dict.fromkeys(args.term):
             count = 0
             query = PlanningQuery(
@@ -79,14 +99,10 @@ def main() -> int:
                     "records": count,
                 }
             )
-    output = {
-        "provider": "PLOTA",
-        "retrieval_date": date.today().isoformat(),
-        "bounded": True,
-        "searches": searches,
-        "records": sorted(records.values(), key=lambda item: str(item["application_id"])),
-    }
-    args.output.write_text(json.dumps(output, indent=2, sort_keys=True), encoding="utf-8")
+            write_checkpoint()
+            if delay_seconds:
+                time.sleep(delay_seconds)
+    write_checkpoint()
     print(json.dumps({"searches": len(searches), "unique_records": len(records)}))
     return 0
 

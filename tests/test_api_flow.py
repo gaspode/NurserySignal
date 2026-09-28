@@ -467,7 +467,10 @@ def test_historical_corpus_import_is_admin_only_and_uses_bundled_manifest(monkey
         None,
     )
     assert response["statusCode"] == 200
-    assert captured == {"actor": "staff"}
+    assert captured == {
+        "actor": "staff",
+        "manifest_name": "care_historical_research_v2.json",
+    }
 
     denied = handler(
         event(

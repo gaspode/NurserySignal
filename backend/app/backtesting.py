@@ -12,7 +12,7 @@ from typing import Any
 from app.correlation import classify_match, compatible_names, normalize_identity
 from app.verticals import policy_for, validate_vertical
 
-BACKTEST_ENGINE_VERSION = "historical-replay-v1.2"
+BACKTEST_ENGINE_VERSION = "historical-replay-v1.3"
 POSITIVE_OUTCOMES = {"OPENED", "REGISTERED", "EXPANDED", "RELOCATED"}
 NEGATIVE_OUTCOMES = {"DID_NOT_OPEN", "ABANDONED"}
 _POSTCODE = re.compile(r"\b([A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2})\b", re.IGNORECASE)
@@ -465,6 +465,7 @@ def replay_case(
         "vertical": vertical,
         "outcome_type": case.get("outcome_type"),
         "outcome_date": outcome_at.date().isoformat(),
+        "known_location": case.get("known_location"),
         "usable": True,
         "exclusion_reason": None,
         "detected": first_relevant_at is not None,
@@ -512,6 +513,7 @@ def _excluded_case(case: dict[str, Any], reason: str) -> dict[str, Any]:
         "vertical": case.get("vertical"),
         "outcome_type": case.get("outcome_type"),
         "outcome_date": str(case.get("outcome_date") or ""),
+        "known_location": case.get("known_location"),
         "usable": False,
         "exclusion_reason": reason,
         "detected": False,
@@ -560,6 +562,44 @@ def aggregate_results(results: list[dict[str, Any]]) -> tuple[dict[str, Any], di
     organisation_resolved = [
         item for item in positives if item.get("organisation_resolution") in {"EXACT", "STRONG"}
     ]
+    lead_time_distribution = {
+        "under_90_days": sum(value < 90 for value in lead_times),
+        "90_to_179_days": sum(90 <= value <= 179 for value in lead_times),
+        "180_to_269_days": sum(180 <= value <= 269 for value in lead_times),
+        "270_to_364_days": sum(270 <= value <= 364 for value in lead_times),
+        "365_plus_days": sum(value >= 365 for value in lead_times),
+    }
+    exclusion_reasons: dict[str, int] = {}
+    for item in results:
+        if item["usable"]:
+            continue
+        reason = str(item.get("exclusion_reason") or "unspecified")
+        exclusion_reasons[reason] = exclusion_reasons.get(reason, 0) + 1
+    representative_cases = [
+        {
+            "case_key": item.get("case_key"),
+            "source_type": item.get("first_source"),
+            "lead_time_days": item.get("lead_time_days"),
+            "geography": item.get("known_location"),
+            "operator_known": item.get("organisation_resolution")
+            in {"EXACT", "STRONG", "PROBABLE"},
+            "evidence_description": next(
+                (
+                    event.get("title")
+                    for event in item.get("timeline", [])
+                    if event.get("source") == item.get("first_source")
+                ),
+                None,
+            ),
+        }
+        for item in sorted(
+            detected,
+            key=lambda candidate: (
+                -int(candidate.get("lead_time_days") or 0),
+                str(candidate.get("case_key") or ""),
+            ),
+        )[:8]
+    ]
     metrics = {
         "cases_attempted": len(results),
         "cases_usable": len(usable),
@@ -577,7 +617,20 @@ def aggregate_results(results: list[dict[str, Any]]) -> tuple[dict[str, Any], di
             "p25": _percentile(lead_times, 0.25),
             "p75": _percentile(lead_times, 0.75),
             "p90": _percentile(lead_times, 0.90) if len(lead_times) >= 4 else None,
+            "minimum": min(lead_times) if lead_times else None,
+            "maximum": max(lead_times) if lead_times else None,
         },
+        "lead_time_distribution": lead_time_distribution,
+        "exclusion_reasons": exclusion_reasons,
+        "representative_cases": representative_cases,
+        "marketing_safe_summary": (
+            f"Across {len(detected)} reconstructable historical registrations, relevant public "
+            f"signals were available a median of {median(lead_times):g} days before Ofsted "
+            "registration. This is a bounded historical sample, not an average for all openings "
+            "or a promise about future lead time."
+            if lead_times
+            else None
+        ),
         "organisation_accuracy": round(len(organisation_resolved) / len(positives), 4)
         if positives
         else None,
@@ -619,6 +672,8 @@ def aggregate_results(results: list[dict[str, Any]]) -> tuple[dict[str, Any], di
             ),
             "missed": len(positives) - len(source_cases),
             "median_lead_time_days": median(source_leads) if source_leads else None,
+            "p25_lead_time_days": _percentile(source_leads, 0.25),
+            "p75_lead_time_days": _percentile(source_leads, 0.75),
         }
     source_contribution["combined"] = {
         "found_by_either": sum(

@@ -27,7 +27,8 @@ from app.recruitment import recruitment_record_from_signal
 from app.repository import record_admin_audit
 from app.verticals import ALL_VERTICALS, CHILDRENS_HOME, validate_vertical, validate_vertical_filter
 
-CARE_BENCHMARK_VERSION = "care-ofsted-v1"
+CARE_BENCHMARK_VERSION = "care-ofsted-v2"
+CARE_BASELINE_BENCHMARK_VERSION = "care-ofsted-v1"
 
 
 def evaluate_current_care_recruitment(
@@ -166,10 +167,15 @@ def seed_care_ofsted_benchmark(
     This writes benchmark truth only. It does not change signals, opportunities,
     reviews or lifecycle state, and no Ofsted value becomes a replay input.
     """
-    limit = min(max(int(limit), 1), 30)
+    limit = min(max(int(limit), 1), 50)
     if not benchmark_version or len(benchmark_version) > 80:
         raise ValueError("invalid benchmark_version")
     with connection(settings) as conn:
+        registration_pattern = (
+            r"^20(25|26)-[0-9]{2}-[0-9]{2}$"
+            if benchmark_version == CARE_BASELINE_BENCHMARK_VERSION
+            else r"^20(24|25|26)-[0-9]{2}-[0-9]{2}$"
+        )
         rows = conn.execute(
             """SELECT rs.id, rs.external_id, rs.organisation_hint,
                       rs.metadata->>'ofsted_urn', rs.metadata->>'registration_date',
@@ -178,11 +184,12 @@ def seed_care_ofsted_benchmark(
                WHERE rs.vertical = 'CHILDRENS_HOME'
                  AND rs.source_type = 'ofsted'
                  AND rs.metadata->>'ofsted_urn' IS NOT NULL
-                 AND rs.metadata->>'registration_date' ~ '^20(25|26)-[0-9]{2}-[0-9]{2}$'
+                 AND rs.metadata->>'registration_date' ~ %s
                  AND COALESCE(rs.organisation_hint, '') <> ''
-               ORDER BY (rs.metadata->>'registration_date')::date DESC, rs.id
+               ORDER BY (rs.metadata->>'registration_date')::date DESC,
+                        rs.metadata->>'ofsted_urn'
                LIMIT %s""",
-            (limit,),
+            (registration_pattern, limit),
         ).fetchall()
         inserted = 0
         existing = 0

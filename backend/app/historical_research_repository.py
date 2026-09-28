@@ -20,14 +20,18 @@ from app.historical_corpus import (
 from app.repository import record_admin_audit
 from app.verticals import CHILDRENS_HOME, validate_vertical
 
-DEFAULT_CORPUS_VERSION = "care-historical-research-v1"
-DEFAULT_MANIFEST = "care_historical_research_v1.json"
-MAX_CASES = 30
-MAX_RECORDS = 100
+DEFAULT_CORPUS_VERSION = "care-historical-research-v2"
+DEFAULT_MANIFEST = "care_historical_research_v2.json"
+SUPPORTED_MANIFESTS = {
+    "care_historical_research_v1.json": "care-ofsted-v1",
+    "care_historical_research_v2.json": "care-ofsted-v2",
+}
+MAX_CASES = 50
+MAX_RECORDS = 250
 
 
 def _bundled_manifest(name: str = DEFAULT_MANIFEST) -> tuple[bytes, dict[str, Any]]:
-    if name != DEFAULT_MANIFEST:
+    if name not in SUPPORTED_MANIFESTS:
         raise ValueError("unsupported historical corpus manifest")
     payload = files("app.data").joinpath(name).read_bytes()
     if len(payload) > 512 * 1024:
@@ -56,8 +60,8 @@ def import_bundled_historical_corpus(
     benchmark_version = _require_text(manifest.get("benchmark_version"), "benchmark_version", 80)
     corpus_version = _require_text(manifest.get("corpus_version"), "corpus_version", 80)
     vertical = validate_vertical(_require_text(manifest.get("vertical"), "vertical", 40))
-    if vertical != CHILDRENS_HOME or benchmark_version != "care-ofsted-v1":
-        raise ValueError("initial historical corpus supports care-ofsted-v1 only")
+    if vertical != CHILDRENS_HOME or benchmark_version != SUPPORTED_MANIFESTS[manifest_name]:
+        raise ValueError("historical corpus manifest does not match its benchmark version")
     records = manifest.get("records") or []
     cases = manifest.get("cases") or []
     if not isinstance(records, list) or not isinstance(cases, list):

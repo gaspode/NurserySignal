@@ -616,7 +616,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                         benchmark_version=str(
                             payload.get("benchmark_version") or CARE_BENCHMARK_VERSION
                         ),
-                        limit=min(max(int(payload.get("limit", 30)), 1), 30),
+                        limit=min(max(int(payload.get("limit", 50)), 1), 50),
                     ),
                 )
             if action == "backtesting-research-import" and method == "POST":
@@ -624,9 +624,16 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 if admin_error:
                     return admin_error
                 actor = str(claims.get("sub") or claims.get("username") or "unknown")
+                payload = parse_json_payload(_raw_body(event))
                 return _response(
                     200,
-                    import_bundled_historical_corpus(settings, actor=actor),
+                    import_bundled_historical_corpus(
+                        settings,
+                        actor=actor,
+                        manifest_name=str(
+                            payload.get("manifest_name") or "care_historical_research_v2.json"
+                        ),
+                    ),
                 )
             if action == "backtesting-run" and method == "POST":
                 admin_error = _require_admin(claims, settings)

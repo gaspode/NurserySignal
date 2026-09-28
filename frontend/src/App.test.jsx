@@ -767,7 +767,7 @@ describe("admin frontend", () => {
     await userEvent.click(screen.getByRole("button", { name: "Run benchmark" }));
     expect(apiClient).toHaveBeenCalledWith("/admin/backtesting/run", {
       method: "POST",
-      body: expect.stringContaining('"max_cases":30'),
+      body: expect.stringContaining('"max_cases":50'),
     });
     expect(await screen.findByText("67%")).toBeInTheDocument();
     expect(screen.getAllByText("Not measurable")).toHaveLength(2);
@@ -795,7 +795,10 @@ describe("admin frontend", () => {
     expect(await screen.findByText("care-historical-research-v1 · official, date-verifiable evidence only")).toBeInTheDocument();
     expect(screen.getByText("KDB Care Ltd")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Import researched corpus" }));
-    expect(apiClient).toHaveBeenCalledWith("/admin/backtesting/research/import", { method: "POST" });
+    expect(apiClient).toHaveBeenCalledWith("/admin/backtesting/research/import", {
+      method: "POST",
+      body: JSON.stringify({ manifest_name: "care_historical_research_v2.json" }),
+    });
     expect(await screen.findByText("The reviewed historical corpus is already imported.")).toBeInTheDocument();
   });
 
@@ -822,7 +825,7 @@ describe("admin frontend", () => {
     await userEvent.click(screen.getByRole("button", { name: "Compare lookbacks" }));
     expect(apiClient).toHaveBeenCalledWith("/admin/backtesting/sensitivity", {
       method: "POST",
-      body: expect.stringContaining('"max_signals":500'),
+      body: expect.stringContaining('"max_signals":1000'),
     });
     expect(await screen.findByText("450 days")).toBeInTheDocument();
   });

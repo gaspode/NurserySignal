@@ -362,6 +362,15 @@ Implementation status:
   stronger prospective source coverage and more labelled outcomes. Track the exact-workplace
   duplicate exposed by the two Birch House adverts, but do not widen automatic site matching from
   one case; rerun this fixed benchmark as coverage grows before extending it to NurserySignal.
+- Phase 11 expansion `care-ofsted-v2` is implemented as a separate 50-outcome benchmark (29
+  additional authoritative outcomes) with `care-historical-research-v2`; v1 remains immutable.
+  The bounded research pass retained all existing eligible evidence and added two strong,
+  date-verifiable official planning links (Leicestershire and Sandwell). Provider-only,
+  same-authority and undated findings remain excluded because redacted Ofsted geography cannot
+  establish site identity. The replay now reports observed min/max, fixed lead-time bands,
+  source-specific quartiles, exclusion counts, and an internal marketing-safe summary with up to
+  eight representative cases. Production 365/450/540 metrics remain the release gate until the v2
+  corpus is deployed/imported and replayed; do not publish the candidate wording beforehand.
 
 Procurement source-value experiment:
 - Added a bounded, manual-only CareSignal procurement family over the official Find a Tender and

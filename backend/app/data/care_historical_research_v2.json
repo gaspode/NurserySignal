@@ -1,0 +1,1444 @@
+{
+  "benchmark_version": "care-ofsted-v2",
+  "corpus_version": "care-historical-research-v2",
+  "vertical": "CHILDRENS_HOME",
+  "researched_at": "2026-09-28T00:00:00Z",
+  "research_method": {
+    "bounded": true,
+    "outcomes_selected": 50,
+    "baseline_cases_preserved": 21,
+    "matcher_or_classifier_changed": false,
+    "notes": "Known outcomes guided source research only. Ofsted truth and later enrichment are not replay inputs."
+  },
+  "records": [
+    {
+      "vertical": "CHILDRENS_HOME",
+      "source_type": "planning",
+      "provider": "OFFICIAL_PLANNING_APPEALS",
+      "external_id": "APP/G4620/W/23/3328400",
+      "source_url": "https://acp.planninginspectorate.gov.uk/ViewCase.aspx?caseid=3328400",
+      "title": "Change of use to a children's residential home",
+      "raw_text": "Change of use from a C3 dwelling house to a C2 use for a children's residential home for young people aged 7-18.",
+      "organisation_hint": "KDB Care Ltd T/A Right Steps",
+      "location_hint": "4 Huskison Close, Sandwell, Oldbury B69 1LZ",
+      "source_event_at": "2024-02-01T00:00:00Z",
+      "available_at": "2024-02-01T00:00:00Z",
+      "retrieved_at": "2026-09-27T21:00:00Z",
+      "metadata": {
+        "application_reference": "DC/23/68323",
+        "appeal_reference": "APP/G4620/W/23/3328400",
+        "application_date": "2023-05-25",
+        "publication_date": "2024-02-01",
+        "decision_date": "2024-02-01",
+        "local_authority": "Sandwell",
+        "postcode": "B69 1LZ",
+        "historical_state": "appeal decision as published on 2024-02-01"
+      },
+      "provenance": {
+        "authority": "Planning Inspectorate",
+        "official": true,
+        "availability_basis": "dated appeal decision",
+        "research_note": "The original application predates the 365-day window; the official appeal decision made the proposal publicly knowable within the window."
+      }
+    },
+    {
+      "vertical": "CHILDRENS_HOME",
+      "source_type": "recruitment",
+      "provider": "OFFICIAL_COUNCIL_RECRUITMENT",
+      "external_id": "warwickshire-5704",
+      "source_url": "https://www.warwickshire.gov.uk/news/article/5704/support-worker---birch-house",
+      "title": "Support Worker - Birch House",
+      "raw_text": "Cumulus Care Services is looking for Support Staff to join our new residential home in Nuneaton, supporting young people in a safe, supportive environment.",
+      "organisation_hint": "Cumulus Care Services",
+      "location_hint": "Nuneaton, Warwickshire",
+      "source_event_at": "2024-11-06T00:00:00Z",
+      "available_at": "2024-11-06T00:00:00Z",
+      "retrieved_at": "2026-09-27T21:00:00Z",
+      "metadata": {
+        "published_at": "2024-11-06",
+        "employer_name": "Cumulus Care Services",
+        "workplace_name": "Birch House",
+        "locality": "Nuneaton",
+        "local_authority": "Warwickshire",
+        "employment_type": "Full-time, Part-time"
+      },
+      "provenance": {
+        "authority": "Warwickshire County Council",
+        "official": true,
+        "availability_basis": "publication date printed on the vacancy page"
+      }
+    },
+    {
+      "vertical": "CHILDRENS_HOME",
+      "source_type": "recruitment",
+      "provider": "OFFICIAL_COUNCIL_RECRUITMENT",
+      "external_id": "warwickshire-5705",
+      "source_url": "https://www.warwickshire.gov.uk/news/article/5705/team-leader---birch-house",
+      "title": "Team Leader - Birch House",
+      "raw_text": "Cumulus Care Services is seeking a Team Leader to manage support staff and ensure the smooth operation of our new residential home in Nuneaton for young people.",
+      "organisation_hint": "Cumulus Care Services",
+      "location_hint": "Nuneaton, Warwickshire",
+      "source_event_at": "2024-11-06T00:00:00Z",
+      "available_at": "2024-11-06T00:00:00Z",
+      "retrieved_at": "2026-09-27T21:00:00Z",
+      "metadata": {
+        "published_at": "2024-11-06",
+        "employer_name": "Cumulus Care Services",
+        "workplace_name": "Birch House",
+        "locality": "Nuneaton",
+        "local_authority": "Warwickshire",
+        "employment_type": "Full-time"
+      },
+      "provenance": {
+        "authority": "Warwickshire County Council",
+        "official": true,
+        "availability_basis": "publication date printed on the vacancy page"
+      }
+    },
+    {
+      "vertical": "CHILDRENS_HOME",
+      "source_type": "planning",
+      "provider": "OFFICIAL_COUNCIL_PLANNING",
+      "external_id": "24/00650/LUPROP",
+      "source_url": "https://legacy.tendringdc.gov.uk/sites/default/files/documents/planning/Applications%20Received%202024-05-17.pdf",
+      "title": "Lawful development certificate for a small children's home",
+      "raw_text": "Application for Lawful Development Certificate for Proposed Use or Development for the use of the property as a small childrens home for less than six residents (use class C3(b)).",
+      "organisation_hint": "Waltham Children's Services Limited",
+      "location_hint": "31 Ferndale Close, Clacton On Sea, Essex CO15 4TP",
+      "source_event_at": "2024-05-17T00:00:00Z",
+      "available_at": "2024-05-17T00:00:00Z",
+      "retrieved_at": "2026-09-27T21:00:00Z",
+      "metadata": {
+        "application_reference": "24/00650/LUPROP",
+        "publication_date": "2024-05-17",
+        "local_authority": "Essex",
+        "council": "Tendring District Council",
+        "postcode": "CO15 4TP"
+      },
+      "provenance": {
+        "authority": "Tendring District Council",
+        "official": true,
+        "availability_basis": "dated weekly planning applications register"
+      }
+    },
+    {
+      "vertical": "CHILDRENS_HOME",
+      "source_type": "planning",
+      "provider": "OFFICIAL_COUNCIL_PLANNING",
+      "external_id": "2024/0133/CLPD",
+      "source_url": "https://mansfield.moderngov.co.uk/documents/s3029/Planning%20Application%20Reference%20-%2020240133CLPD%20-%20Application%20for%20a%20lawful%20development%20certificate.pdf",
+      "title": "Lawful development certificate for a home for two children",
+      "raw_text": "Application for a lawful development certificate for a home for two children with a support worker, seeking use from a C3 dwellinghouse to a C2 residential institution.",
+      "organisation_hint": "Consistent Quality Support Ltd",
+      "location_hint": "4 Chaffinch Close, Mansfield, Nottinghamshire NG18 2QS",
+      "source_event_at": "2024-09-02T00:00:00Z",
+      "available_at": "2024-09-02T00:00:00Z",
+      "retrieved_at": "2026-09-27T21:00:00Z",
+      "metadata": {
+        "application_reference": "2024/0133/CLPD",
+        "application_date": "2024-03-11",
+        "publication_date": "2024-09-02",
+        "local_authority": "Nottinghamshire",
+        "council": "Mansfield District Council",
+        "postcode": "NG18 2QS"
+      },
+      "provenance": {
+        "authority": "Mansfield District Council",
+        "official": true,
+        "availability_basis": "dated planning committee report"
+      }
+    },
+    {
+      "vertical": "CHILDRENS_HOME",
+      "source_type": "planning",
+      "provider": "OFFICIAL_COUNCIL_PLANNING",
+      "external_id": "A/23/96235/CU",
+      "source_url": "https://wigan.moderngov.co.uk/documents/s82570/Minutes%2013022024%20Planning%20Committee.pdf?a=1",
+      "title": "Change of use to a children's care facility",
+      "raw_text": "Change of use from a dwellinghouse (Use Class C3(a)) to a children's care facility for up to three children (Use Class C2).",
+      "organisation_hint": "Endless Possibility Care Ltd",
+      "location_hint": "10 Giants Hall Road, Standish Lower Ground, Wigan WN6 8JR",
+      "source_event_at": "2024-02-13T00:00:00Z",
+      "available_at": "2024-02-13T00:00:00Z",
+      "retrieved_at": "2026-09-27T21:00:00Z",
+      "metadata": {
+        "application_reference": "A/23/96235/CU",
+        "publication_date": "2024-02-13",
+        "local_authority": "Wigan",
+        "council": "Wigan Council",
+        "postcode": "WN6 8JR"
+      },
+      "provenance": {
+        "authority": "Wigan Council",
+        "official": true,
+        "availability_basis": "dated planning committee minutes",
+        "research_note": "Strong source evidence, but seven days outside the benchmark's unchanged 365-day replay window."
+      }
+    },
+    {
+      "vertical": "CHILDRENS_HOME",
+      "source_type": "planning",
+      "provider": "OFFICIAL_COUNCIL_PLANNING",
+      "external_id": "DC/2024/00147",
+      "source_url": "https://modgov.sefton.gov.uk/documents/g11071/Public%20reports%20pack%2010th-Apr-2024%2018.30%20Planning%20Committee.pdf?T=10",
+      "title": "Change of use to a children's home",
+      "raw_text": "Change of use from a dwellinghouse (C3) to a children's home (C2) for up to three children.",
+      "organisation_hint": "Flora Care Solutions (1) Ltd",
+      "location_hint": "18 Wills Avenue, Maghull, Sefton L31 0AX",
+      "source_event_at": "2024-04-10T00:00:00Z",
+      "available_at": "2024-04-10T00:00:00Z",
+      "retrieved_at": "2026-09-27T21:00:00Z",
+      "metadata": {
+        "application_reference": "DC/2024/00147",
+        "publication_date": "2024-04-10",
+        "local_authority": "Sefton",
+        "postcode": "L31 0AX"
+      },
+      "provenance": {
+        "authority": "Sefton Council",
+        "official": true,
+        "availability_basis": "dated planning committee report"
+      }
+    },
+    {
+      "vertical": "CHILDRENS_HOME",
+      "source_type": "planning",
+      "provider": "OFFICIAL_COUNCIL_PLANNING",
+      "external_id": "24/00631/FUL",
+      "source_url": "https://moderngovwebpublic.redditchbc.gov.uk/mgAi.aspx?ID=27742",
+      "title": "Residential children accommodation at Battens Close",
+      "raw_text": "Change of use proposals for residential accommodation for children at Battens Close, supported at committee by TJY Care Ltd.",
+      "organisation_hint": "TJY Care Ltd",
+      "location_hint": "Battens Close, Redditch, Worcestershire B98 7HY",
+      "source_event_at": "2024-09-12T00:00:00Z",
+      "available_at": "2024-09-12T00:00:00Z",
+      "retrieved_at": "2026-09-27T21:00:00Z",
+      "metadata": {
+        "application_reference": "24/00631/FUL",
+        "publication_date": "2024-09-12",
+        "local_authority": "Worcestershire",
+        "council": "Redditch Borough Council",
+        "postcode": "B98 7HY"
+      },
+      "provenance": {
+        "authority": "Redditch Borough Council",
+        "official": true,
+        "availability_basis": "dated planning committee record"
+      }
+    },
+    {
+      "vertical": "CHILDRENS_HOME",
+      "source_type": "planning",
+      "provider": "OFFICIAL_COUNCIL_PLANNING",
+      "external_id": "23/01003/FUL",
+      "source_url": "https://democracy.melton.gov.uk/documents/s26759/4.3%20-%2023.01003.FUL%20Old%20Ivy%20House%20Barkestone%20Le%20Vale.pdf",
+      "title": "Change of use to a children's home for up to four young people",
+      "raw_text": "Change of use of existing dwellinghouse (Class C3) to a children's home (Class C2) for up to four young people. Applicant: Anchor Care and Education Ltd.",
+      "organisation_hint": "Anchor Care and Education Ltd",
+      "location_hint": "Barkestone Le Vale, Leicestershire",
+      "source_event_at": "2024-08-01T00:00:00Z",
+      "available_at": "2024-08-01T00:00:00Z",
+      "retrieved_at": "2026-09-28T00:00:00Z",
+      "metadata": {
+        "application_reference": "23/01003/FUL",
+        "publication_date": "2024-08-01",
+        "local_authority": "Leicestershire",
+        "council": "Melton Borough Council"
+      },
+      "provenance": {
+        "authority": "Melton Borough Council",
+        "official": true,
+        "availability_basis": "dated Planning Committee report",
+        "research_version": "care-historical-research-v2"
+      }
+    },
+    {
+      "vertical": "CHILDRENS_HOME",
+      "source_type": "planning",
+      "provider": "PLOTA",
+      "external_id": "S1BVP2NRM2M00",
+      "source_url": "https://docs.planning.org.uk/20231016/229/S1BVP2NRM2M00/wf61qn6qk35qz7nr.pdf",
+      "title": "Proposed change of use to a children's home",
+      "raw_text": "Planning Management Statement for Care 4 Good Ltd regarding a proposed change of use to Class C2 at Yew Tree Lane, Rowley Regis, Sandwell. Care 4 Good was established to provide specialist support and care for looked after young people aged 8 to 17.",
+      "organisation_hint": "Care 4 Good Ltd",
+      "location_hint": "Rowley Regis, Sandwell",
+      "source_event_at": "2023-10-16T00:00:00Z",
+      "available_at": "2023-10-16T00:00:00Z",
+      "retrieved_at": "2026-09-28T00:00:00Z",
+      "metadata": {
+        "publication_date": "2023-10-16",
+        "local_authority": "Sandwell",
+        "provider_document_key": "S1BVP2NRM2M00"
+      },
+      "provenance": {
+        "authority": "Plota preserved planning document",
+        "official": true,
+        "availability_basis": "date-versioned planning document path",
+        "research_version": "care-historical-research-v2"
+      }
+    }
+  ],
+  "cases": [
+    {
+      "benchmark_case_id": "ofsted:2790126",
+      "status": "COMPLETE",
+      "sources_searched": [
+        "PLOTA_HISTORICAL",
+        "OFFICIAL_COUNCIL_PLANNING",
+        "OFFICIAL_RECRUITMENT"
+      ],
+      "search_strategy": {
+        "provider_terms": [
+          "Contemporary Concept Care"
+        ],
+        "location": "Lancashire",
+        "window_months": 12
+      },
+      "not_found_reason": "NOT_FOUND",
+      "notes": "Older council payment records show provider activity but do not identify a new planning/recruitment event for this outcome.",
+      "candidates": []
+    },
+    {
+      "benchmark_case_id": "ofsted:2807817",
+      "status": "COMPLETE",
+      "sources_searched": [
+        "PLOTA_HISTORICAL",
+        "OFFICIAL_COUNCIL_PLANNING",
+        "OFFICIAL_RECRUITMENT"
+      ],
+      "search_strategy": {
+        "provider_terms": [
+          "Prosperity Childrens Services",
+          "Trinity Care and Education"
+        ],
+        "location": "Bury",
+        "window_months": 12
+      },
+      "not_found_reason": "NOT_FOUND",
+      "notes": "No eligible planning or recruitment item could be tied to this particular Bury home.",
+      "candidates": []
+    },
+    {
+      "benchmark_case_id": "ofsted:2832292",
+      "status": "COMPLETE",
+      "sources_searched": [
+        "PLOTA_HISTORICAL",
+        "OFFICIAL_COUNCIL_PLANNING",
+        "OFFICIAL_RECRUITMENT"
+      ],
+      "search_strategy": {
+        "provider_terms": [
+          "Mayden Support"
+        ],
+        "location": "Staffordshire",
+        "window_months": 12
+      },
+      "not_found_reason": "NOT_FOUND",
+      "notes": "Later planning and current provider pages were excluded as post-registration or undated evidence.",
+      "candidates": []
+    },
+    {
+      "benchmark_case_id": "ofsted:2770693",
+      "status": "COMPLETE",
+      "sources_searched": [
+        "PLOTA_HISTORICAL",
+        "OFFICIAL_COUNCIL_PLANNING",
+        "OFFICIAL_RECRUITMENT"
+      ],
+      "search_strategy": {
+        "provider_terms": [
+          "Bridge2Future",
+          "Bridge2Future Care Group",
+          "Cherry Lodge"
+        ],
+        "location": "Leicestershire",
+        "window_months": 12
+      },
+      "not_found_reason": "NOT_FOUND",
+      "notes": "No site-specific, date-verifiable pre-registration planning or recruitment evidence was located.",
+      "candidates": []
+    },
+    {
+      "benchmark_case_id": "ofsted:2823938",
+      "status": "COMPLETE",
+      "sources_searched": [
+        "PLOTA_HISTORICAL",
+        "MANSFIELD_COUNCIL_PLANNING",
+        "OFFICIAL_RECRUITMENT"
+      ],
+      "search_strategy": {
+        "provider_terms": [
+          "Consistent Quality Support",
+          "CQS"
+        ],
+        "location": "Nottinghamshire",
+        "window_months": 12
+      },
+      "notes": "Official committee evidence identifies the exact provider and Nottinghamshire children-home proposal.",
+      "candidates": [
+        {
+          "provider": "OFFICIAL_COUNCIL_PLANNING",
+          "source_type": "planning",
+          "external_id": "2024/0133/CLPD",
+          "case_link_confidence": "STRONG_CASE_LINK",
+          "eligibility": "ELIGIBLE",
+          "link_reason": "Exact provider, matching Nottinghamshire geography and explicit children-home lawful-use application before registration."
+        }
+      ]
+    },
+    {
+      "benchmark_case_id": "ofsted:2823861",
+      "status": "COMPLETE",
+      "sources_searched": [
+        "PLOTA_HISTORICAL",
+        "OFFICIAL_COUNCIL_PLANNING",
+        "OFFICIAL_RECRUITMENT"
+      ],
+      "search_strategy": {
+        "provider_terms": [
+          "Empower Residential"
+        ],
+        "location": "Somerset",
+        "window_months": 12
+      },
+      "not_found_reason": "NOT_FOUND",
+      "notes": "No eligible official pre-registration item was located.",
+      "candidates": []
+    },
+    {
+      "benchmark_case_id": "ofsted:2816928",
+      "status": "COMPLETE",
+      "sources_searched": [
+        "PLOTA_HISTORICAL",
+        "OFFICIAL_COUNCIL_PLANNING",
+        "OFFICIAL_RECRUITMENT"
+      ],
+      "search_strategy": {
+        "provider_terms": [
+          "4 Pure Heart"
+        ],
+        "location": "Stockport",
+        "window_months": 12
+      },
+      "not_found_reason": "NOT_FOUND",
+      "notes": "Older Ofsted/provider records are outcome-era regulatory evidence, not pre-registration planning or recruitment for this home.",
+      "candidates": []
+    },
+    {
+      "benchmark_case_id": "ofsted:2811903",
+      "status": "COMPLETE",
+      "sources_searched": [
+        "PLOTA_HISTORICAL",
+        "OFFICIAL_COUNCIL_PLANNING",
+        "OFFICIAL_RECRUITMENT"
+      ],
+      "search_strategy": {
+        "provider_terms": [
+          "Kids Inc Residential Services"
+        ],
+        "location": "Manchester",
+        "window_months": 12
+      },
+      "not_found_reason": "NOT_FOUND",
+      "notes": "An official 2021 planning appeal exists for the provider but is far outside this outcome's research window and was not admitted.",
+      "candidates": []
+    },
+    {
+      "benchmark_case_id": "ofsted:2819221",
+      "status": "COMPLETE",
+      "sources_searched": [
+        "PLOTA_HISTORICAL",
+        "TENDRING_COUNCIL_PLANNING",
+        "OFFICIAL_RECRUITMENT"
+      ],
+      "search_strategy": {
+        "provider_terms": [
+          "Waltham Children's Services"
+        ],
+        "location": "Essex",
+        "window_months": 12
+      },
+      "notes": "The official weekly list identifies the exact provider and an Essex children-home application before registration.",
+      "candidates": [
+        {
+          "provider": "OFFICIAL_COUNCIL_PLANNING",
+          "source_type": "planning",
+          "external_id": "24/00650/LUPROP",
+          "case_link_confidence": "STRONG_CASE_LINK",
+          "eligibility": "ELIGIBLE",
+          "link_reason": "Exact provider, matching Essex geography and explicit children's-home use before registration."
+        }
+      ]
+    },
+    {
+      "benchmark_case_id": "ofsted:2818548",
+      "status": "COMPLETE",
+      "sources_searched": [
+        "PLOTA_HISTORICAL",
+        "OFFICIAL_COUNCIL_PLANNING",
+        "OFFICIAL_RECRUITMENT"
+      ],
+      "search_strategy": {
+        "provider_terms": [
+          "Mellifera Homes"
+        ],
+        "location": "Devon",
+        "window_months": 12
+      },
+      "not_found_reason": "FOUND_BUT_NOT_RELIABLY_DATED",
+      "notes": "Current recruitment for a later new home was found but did not predate this benchmark registration.",
+      "candidates": []
+    },
+    {
+      "benchmark_case_id": "ofsted:2816819",
+      "status": "COMPLETE",
+      "sources_searched": [
+        "PLOTA_HISTORICAL",
+        "WIGAN_COUNCIL_PLANNING",
+        "OFFICIAL_RECRUITMENT"
+      ],
+      "search_strategy": {
+        "provider_terms": [
+          "Endless Possibility Care"
+        ],
+        "location": "Wigan",
+        "window_months": 12
+      },
+      "notes": "Strong official planning evidence was retained; its publication is seven days outside the unchanged 365-day replay window.",
+      "candidates": [
+        {
+          "provider": "OFFICIAL_COUNCIL_PLANNING",
+          "source_type": "planning",
+          "external_id": "A/23/96235/CU",
+          "case_link_confidence": "STRONG_CASE_LINK",
+          "eligibility": "ELIGIBLE",
+          "link_reason": "Exact provider, exact Wigan authority and explicit children-home change of use before registration."
+        }
+      ]
+    },
+    {
+      "benchmark_case_id": "ofsted:2811131",
+      "status": "COMPLETE",
+      "sources_searched": [
+        "PLOTA_HISTORICAL",
+        "OFFICIAL_COUNCIL_PLANNING",
+        "OFFICIAL_RECRUITMENT"
+      ],
+      "search_strategy": {
+        "provider_terms": [
+          "Brighter Pathways NW"
+        ],
+        "location": "Cheshire West and Chester",
+        "window_months": 12
+      },
+      "not_found_reason": "NOT_FOUND",
+      "notes": "No eligible official planning or reliably dated recruitment record was located.",
+      "candidates": []
+    },
+    {
+      "benchmark_case_id": "ofsted:2819761",
+      "status": "COMPLETE",
+      "sources_searched": [
+        "PLOTA_HISTORICAL",
+        "OFFICIAL_COUNCIL_PLANNING",
+        "OFFICIAL_RECRUITMENT"
+      ],
+      "search_strategy": {
+        "provider_terms": [
+          "Estuary Residential Care"
+        ],
+        "location": "Cheshire East",
+        "window_months": 12
+      },
+      "not_found_reason": "NOT_FOUND",
+      "notes": "Company formation evidence was found but Companies House is not opportunity discovery evidence.",
+      "candidates": []
+    },
+    {
+      "benchmark_case_id": "ofsted:2817348",
+      "status": "COMPLETE",
+      "sources_searched": [
+        "PLOTA_HISTORICAL",
+        "OFFICIAL_COUNCIL_PLANNING",
+        "WARWICKSHIRE_COUNCIL_JOBS"
+      ],
+      "search_strategy": {
+        "provider_terms": [
+          "RCS Operations",
+          "Cumulus Care Services",
+          "Birch House"
+        ],
+        "location": "Warwickshire",
+        "window_months": 12
+      },
+      "notes": "Two dated council-hosted vacancies explicitly describe the provider's new Nuneaton residential home.",
+      "candidates": [
+        {
+          "provider": "OFFICIAL_COUNCIL_RECRUITMENT",
+          "source_type": "recruitment",
+          "external_id": "warwickshire-5704",
+          "case_link_confidence": "STRONG_CASE_LINK",
+          "eligibility": "ELIGIBLE",
+          "link_reason": "Exact trading name, Warwickshire/Nuneaton context and explicit new-home wording before registration."
+        },
+        {
+          "provider": "OFFICIAL_COUNCIL_RECRUITMENT",
+          "source_type": "recruitment",
+          "external_id": "warwickshire-5705",
+          "case_link_confidence": "STRONG_CASE_LINK",
+          "eligibility": "ELIGIBLE",
+          "link_reason": "Exact trading name, Warwickshire/Nuneaton context and explicit new-home wording before registration."
+        }
+      ]
+    },
+    {
+      "benchmark_case_id": "ofsted:2822461",
+      "status": "COMPLETE",
+      "sources_searched": [
+        "PLOTA_HISTORICAL",
+        "OFFICIAL_COUNCIL_PLANNING",
+        "OFFICIAL_RECRUITMENT"
+      ],
+      "search_strategy": {
+        "provider_terms": [
+          "Resolute Care"
+        ],
+        "location": "Derby",
+        "window_months": 12
+      },
+      "not_found_reason": "SOURCE_NOT_HISTORICALLY_SEARCHABLE",
+      "notes": "Current careers pages had no defensible historical publication snapshot for this outcome.",
+      "candidates": []
+    },
+    {
+      "benchmark_case_id": "ofsted:2768643",
+      "status": "COMPLETE",
+      "sources_searched": [
+        "PLOTA_HISTORICAL",
+        "OFFICIAL_COUNCIL_PLANNING",
+        "OFFICIAL_RECRUITMENT"
+      ],
+      "search_strategy": {
+        "provider_terms": [
+          "Care2Care Children's Home"
+        ],
+        "location": "Warwickshire",
+        "window_months": 12
+      },
+      "not_found_reason": "NOT_FOUND",
+      "notes": "Official payment records confirmed operator activity but were not planning or recruitment discovery evidence.",
+      "candidates": []
+    },
+    {
+      "benchmark_case_id": "ofsted:2757606",
+      "status": "COMPLETE",
+      "sources_searched": [
+        "PLOTA_HISTORICAL",
+        "OFFICIAL_COUNCIL_PLANNING",
+        "OFFICIAL_RECRUITMENT"
+      ],
+      "search_strategy": {
+        "provider_terms": [
+          "Aden Homes Limited"
+        ],
+        "location": "Havering",
+        "window_months": 12
+      },
+      "not_found_reason": "NOT_FOUND",
+      "notes": "Search results concerned other provision or post-registration applications.",
+      "candidates": []
+    },
+    {
+      "benchmark_case_id": "ofsted:2820714",
+      "status": "COMPLETE",
+      "sources_searched": [
+        "PLOTA_HISTORICAL",
+        "OFFICIAL_COUNCIL_PLANNING",
+        "OFFICIAL_RECRUITMENT"
+      ],
+      "search_strategy": {
+        "provider_terms": [
+          "TJY Care"
+        ],
+        "location": "Sandwell",
+        "window_months": 12
+      },
+      "not_found_reason": "FOUND_BUT_CASE_LINK_UNCERTAIN",
+      "notes": "An official Redditch planning record was found, but it is a different authority/site and cannot be linked to the Sandwell outcome.",
+      "candidates": [
+        {
+          "provider": "OFFICIAL_COUNCIL_PLANNING",
+          "source_type": "planning",
+          "external_id": "24/00631/FUL",
+          "case_link_confidence": "POSSIBLE_CASE_LINK",
+          "eligibility": "EXCLUDED_WEAK_CASE_LINK",
+          "link_reason": "Same provider and pre-registration timing.",
+          "rejection_reason": "Redditch/Worcestershire site differs from the Sandwell benchmark outcome."
+        }
+      ]
+    },
+    {
+      "benchmark_case_id": "ofsted:2794774",
+      "status": "COMPLETE",
+      "sources_searched": [
+        "PLOTA_HISTORICAL",
+        "OFFICIAL_COUNCIL_PLANNING",
+        "OFFICIAL_RECRUITMENT"
+      ],
+      "search_strategy": {
+        "provider_terms": [
+          "Resi-Action Staffordshire",
+          "ResiAction"
+        ],
+        "location": "Wolverhampton",
+        "window_months": 12
+      },
+      "not_found_reason": "NOT_FOUND",
+      "notes": "No date-verifiable pre-registration planning or recruitment item was found; current provider pages and later payments were not admitted.",
+      "candidates": []
+    },
+    {
+      "benchmark_case_id": "ofsted:2813382",
+      "status": "COMPLETE",
+      "sources_searched": [
+        "PLOTA_HISTORICAL",
+        "PLANNING_INSPECTORATE",
+        "OFFICIAL_RECRUITMENT"
+      ],
+      "search_strategy": {
+        "provider_terms": [
+          "KDB Care",
+          "Right Steps"
+        ],
+        "location": "Sandwell",
+        "window_months": 12
+      },
+      "notes": "Official appeal evidence provides an exact provider and local-authority link within the replay window.",
+      "candidates": [
+        {
+          "provider": "OFFICIAL_PLANNING_APPEALS",
+          "source_type": "planning",
+          "external_id": "APP/G4620/W/23/3328400",
+          "case_link_confidence": "STRONG_CASE_LINK",
+          "eligibility": "ELIGIBLE",
+          "link_reason": "Exact provider, children-home proposal and Sandwell location before registration."
+        }
+      ]
+    },
+    {
+      "benchmark_case_id": "ofsted:2780410",
+      "status": "COMPLETE",
+      "sources_searched": [
+        "PLOTA_HISTORICAL",
+        "OFFICIAL_COUNCIL_PLANNING",
+        "OFFICIAL_RECRUITMENT"
+      ],
+      "search_strategy": {
+        "provider_terms": [
+          "Flora Care Solutions",
+          "Flora Care Group"
+        ],
+        "location": "Knowsley",
+        "window_months": 12
+      },
+      "not_found_reason": "FOUND_BUT_CASE_LINK_UNCERTAIN",
+      "notes": "An official Sefton/Maghull planning record was found for the same provider, but the benchmark outcome is in Knowsley and the evidence does not prove this is the same home.",
+      "candidates": [
+        {
+          "provider": "OFFICIAL_COUNCIL_PLANNING",
+          "source_type": "planning",
+          "external_id": "DC/2024/00147",
+          "case_link_confidence": "POSSIBLE_CASE_LINK",
+          "eligibility": "EXCLUDED_WEAK_CASE_LINK",
+          "link_reason": "Same provider and pre-registration timing.",
+          "rejection_reason": "Different local-authority/site context; provider identity alone cannot identify one home."
+        }
+      ]
+    },
+    {
+      "benchmark_case_id": "ofsted:2814872",
+      "status": "COMPLETE",
+      "sources_searched": [
+        "SIGNALHUB_PRESERVED_PLANNING",
+        "SIGNALHUB_PRESERVED_RECRUITMENT",
+        "PLOTA_HISTORICAL",
+        "OFFICIAL_COUNCIL_PLANNING",
+        "OFFICIAL_RECRUITMENT"
+      ],
+      "search_strategy": {
+        "provider_terms": [
+          "Holden Knight Healthcare Temp"
+        ],
+        "location": "Manchester",
+        "window_months": 18,
+        "bounded": true
+      },
+      "not_found_reason": "NOT_FOUND",
+      "notes": "No planning or recruitment record with both a defensible public date and a VERIFIED/STRONG site-level case link was found. Provider-only or same-authority hits were not admitted because Ofsted redacts the home.",
+      "candidates": [],
+      "researched_at": "2026-09-28T00:00:00Z"
+    },
+    {
+      "benchmark_case_id": "ofsted:2810446",
+      "status": "COMPLETE",
+      "sources_searched": [
+        "SIGNALHUB_PRESERVED_PLANNING",
+        "SIGNALHUB_PRESERVED_RECRUITMENT",
+        "PLOTA_HISTORICAL",
+        "OFFICIAL_COUNCIL_PLANNING",
+        "OFFICIAL_RECRUITMENT"
+      ],
+      "search_strategy": {
+        "provider_terms": [
+          "Warrington Borough Council"
+        ],
+        "location": "Warrington",
+        "window_months": 18,
+        "bounded": true
+      },
+      "not_found_reason": "NOT_FOUND",
+      "notes": "No planning or recruitment record with both a defensible public date and a VERIFIED/STRONG site-level case link was found. Provider-only or same-authority hits were not admitted because Ofsted redacts the home.",
+      "candidates": [],
+      "researched_at": "2026-09-28T00:00:00Z"
+    },
+    {
+      "benchmark_case_id": "ofsted:2813073",
+      "status": "COMPLETE",
+      "sources_searched": [
+        "SIGNALHUB_PRESERVED_PLANNING",
+        "SIGNALHUB_PRESERVED_RECRUITMENT",
+        "PLOTA_HISTORICAL",
+        "OFFICIAL_COUNCIL_PLANNING",
+        "OFFICIAL_RECRUITMENT"
+      ],
+      "search_strategy": {
+        "provider_terms": [
+          "The Bristol Care Group Limited"
+        ],
+        "location": "South Gloucestershire",
+        "window_months": 18,
+        "bounded": true
+      },
+      "not_found_reason": "NOT_FOUND",
+      "notes": "No planning or recruitment record with both a defensible public date and a VERIFIED/STRONG site-level case link was found. Provider-only or same-authority hits were not admitted because Ofsted redacts the home.",
+      "candidates": [],
+      "researched_at": "2026-09-28T00:00:00Z"
+    },
+    {
+      "benchmark_case_id": "ofsted:2813108",
+      "status": "COMPLETE",
+      "sources_searched": [
+        "SIGNALHUB_PRESERVED_PLANNING",
+        "SIGNALHUB_PRESERVED_RECRUITMENT",
+        "PLOTA_HISTORICAL",
+        "OFFICIAL_COUNCIL_PLANNING",
+        "OFFICIAL_RECRUITMENT"
+      ],
+      "search_strategy": {
+        "provider_terms": [
+          "Bedspace Resource Ltd."
+        ],
+        "location": "Cheshire East",
+        "window_months": 18,
+        "bounded": true
+      },
+      "not_found_reason": "NOT_FOUND",
+      "notes": "No planning or recruitment record with both a defensible public date and a VERIFIED/STRONG site-level case link was found. Provider-only or same-authority hits were not admitted because Ofsted redacts the home.",
+      "candidates": [],
+      "researched_at": "2026-09-28T00:00:00Z"
+    },
+    {
+      "benchmark_case_id": "ofsted:2812913",
+      "status": "COMPLETE",
+      "sources_searched": [
+        "SIGNALHUB_PRESERVED_PLANNING",
+        "SIGNALHUB_PRESERVED_RECRUITMENT",
+        "PLOTA_HISTORICAL",
+        "OFFICIAL_COUNCIL_PLANNING",
+        "OFFICIAL_RECRUITMENT"
+      ],
+      "search_strategy": {
+        "provider_terms": [
+          "positive homes for positive futures ltd"
+        ],
+        "location": "Sefton",
+        "window_months": 18,
+        "bounded": true
+      },
+      "not_found_reason": "NOT_FOUND",
+      "notes": "No planning or recruitment record with both a defensible public date and a VERIFIED/STRONG site-level case link was found. Provider-only or same-authority hits were not admitted because Ofsted redacts the home.",
+      "candidates": [],
+      "researched_at": "2026-09-28T00:00:00Z"
+    },
+    {
+      "benchmark_case_id": "ofsted:2812248",
+      "status": "COMPLETE",
+      "sources_searched": [
+        "SIGNALHUB_PRESERVED_PLANNING",
+        "SIGNALHUB_PRESERVED_RECRUITMENT",
+        "PLOTA_HISTORICAL",
+        "OFFICIAL_COUNCIL_PLANNING",
+        "OFFICIAL_RECRUITMENT"
+      ],
+      "search_strategy": {
+        "provider_terms": [
+          "vantage children's services limited"
+        ],
+        "location": "Staffordshire",
+        "window_months": 18,
+        "bounded": true
+      },
+      "not_found_reason": "NOT_FOUND",
+      "notes": "No planning or recruitment record with both a defensible public date and a VERIFIED/STRONG site-level case link was found. Provider-only or same-authority hits were not admitted because Ofsted redacts the home.",
+      "candidates": [],
+      "researched_at": "2026-09-28T00:00:00Z"
+    },
+    {
+      "benchmark_case_id": "ofsted:2808009",
+      "status": "COMPLETE",
+      "sources_searched": [
+        "SIGNALHUB_PRESERVED_PLANNING",
+        "SIGNALHUB_PRESERVED_RECRUITMENT",
+        "PLOTA_HISTORICAL",
+        "OFFICIAL_COUNCIL_PLANNING",
+        "OFFICIAL_RECRUITMENT"
+      ],
+      "search_strategy": {
+        "provider_terms": [
+          "Brinscall CAre (NW) Limited"
+        ],
+        "location": "Lancashire",
+        "window_months": 18,
+        "bounded": true
+      },
+      "not_found_reason": "NOT_FOUND",
+      "notes": "No planning or recruitment record with both a defensible public date and a VERIFIED/STRONG site-level case link was found. Provider-only or same-authority hits were not admitted because Ofsted redacts the home.",
+      "candidates": [],
+      "researched_at": "2026-09-28T00:00:00Z"
+    },
+    {
+      "benchmark_case_id": "ofsted:2794662",
+      "status": "COMPLETE",
+      "sources_searched": [
+        "SIGNALHUB_PRESERVED_PLANNING",
+        "SIGNALHUB_PRESERVED_RECRUITMENT",
+        "PLOTA_HISTORICAL",
+        "OFFICIAL_COUNCIL_PLANNING",
+        "OFFICIAL_RECRUITMENT"
+      ],
+      "search_strategy": {
+        "provider_terms": [
+          "Mayden Support Ltd"
+        ],
+        "location": "St Helens",
+        "window_months": 18,
+        "bounded": true
+      },
+      "not_found_reason": "NOT_FOUND",
+      "notes": "No planning or recruitment record with both a defensible public date and a VERIFIED/STRONG site-level case link was found. Provider-only or same-authority hits were not admitted because Ofsted redacts the home.",
+      "candidates": [],
+      "researched_at": "2026-09-28T00:00:00Z"
+    },
+    {
+      "benchmark_case_id": "ofsted:2806691",
+      "status": "COMPLETE",
+      "sources_searched": [
+        "SIGNALHUB_PRESERVED_PLANNING",
+        "SIGNALHUB_PRESERVED_RECRUITMENT",
+        "PLOTA_HISTORICAL",
+        "OFFICIAL_COUNCIL_PLANNING",
+        "OFFICIAL_RECRUITMENT"
+      ],
+      "search_strategy": {
+        "provider_terms": [
+          "Bright Path care ltd"
+        ],
+        "location": "Manchester",
+        "window_months": 18,
+        "bounded": true
+      },
+      "not_found_reason": "NOT_FOUND",
+      "notes": "No planning or recruitment record with both a defensible public date and a VERIFIED/STRONG site-level case link was found. Provider-only or same-authority hits were not admitted because Ofsted redacts the home.",
+      "candidates": [],
+      "researched_at": "2026-09-28T00:00:00Z"
+    },
+    {
+      "benchmark_case_id": "ofsted:2808727",
+      "status": "COMPLETE",
+      "sources_searched": [
+        "SIGNALHUB_PRESERVED_PLANNING",
+        "SIGNALHUB_PRESERVED_RECRUITMENT",
+        "PLOTA_HISTORICAL",
+        "OFFICIAL_COUNCIL_PLANNING",
+        "OFFICIAL_RECRUITMENT"
+      ],
+      "search_strategy": {
+        "provider_terms": [
+          "Elm Lodge Residential Limited"
+        ],
+        "location": "Essex",
+        "window_months": 18,
+        "bounded": true
+      },
+      "not_found_reason": "NOT_FOUND",
+      "notes": "No planning or recruitment record with both a defensible public date and a VERIFIED/STRONG site-level case link was found. Provider-only or same-authority hits were not admitted because Ofsted redacts the home.",
+      "candidates": [],
+      "researched_at": "2026-09-28T00:00:00Z"
+    },
+    {
+      "benchmark_case_id": "ofsted:2778942",
+      "status": "COMPLETE",
+      "sources_searched": [
+        "SIGNALHUB_PRESERVED_PLANNING",
+        "SIGNALHUB_PRESERVED_RECRUITMENT",
+        "PLOTA_HISTORICAL",
+        "OFFICIAL_COUNCIL_PLANNING",
+        "OFFICIAL_RECRUITMENT"
+      ],
+      "search_strategy": {
+        "provider_terms": [
+          "Barnardo Services Limited"
+        ],
+        "location": "Leicestershire",
+        "window_months": 18,
+        "bounded": true
+      },
+      "not_found_reason": "NOT_FOUND",
+      "notes": "No planning or recruitment record with both a defensible public date and a VERIFIED/STRONG site-level case link was found. Provider-only or same-authority hits were not admitted because Ofsted redacts the home.",
+      "candidates": [],
+      "researched_at": "2026-09-28T00:00:00Z"
+    },
+    {
+      "benchmark_case_id": "ofsted:2783593",
+      "status": "COMPLETE",
+      "sources_searched": [
+        "SIGNALHUB_PRESERVED_PLANNING",
+        "SIGNALHUB_PRESERVED_RECRUITMENT",
+        "PLOTA_HISTORICAL",
+        "OFFICIAL_COUNCIL_PLANNING",
+        "OFFICIAL_RECRUITMENT"
+      ],
+      "search_strategy": {
+        "provider_terms": [
+          "The Acorns Leicester Ltd"
+        ],
+        "location": "Leicestershire",
+        "window_months": 18,
+        "bounded": true
+      },
+      "not_found_reason": "NOT_FOUND",
+      "notes": "No planning or recruitment record with both a defensible public date and a VERIFIED/STRONG site-level case link was found. Provider-only or same-authority hits were not admitted because Ofsted redacts the home.",
+      "candidates": [],
+      "researched_at": "2026-09-28T00:00:00Z"
+    },
+    {
+      "benchmark_case_id": "ofsted:2781227",
+      "status": "COMPLETE",
+      "sources_searched": [
+        "SIGNALHUB_PRESERVED_PLANNING",
+        "SIGNALHUB_PRESERVED_RECRUITMENT",
+        "PLOTA_HISTORICAL",
+        "OFFICIAL_COUNCIL_PLANNING",
+        "OFFICIAL_RECRUITMENT"
+      ],
+      "search_strategy": {
+        "provider_terms": [
+          "Zen Care and Education Limited"
+        ],
+        "location": "Oldham",
+        "window_months": 18,
+        "bounded": true
+      },
+      "not_found_reason": "NOT_FOUND",
+      "notes": "No planning or recruitment record with both a defensible public date and a VERIFIED/STRONG site-level case link was found. Provider-only or same-authority hits were not admitted because Ofsted redacts the home.",
+      "candidates": [],
+      "researched_at": "2026-09-28T00:00:00Z"
+    },
+    {
+      "benchmark_case_id": "ofsted:2774759",
+      "status": "COMPLETE",
+      "sources_searched": [
+        "SIGNALHUB_PRESERVED_PLANNING",
+        "SIGNALHUB_PRESERVED_RECRUITMENT",
+        "PLOTA_HISTORICAL",
+        "OFFICIAL_COUNCIL_PLANNING",
+        "OFFICIAL_RECRUITMENT"
+      ],
+      "search_strategy": {
+        "provider_terms": [
+          "Care 4 Good LTD"
+        ],
+        "location": "Sandwell",
+        "window_months": 18,
+        "bounded": true
+      },
+      "not_found_reason": null,
+      "notes": "One official, date-verifiable, strong case link was retained.",
+      "candidates": [
+        {
+          "provider": "PLOTA",
+          "source_type": "planning",
+          "external_id": "S1BVP2NRM2M00",
+          "case_link_confidence": "STRONG_CASE_LINK",
+          "eligibility": "ELIGIBLE",
+          "link_reason": "Exact provider, exact Sandwell authority and explicit C2 children's-home proposal before registration."
+        }
+      ],
+      "researched_at": "2026-09-28T00:00:00Z"
+    },
+    {
+      "benchmark_case_id": "ofsted:2787362",
+      "status": "COMPLETE",
+      "sources_searched": [
+        "SIGNALHUB_PRESERVED_PLANNING",
+        "SIGNALHUB_PRESERVED_RECRUITMENT",
+        "PLOTA_HISTORICAL",
+        "OFFICIAL_COUNCIL_PLANNING",
+        "OFFICIAL_RECRUITMENT"
+      ],
+      "search_strategy": {
+        "provider_terms": [
+          "Achieve Your Aspirations Limited"
+        ],
+        "location": "Knowsley",
+        "window_months": 18,
+        "bounded": true
+      },
+      "not_found_reason": "NOT_FOUND",
+      "notes": "No planning or recruitment record with both a defensible public date and a VERIFIED/STRONG site-level case link was found. Provider-only or same-authority hits were not admitted because Ofsted redacts the home.",
+      "candidates": [],
+      "researched_at": "2026-09-28T00:00:00Z"
+    },
+    {
+      "benchmark_case_id": "ofsted:2775281",
+      "status": "COMPLETE",
+      "sources_searched": [
+        "SIGNALHUB_PRESERVED_PLANNING",
+        "SIGNALHUB_PRESERVED_RECRUITMENT",
+        "PLOTA_HISTORICAL",
+        "OFFICIAL_COUNCIL_PLANNING",
+        "OFFICIAL_RECRUITMENT"
+      ],
+      "search_strategy": {
+        "provider_terms": [
+          "Anchor Care and Education Ltd"
+        ],
+        "location": "Leicestershire",
+        "window_months": 18,
+        "bounded": true
+      },
+      "not_found_reason": null,
+      "notes": "One official, date-verifiable, strong case link was retained.",
+      "candidates": [
+        {
+          "provider": "OFFICIAL_COUNCIL_PLANNING",
+          "source_type": "planning",
+          "external_id": "23/01003/FUL",
+          "case_link_confidence": "STRONG_CASE_LINK",
+          "eligibility": "ELIGIBLE",
+          "link_reason": "Exact provider, Leicestershire geography and explicit children's-home change of use before registration."
+        }
+      ],
+      "researched_at": "2026-09-28T00:00:00Z"
+    },
+    {
+      "benchmark_case_id": "ofsted:2753031",
+      "status": "COMPLETE",
+      "sources_searched": [
+        "SIGNALHUB_PRESERVED_PLANNING",
+        "SIGNALHUB_PRESERVED_RECRUITMENT",
+        "PLOTA_HISTORICAL",
+        "OFFICIAL_COUNCIL_PLANNING",
+        "OFFICIAL_RECRUITMENT"
+      ],
+      "search_strategy": {
+        "provider_terms": [
+          "Serene Surroundings Limited"
+        ],
+        "location": "Bexley",
+        "window_months": 18,
+        "bounded": true
+      },
+      "not_found_reason": "NOT_FOUND",
+      "notes": "No planning or recruitment record with both a defensible public date and a VERIFIED/STRONG site-level case link was found. Provider-only or same-authority hits were not admitted because Ofsted redacts the home.",
+      "candidates": [],
+      "researched_at": "2026-09-28T00:00:00Z"
+    },
+    {
+      "benchmark_case_id": "ofsted:2779744",
+      "status": "COMPLETE",
+      "sources_searched": [
+        "SIGNALHUB_PRESERVED_PLANNING",
+        "SIGNALHUB_PRESERVED_RECRUITMENT",
+        "PLOTA_HISTORICAL",
+        "OFFICIAL_COUNCIL_PLANNING",
+        "OFFICIAL_RECRUITMENT"
+      ],
+      "search_strategy": {
+        "provider_terms": [
+          "Step Forward Care Limited"
+        ],
+        "location": "South Tyneside",
+        "window_months": 18,
+        "bounded": true
+      },
+      "not_found_reason": "NOT_FOUND",
+      "notes": "No planning or recruitment record with both a defensible public date and a VERIFIED/STRONG site-level case link was found. Provider-only or same-authority hits were not admitted because Ofsted redacts the home.",
+      "candidates": [],
+      "researched_at": "2026-09-28T00:00:00Z"
+    },
+    {
+      "benchmark_case_id": "ofsted:2785342",
+      "status": "COMPLETE",
+      "sources_searched": [
+        "SIGNALHUB_PRESERVED_PLANNING",
+        "SIGNALHUB_PRESERVED_RECRUITMENT",
+        "PLOTA_HISTORICAL",
+        "OFFICIAL_COUNCIL_PLANNING",
+        "OFFICIAL_RECRUITMENT"
+      ],
+      "search_strategy": {
+        "provider_terms": [
+          "Astar Care Group LTD"
+        ],
+        "location": "Wirral",
+        "window_months": 18,
+        "bounded": true
+      },
+      "not_found_reason": "NOT_FOUND",
+      "notes": "No planning or recruitment record with both a defensible public date and a VERIFIED/STRONG site-level case link was found. Provider-only or same-authority hits were not admitted because Ofsted redacts the home.",
+      "candidates": [],
+      "researched_at": "2026-09-28T00:00:00Z"
+    },
+    {
+      "benchmark_case_id": "ofsted:2778030",
+      "status": "COMPLETE",
+      "sources_searched": [
+        "SIGNALHUB_PRESERVED_PLANNING",
+        "SIGNALHUB_PRESERVED_RECRUITMENT",
+        "PLOTA_HISTORICAL",
+        "OFFICIAL_COUNCIL_PLANNING",
+        "OFFICIAL_RECRUITMENT"
+      ],
+      "search_strategy": {
+        "provider_terms": [
+          "Resi-Action Staffordshire Ltd"
+        ],
+        "location": "Wolverhampton",
+        "window_months": 18,
+        "bounded": true
+      },
+      "not_found_reason": "NOT_FOUND",
+      "notes": "No planning or recruitment record with both a defensible public date and a VERIFIED/STRONG site-level case link was found. Provider-only or same-authority hits were not admitted because Ofsted redacts the home.",
+      "candidates": [],
+      "researched_at": "2026-09-28T00:00:00Z"
+    },
+    {
+      "benchmark_case_id": "ofsted:2758918",
+      "status": "COMPLETE",
+      "sources_searched": [
+        "SIGNALHUB_PRESERVED_PLANNING",
+        "SIGNALHUB_PRESERVED_RECRUITMENT",
+        "PLOTA_HISTORICAL",
+        "OFFICIAL_COUNCIL_PLANNING",
+        "OFFICIAL_RECRUITMENT"
+      ],
+      "search_strategy": {
+        "provider_terms": [
+          "Mayden Support Ltd"
+        ],
+        "location": "Staffordshire",
+        "window_months": 18,
+        "bounded": true
+      },
+      "not_found_reason": "NOT_FOUND",
+      "notes": "No planning or recruitment record with both a defensible public date and a VERIFIED/STRONG site-level case link was found. Provider-only or same-authority hits were not admitted because Ofsted redacts the home.",
+      "candidates": [],
+      "researched_at": "2026-09-28T00:00:00Z"
+    },
+    {
+      "benchmark_case_id": "ofsted:2787998",
+      "status": "COMPLETE",
+      "sources_searched": [
+        "SIGNALHUB_PRESERVED_PLANNING",
+        "SIGNALHUB_PRESERVED_RECRUITMENT",
+        "PLOTA_HISTORICAL",
+        "OFFICIAL_COUNCIL_PLANNING",
+        "OFFICIAL_RECRUITMENT"
+      ],
+      "search_strategy": {
+        "provider_terms": [
+          "360 Children's Residential Services Limited"
+        ],
+        "location": "Devon",
+        "window_months": 18,
+        "bounded": true
+      },
+      "not_found_reason": "NOT_FOUND",
+      "notes": "No planning or recruitment record with both a defensible public date and a VERIFIED/STRONG site-level case link was found. Provider-only or same-authority hits were not admitted because Ofsted redacts the home.",
+      "candidates": [],
+      "researched_at": "2026-09-28T00:00:00Z"
+    },
+    {
+      "benchmark_case_id": "ofsted:2787325",
+      "status": "COMPLETE",
+      "sources_searched": [
+        "SIGNALHUB_PRESERVED_PLANNING",
+        "SIGNALHUB_PRESERVED_RECRUITMENT",
+        "PLOTA_HISTORICAL",
+        "OFFICIAL_COUNCIL_PLANNING",
+        "OFFICIAL_RECRUITMENT"
+      ],
+      "search_strategy": {
+        "provider_terms": [
+          "SOLID GLOBAL LIMITED"
+        ],
+        "location": "Sandwell",
+        "window_months": 18,
+        "bounded": true
+      },
+      "not_found_reason": "NOT_FOUND",
+      "notes": "No planning or recruitment record with both a defensible public date and a VERIFIED/STRONG site-level case link was found. Provider-only or same-authority hits were not admitted because Ofsted redacts the home.",
+      "candidates": [],
+      "researched_at": "2026-09-28T00:00:00Z"
+    },
+    {
+      "benchmark_case_id": "ofsted:2779719",
+      "status": "COMPLETE",
+      "sources_searched": [
+        "SIGNALHUB_PRESERVED_PLANNING",
+        "SIGNALHUB_PRESERVED_RECRUITMENT",
+        "PLOTA_HISTORICAL",
+        "OFFICIAL_COUNCIL_PLANNING",
+        "OFFICIAL_RECRUITMENT"
+      ],
+      "search_strategy": {
+        "provider_terms": [
+          "Compass Social Care"
+        ],
+        "location": "Southend on Sea",
+        "window_months": 18,
+        "bounded": true
+      },
+      "not_found_reason": "NOT_FOUND",
+      "notes": "No planning or recruitment record with both a defensible public date and a VERIFIED/STRONG site-level case link was found. Provider-only or same-authority hits were not admitted because Ofsted redacts the home.",
+      "candidates": [],
+      "researched_at": "2026-09-28T00:00:00Z"
+    },
+    {
+      "benchmark_case_id": "ofsted:2788446",
+      "status": "COMPLETE",
+      "sources_searched": [
+        "SIGNALHUB_PRESERVED_PLANNING",
+        "SIGNALHUB_PRESERVED_RECRUITMENT",
+        "PLOTA_HISTORICAL",
+        "OFFICIAL_COUNCIL_PLANNING",
+        "OFFICIAL_RECRUITMENT"
+      ],
+      "search_strategy": {
+        "provider_terms": [
+          "Lancashire County Council"
+        ],
+        "location": "Lancashire",
+        "window_months": 18,
+        "bounded": true
+      },
+      "not_found_reason": "NOT_FOUND",
+      "notes": "No planning or recruitment record with both a defensible public date and a VERIFIED/STRONG site-level case link was found. Provider-only or same-authority hits were not admitted because Ofsted redacts the home.",
+      "candidates": [],
+      "researched_at": "2026-09-28T00:00:00Z"
+    },
+    {
+      "benchmark_case_id": "ofsted:2766766",
+      "status": "COMPLETE",
+      "sources_searched": [
+        "SIGNALHUB_PRESERVED_PLANNING",
+        "SIGNALHUB_PRESERVED_RECRUITMENT",
+        "PLOTA_HISTORICAL",
+        "OFFICIAL_COUNCIL_PLANNING",
+        "OFFICIAL_RECRUITMENT"
+      ],
+      "search_strategy": {
+        "provider_terms": [
+          "Oaktree Childcare Ltd"
+        ],
+        "location": "Lancashire",
+        "window_months": 18,
+        "bounded": true
+      },
+      "not_found_reason": "NOT_FOUND",
+      "notes": "No planning or recruitment record with both a defensible public date and a VERIFIED/STRONG site-level case link was found. Provider-only or same-authority hits were not admitted because Ofsted redacts the home.",
+      "candidates": [],
+      "researched_at": "2026-09-28T00:00:00Z"
+    },
+    {
+      "benchmark_case_id": "ofsted:2775324",
+      "status": "COMPLETE",
+      "sources_searched": [
+        "SIGNALHUB_PRESERVED_PLANNING",
+        "SIGNALHUB_PRESERVED_RECRUITMENT",
+        "PLOTA_HISTORICAL",
+        "OFFICIAL_COUNCIL_PLANNING",
+        "OFFICIAL_RECRUITMENT"
+      ],
+      "search_strategy": {
+        "provider_terms": [
+          "The Angels Homes London Limited"
+        ],
+        "location": "Brent",
+        "window_months": 18,
+        "bounded": true
+      },
+      "not_found_reason": "NOT_FOUND",
+      "notes": "No planning or recruitment record with both a defensible public date and a VERIFIED/STRONG site-level case link was found. Provider-only or same-authority hits were not admitted because Ofsted redacts the home.",
+      "candidates": [],
+      "researched_at": "2026-09-28T00:00:00Z"
+    },
+    {
+      "benchmark_case_id": "ofsted:2773954",
+      "status": "COMPLETE",
+      "sources_searched": [
+        "SIGNALHUB_PRESERVED_PLANNING",
+        "SIGNALHUB_PRESERVED_RECRUITMENT",
+        "PLOTA_HISTORICAL",
+        "OFFICIAL_COUNCIL_PLANNING",
+        "OFFICIAL_RECRUITMENT"
+      ],
+      "search_strategy": {
+        "provider_terms": [
+          "Sprinkled With Hope Ltd"
+        ],
+        "location": "Coventry",
+        "window_months": 18,
+        "bounded": true
+      },
+      "not_found_reason": "NOT_FOUND",
+      "notes": "No planning or recruitment record with both a defensible public date and a VERIFIED/STRONG site-level case link was found. Provider-only or same-authority hits were not admitted because Ofsted redacts the home.",
+      "candidates": [],
+      "researched_at": "2026-09-28T00:00:00Z"
+    },
+    {
+      "benchmark_case_id": "ofsted:2738391",
+      "status": "COMPLETE",
+      "sources_searched": [
+        "SIGNALHUB_PRESERVED_PLANNING",
+        "SIGNALHUB_PRESERVED_RECRUITMENT",
+        "PLOTA_HISTORICAL",
+        "OFFICIAL_COUNCIL_PLANNING",
+        "OFFICIAL_RECRUITMENT"
+      ],
+      "search_strategy": {
+        "provider_terms": [
+          "Dunamis Hearts Private Ltd"
+        ],
+        "location": "Wakefield",
+        "window_months": 18,
+        "bounded": true
+      },
+      "not_found_reason": "NOT_FOUND",
+      "notes": "No planning or recruitment record with both a defensible public date and a VERIFIED/STRONG site-level case link was found. Provider-only or same-authority hits were not admitted because Ofsted redacts the home.",
+      "candidates": [],
+      "researched_at": "2026-09-28T00:00:00Z"
+    }
+  ]
+}
