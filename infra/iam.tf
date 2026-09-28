@@ -53,13 +53,23 @@ resource "aws_iam_role_policy" "lambda_application" {
       },
       {
         Effect = "Allow"
+        Action = [
+          "cognito-idp:AdminCreateUser",
+          "cognito-idp:AdminAddUserToGroup",
+          "cognito-idp:AdminDeleteUser"
+        ]
+        Resource = aws_cognito_user_pool.main.arn
+      },
+      {
+        Effect = "Allow"
         Action = ["sqs:SendMessage"]
         Resource = [
           aws_sqs_queue.planning_manual_runs.arn,
           aws_sqs_queue.recruitment_manual_runs.arn,
           aws_sqs_queue.ofsted_manual_runs.arn,
           aws_sqs_queue.companies_house_manual_runs.arn,
-          aws_sqs_queue.procurement_manual_runs.arn
+          aws_sqs_queue.procurement_manual_runs.arn,
+          aws_sqs_queue.customer_digest.arn
         ]
       }
     ]
@@ -176,7 +186,8 @@ resource "aws_iam_policy" "github_actions" {
           "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.name_prefix}-ingestion-worker",
           "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.name_prefix}-ofsted-collector",
           "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.name_prefix}-companies-house-collector",
-          "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.name_prefix}-procurement-collector"
+          "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.name_prefix}-procurement-collector",
+          "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.name_prefix}-customer-digest-sender"
         ]
       },
       {

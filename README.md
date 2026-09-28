@@ -228,6 +228,33 @@ entry point. Run `npm --prefix frontend test` for frontend tests.
 The initial invited admin account is managed with Cognito's admin API. Do not
 commit passwords or add self-registration to the frontend.
 
+## CareSignal customer pilot
+
+CareSignal is a customer-facing, role-routed view over explicitly published
+`CHILDRENS_HOME` opportunities. SignalHub remains the internal administration
+surface. Customer users belong to the separate `CareSignalCustomers` Cognito
+group and an active `customer_accounts` tenant; server-side projection and
+entitlement checks prevent access to admin state, rejected candidates, raw
+evidence payloads, procurement shadow records and another account's saved
+data.
+
+An admin publishes suitable opportunities individually from Opportunity
+detail. Publication requires approved non-procurement evidence. Exact CareSignal
+locations marked `INTERNAL_EXACT` are reduced to area-level geography, and
+customer timelines contain concise descriptions plus public source links—not
+private S3 evidence links or classifier diagnostics.
+
+Pilot accounts are manually invited from SignalHub → Customers. `STARTER`
+accounts require configured regions or local authorities and those limits are
+enforced in database queries; `PRO` and `BUSINESS` currently allow nationwide
+coverage. Prices are deliberately not encoded in entitlement logic.
+
+Weekly digest preferences and generation are implemented through a bounded
+EventBridge → backend → SQS → SES sender path. The schedule and queue consumer
+remain disabled until `caresignal_email_from` names a verified SES identity.
+This avoids NAT and a paid SES VPC endpoint. The customer Alerts page provides
+a safe digest preview while delivery is disabled.
+
 The admin UI presents pending candidates as a Review Inbox. Approved and
 rejected candidates are kept in a separate, paginated Reviewed Signals history
 with source/date filters and bounded text search. Review actions use an

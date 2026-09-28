@@ -24,6 +24,24 @@ from app.backtest_repository import (
 from app.backtesting import BacktestBounds
 from app.care_backfill import backfill_care_from_stored_evidence
 from app.config import Settings
+from app.customer import (
+    create_saved_search,
+    customer_context,
+    customer_opportunity_detail,
+    customer_readiness,
+    digest_preview,
+    get_customer_preferences,
+    list_customer_accounts,
+    list_customer_opportunities,
+    list_saved_searches,
+    provision_customer_account,
+    record_customer_event,
+    save_customer_opportunity,
+    set_opportunity_publication,
+    update_customer_account,
+    update_customer_preferences,
+)
+from app.customer_digest import queue_weekly_digests, update_digest_delivery
 from app.db import check_connection
 from app.historical_research_repository import import_bundled_historical_corpus
 from app.ingestion import NormalizedSignal
@@ -175,6 +193,19 @@ def _require_admin(claims: dict[str, Any], settings: Settings) -> dict[str, Any]
     return None
 
 
+def _require_customer(
+    claims: dict[str, Any], settings: Settings
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    if settings.customer_group not in normalized_groups(claims.get("cognito:groups")):
+        return None, _response(403, {"error": "customer_role_required"})
+    context = customer_context(settings, claims)
+    if context is None:
+        return None, _response(403, {"error": "customer_account_required"})
+    if context["user_status"] != "ACTIVE" or context["account_status"] == "SUSPENDED":
+        return None, _response(403, {"error": "customer_account_suspended"})
+    return context, None
+
+
 def _signal_payload(event: dict[str, Any]) -> dict[str, Any]:
     raw_body = _raw_body(event)
     if len(raw_body) > 256 * 1024:
@@ -194,6 +225,12 @@ def _query(event: dict[str, Any], name: str) -> str | None:
 
 
 def _admin_path(path: str) -> tuple[str, str | None]:
+    if path == "/admin/customer-accounts":
+        return "customer-account-list", None
+    if path == "/admin/customer-readiness":
+        return "customer-readiness", None
+    if path.startswith("/admin/customer-accounts/"):
+        return "customer-account-detail", path[len("/admin/customer-accounts/") :]
     if path == "/admin/backtesting":
         return "backtesting-list", None
     if path == "/admin/backtesting/seed":
@@ -244,6 +281,8 @@ def _admin_path(path: str) -> tuple[str, str | None]:
         return "opportunity-recalculate", None
     if path.startswith("/admin/opportunities/"):
         parts = path[len("/admin/opportunities/") :].split("/")
+        if len(parts) == 2 and parts[1] == "publication":
+            return "opportunity-publication", parts[0]
         if len(parts) == 2 and parts[1] in {"link", "unlink", "merge", "split"}:
             return f"opportunity-{parts[1]}", parts[0]
         return "opportunity-detail", parts[0]
@@ -276,6 +315,16 @@ def _admin_path(path: str) -> tuple[str, str | None]:
 
 def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     settings = Settings.from_env()
+    if event.get("operation") == "customer_weekly_digest" and not event.get("requestContext"):
+        return queue_weekly_digests(settings)
+    if event.get("operation") == "customer_digest_delivery" and not event.get("requestContext"):
+        update_digest_delivery(
+            settings,
+            str(UUID(event["run_id"])),
+            status=str(event.get("status") or ""),
+            safe_failure=event.get("safe_failure"),
+        )
+        return {"status": "updated"}
     path = event.get("rawPath") or event.get("path") or "/"
     method = (event.get("requestContext", {}).get("http", {}).get("method") or "GET").upper()
     logger.info("request path=%s method=%s environment=%s", path, method, settings.environment)
@@ -300,9 +349,12 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         return _response(200, {"service": settings.service_name, "status": "ready"})
 
     if path == "/signals" and method == "POST":
-        _, auth_error = _require_claims(event)
+        claims, auth_error = _require_claims(event)
         if auth_error:
             return auth_error
+        admin_error = _require_admin(claims, settings)
+        if admin_error:
+            return admin_error
         try:
             values = _signal_payload(event)
             result = ingest_signal(settings, values["signal"], values["raw_body"])
@@ -329,12 +381,155 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             logger.exception("ingestion_failed")
             return _response(500, {"error": "ingestion_failed"})
 
+    if path == "/customer" or path.startswith("/customer/"):
+        claims, auth_error = _require_claims(event)
+        if auth_error:
+            return auth_error
+        try:
+            customer, customer_error = _require_customer(claims, settings)
+            if customer_error:
+                return customer_error
+            assert customer is not None
+            if path == "/customer/me" and method == "GET":
+                return _response(200, customer)
+            if path in {"/customer/opportunities", "/customer/saved"} and method == "GET":
+                return _response(
+                    200,
+                    list_customer_opportunities(
+                        settings,
+                        customer,
+                        limit=min(max(int(_query(event, "limit") or "25"), 1), 50),
+                        offset=max(int(_query(event, "offset") or "0"), 0),
+                        search=_query(event, "q"),
+                        region=_query(event, "region"),
+                        local_authority=_query(event, "local_authority"),
+                        change_type=_query(event, "change_type"),
+                        stage=_query(event, "stage"),
+                        source_type=_query(event, "source_type"),
+                        first_detected_from=_query(event, "first_detected_from"),
+                        updated_since=_query(event, "updated_since"),
+                        saved_only=path == "/customer/saved",
+                    ),
+                )
+            if path.startswith("/customer/opportunities/"):
+                parts = path[len("/customer/opportunities/") :].split("/")
+                opportunity_id = str(UUID(parts[0]))
+                if len(parts) == 1 and method == "GET":
+                    detail = customer_opportunity_detail(settings, customer, opportunity_id)
+                    return (
+                        _response(200, detail)
+                        if detail
+                        else _response(404, {"error": "opportunity_not_found"})
+                    )
+                if len(parts) == 2 and parts[1] == "save" and method in {"POST", "DELETE"}:
+                    save_customer_opportunity(
+                        settings, customer, opportunity_id, saved=method == "POST"
+                    )
+                    record_customer_event(
+                        settings,
+                        customer,
+                        {
+                            "event_type": (
+                                "OPPORTUNITY_SAVED"
+                                if method == "POST"
+                                else "OPPORTUNITY_UNSAVED"
+                            ),
+                            "opportunity_id": opportunity_id,
+                        },
+                    )
+                    return _response(200, {"id": opportunity_id, "saved": method == "POST"})
+            if path == "/customer/preferences":
+                if method == "GET":
+                    return _response(200, get_customer_preferences(settings, customer))
+                if method == "PUT":
+                    return _response(
+                        200,
+                        update_customer_preferences(
+                            settings, customer, parse_json_payload(_raw_body(event))
+                        ),
+                    )
+            if path == "/customer/saved-searches":
+                if method == "GET":
+                    return _response(200, {"items": list_saved_searches(settings, customer)})
+                if method == "POST":
+                    return _response(
+                        201,
+                        create_saved_search(
+                            settings, customer, parse_json_payload(_raw_body(event))
+                        ),
+                    )
+            if path == "/customer/digest/preview" and method == "GET":
+                return _response(200, digest_preview(settings, customer))
+            if path == "/customer/events" and method == "POST":
+                record_customer_event(
+                    settings, customer, parse_json_payload(_raw_body(event))
+                )
+                return _response(202, {"status": "recorded"})
+        except PermissionError as exc:
+            return _response(403, {"error": str(exc)})
+        except (ValueError, TypeError):
+            return _response(400, {"error": "invalid_customer_request"})
+        except Exception:
+            logger.exception("customer_request_failed path=%s", path)
+            return _response(500, {"error": "customer_request_failed"})
+        return _response(404, {"error": "not_found"})
+
     if path.startswith("/admin/") or path == "/admin/signals":
         claims, auth_error = _require_claims(event)
         if auth_error:
             return auth_error
+        admin_error = _require_admin(claims, settings)
+        if admin_error:
+            return admin_error
         action, signal_id = _admin_path(path)
         try:
+            if action == "customer-account-list":
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                if method == "GET":
+                    return _response(200, {"items": list_customer_accounts(settings)})
+                if method == "POST":
+                    actor = str(claims.get("sub") or claims.get("username") or "unknown")
+                    return _response(
+                        201,
+                        provision_customer_account(
+                            settings, parse_json_payload(_raw_body(event)), actor
+                        ),
+                    )
+            if action == "customer-account-detail" and method == "PATCH" and signal_id:
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                actor = str(claims.get("sub") or claims.get("username") or "unknown")
+                return _response(
+                    200,
+                    update_customer_account(
+                        settings,
+                        str(UUID(signal_id)),
+                        parse_json_payload(_raw_body(event)),
+                        actor,
+                    ),
+                )
+            if action == "customer-readiness" and method == "GET":
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                return _response(200, customer_readiness(settings))
+            if action == "opportunity-publication" and method == "POST" and signal_id:
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                actor = str(claims.get("sub") or claims.get("username") or "unknown")
+                return _response(
+                    200,
+                    set_opportunity_publication(
+                        settings,
+                        str(UUID(signal_id)),
+                        parse_json_payload(_raw_body(event)),
+                        actor,
+                    ),
+                )
             if action == "backtesting-list" and method == "GET":
                 admin_error = _require_admin(claims, settings)
                 if admin_error:

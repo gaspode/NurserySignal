@@ -53,3 +53,10 @@ resource "aws_cognito_user_group" "administrators" {
   description  = "Staff allowed to run bounded administrative operations"
   precedence   = 1
 }
+
+resource "aws_cognito_user_group" "caresignal_customers" {
+  name         = "CareSignalCustomers"
+  user_pool_id = aws_cognito_user_pool.main.id
+  description  = "Invited customer users restricted to the CareSignal portal"
+  precedence   = 2
+}

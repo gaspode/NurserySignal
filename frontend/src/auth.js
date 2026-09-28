@@ -105,6 +105,7 @@ export function AuthProvider({ children, config = appConfig }) {
   const [loading, setLoading] = useState(true);
   const [authError, setAuthError] = useState("");
   const [passwordChallenge, setPasswordChallenge] = useState(null);
+  const [claims, setClaims] = useState({});
 
   useEffect(() => {
     let active = true;
@@ -118,16 +119,18 @@ export function AuthProvider({ children, config = appConfig }) {
       return undefined;
     }
     sessionFor(current)
-      .then(() => {
+      .then((session) => {
         if (active) {
           rememberUser(config, current);
           setUser(current);
+          setClaims(session.getIdToken().payload || {});
         }
       })
       .catch(() => {
         if (active) {
           forgetRememberedUser(config);
           setUser(null);
+          setClaims({});
         }
       })
       .finally(() => active && setLoading(false));
@@ -151,6 +154,7 @@ export function AuthProvider({ children, config = appConfig }) {
           onSuccess: (session) => {
             rememberUser(config, cognitoUser);
             setUser(cognitoUser);
+            setClaims(session.getIdToken().payload || {});
             resolve(session);
           },
           newPasswordRequired: (userAttributes = {}, requiredAttributes = []) => {
@@ -179,6 +183,7 @@ export function AuthProvider({ children, config = appConfig }) {
           onSuccess: (session) => {
             rememberUser(config, passwordChallenge.cognitoUser);
             setUser(passwordChallenge.cognitoUser);
+            setClaims(session.getIdToken().payload || {});
             setPasswordChallenge(null);
             resolve(session);
           },
@@ -202,6 +207,7 @@ export function AuthProvider({ children, config = appConfig }) {
     pool?.getCurrentUser()?.signOut();
     forgetRememberedUser(config);
     setUser(null);
+    setClaims({});
     setPasswordChallenge(null);
     setAuthError("");
   }, [config, pool]);
@@ -223,6 +229,10 @@ export function AuthProvider({ children, config = appConfig }) {
     logout,
     getToken,
     configured: Boolean(pool),
+    claims,
+    groups: Array.isArray(claims["cognito:groups"])
+      ? claims["cognito:groups"]
+      : String(claims["cognito:groups"] || "").replace(/^\[|\]$/g, "").split(",").map((value) => value.trim()).filter(Boolean),
   };
   return createElement(AuthContext.Provider, { value }, children);
 }

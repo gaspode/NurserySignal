@@ -46,6 +46,12 @@ variable "ai_shadow_enabled" {
   description = "Enable non-authoritative Bedrock shadow assessments for new enrichment messages."
 }
 
+variable "caresignal_email_from" {
+  type        = string
+  default     = ""
+  description = "Verified SES sender for CareSignal digests. Empty keeps delivery in preview mode."
+}
+
 variable "ai_model_id" {
   type        = string
   default     = "eu.amazon.nova-lite-v1:0"

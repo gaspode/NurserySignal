@@ -39,6 +39,11 @@ resource "aws_lambda_function" "backend" {
       EVIDENCE_BUCKET                      = aws_s3_bucket.raw_evidence.bucket
       ENRICHMENT_QUEUE_URL                 = aws_sqs_queue.enrichment.url
       ADMIN_GROUP                          = aws_cognito_user_group.administrators.name
+      CUSTOMER_GROUP                       = aws_cognito_user_group.caresignal_customers.name
+      COGNITO_USER_POOL_ID                 = aws_cognito_user_pool.main.id
+      CARESIGNAL_EMAIL_FROM                = var.caresignal_email_from
+      CARESIGNAL_PORTAL_URL                = "https://${aws_cloudfront_distribution.frontend.domain_name}"
+      CUSTOMER_DIGEST_QUEUE_URL            = aws_sqs_queue.customer_digest.url
       AI_MODEL_ID                          = var.ai_model_id
       AI_PROMPT_VERSION                    = var.ai_prompt_version
       AI_PLANNING_PROMPT_VERSION           = var.ai_planning_prompt_version

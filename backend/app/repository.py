@@ -2730,7 +2730,9 @@ def opportunity_detail(settings: Settings, opportunity_id: str) -> dict[str, Any
             """SELECT id, name, operator_name, address, postcode, town, vertical, change_type,
                       event_type, lifecycle_stage, confidence,
                       confidence_breakdown, stage_reason, creation_reason, first_seen_at,
-                      latest_update_at, location_sensitivity, operator_id
+                      latest_update_at, location_sensitivity, operator_id,
+                      publication_status, customer_title, customer_summary,
+                      customer_published_by, customer_published_at
                FROM opportunities WHERE id = %s""",
             (opportunity_id,),
         ).fetchone()
@@ -2799,6 +2801,11 @@ def opportunity_detail(settings: Settings, opportunity_id: str) -> dict[str, Any
         "latest_update_at": opportunity[15],
         "location_sensitivity": opportunity[16],
         "operator_id": opportunity[17],
+        "publication_status": opportunity[18],
+        "customer_title": opportunity[19],
+        "customer_summary": opportunity[20],
+        "customer_published_by": opportunity[21],
+        "customer_published_at": opportunity[22],
         "signals": [dict(zip(fields, row)) for row in rows],
         "organisation_evidence": [
             {

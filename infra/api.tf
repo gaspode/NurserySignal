@@ -72,6 +72,21 @@ resource "aws_apigatewayv2_route" "admin_options" {
   authorization_type = "NONE"
 }
 
+resource "aws_apigatewayv2_route" "customer" {
+  api_id             = aws_apigatewayv2_api.http.id
+  route_key          = "ANY /customer/{proxy+}"
+  target             = "integrations/${aws_apigatewayv2_integration.backend.id}"
+  authorization_type = "JWT"
+  authorizer_id      = aws_apigatewayv2_authorizer.cognito.id
+}
+
+resource "aws_apigatewayv2_route" "customer_options" {
+  api_id             = aws_apigatewayv2_api.http.id
+  route_key          = "OPTIONS /customer/{proxy+}"
+  target             = "integrations/${aws_apigatewayv2_integration.backend.id}"
+  authorization_type = "NONE"
+}
+
 resource "aws_apigatewayv2_stage" "default" {
   api_id      = aws_apigatewayv2_api.http.id
   name        = "$default"

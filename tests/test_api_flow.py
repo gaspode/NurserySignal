@@ -10,7 +10,11 @@ from app.handler import handler
 from app.repository import ReprocessResult
 from app.service import IngestionResult
 
-CLAIMS = {"sub": "reviewer-123", "username": "admin@example.test"}
+CLAIMS = {
+    "sub": "reviewer-123",
+    "username": "admin@example.test",
+    "cognito:groups": ["NurserySignalAdmins"],
+}
 
 
 def event(
@@ -119,9 +123,9 @@ def test_admin_list_filters_and_paginates(monkeypatch) -> None:
         "discovered_to": None,
         "search": None,
         "unmatched_only": False,
-            "include_excluded": False,
-            "opportunity_decision": None,
-            "vertical": "NURSERY",
+        "include_excluded": False,
+        "opportunity_decision": None,
+        "vertical": "NURSERY",
     }
 
 
@@ -190,9 +194,7 @@ def test_admin_lists_validate_and_forward_vertical_scope(monkeypatch) -> None:
         return {"items": [], "total": 0}
 
     monkeypatch.setattr("app.handler.list_signals", fake_list)
-    response = handler(
-        event("/admin/signals", query={"vertical": "CHILDRENS_HOME"}), None
-    )
+    response = handler(event("/admin/signals", query={"vertical": "CHILDRENS_HOME"}), None)
     assert response["statusCode"] == 200
     assert captured["vertical"] == "CHILDRENS_HOME"
 
@@ -200,12 +202,10 @@ def test_admin_lists_validate_and_forward_vertical_scope(monkeypatch) -> None:
     assert response["statusCode"] == 200
     assert captured["vertical"] == "ALL"
 
-    assert handler(event("/admin/signals", query={"vertical": "UNKNOWN"}), None)[
-        "statusCode"
-    ] == 400
-    assert handler(event("/admin/signals", query={"vertical": "DENTAL"}), None)[
-        "statusCode"
-    ] == 400
+    assert (
+        handler(event("/admin/signals", query={"vertical": "UNKNOWN"}), None)["statusCode"] == 400
+    )
+    assert handler(event("/admin/signals", query={"vertical": "DENTAL"}), None)["statusCode"] == 400
 
 
 def test_admin_work_queues_forward_same_validated_vertical(monkeypatch) -> None:
@@ -214,18 +214,19 @@ def test_admin_work_queues_forward_same_validated_vertical(monkeypatch) -> None:
 
     monkeypatch.setattr(
         "app.handler.list_opportunities",
-        lambda settings, **kwargs: captured.setdefault("opportunities", kwargs)
-        or {"items": [], "total": 0},
+        lambda settings, **kwargs: (
+            captured.setdefault("opportunities", kwargs) or {"items": [], "total": 0}
+        ),
     )
     monkeypatch.setattr(
         "app.handler.list_match_reviews",
-        lambda settings, **kwargs: captured.setdefault("match_review", kwargs)
-        or {"items": [], "total": 0},
+        lambda settings, **kwargs: (
+            captured.setdefault("match_review", kwargs) or {"items": [], "total": 0}
+        ),
     )
     monkeypatch.setattr(
         "app.handler.list_organisations",
-        lambda settings, **kwargs: captured.setdefault("organisations", kwargs)
-        or {"items": []},
+        lambda settings, **kwargs: captured.setdefault("organisations", kwargs) or {"items": []},
     )
 
     for path, key in (
@@ -487,7 +488,13 @@ def test_sources_status_is_admin_only_and_includes_recent_runs(monkeypatch) -> N
         "companies_house",
     }
     assert body["items"][0]["last_run"]["status"] == "SUCCESS"
-    assert handler(event("/admin/sources"), None)["statusCode"] == 403
+    assert (
+        handler(
+            event("/admin/sources", claims={"sub": "staff", "cognito:groups": ["Other"]}),
+            None,
+        )["statusCode"]
+        == 403
+    )
 
 
 def test_care_sources_include_manual_ofsted_and_companies_house(monkeypatch) -> None:
@@ -519,7 +526,16 @@ def test_procurement_evaluation_is_admin_only_and_bounded(monkeypatch) -> None:
         "app.handler.list_procurement_evaluations",
         lambda settings, limit, offset: {"items": [{"id": "p-1"}], "total": 1},
     )
-    assert handler(event("/admin/procurement-evaluation"), None)["statusCode"] == 403
+    assert (
+        handler(
+            event(
+                "/admin/procurement-evaluation",
+                claims={"sub": "staff", "cognito:groups": ["Other"]},
+            ),
+            None,
+        )["statusCode"]
+        == 403
+    )
     response = handler(
         event(
             "/admin/procurement-evaluation",
@@ -568,9 +584,9 @@ def test_source_manual_run_uses_fixed_bounds_and_exact_lambda(monkeypatch) -> No
     assert payload == {
         "source": "manual",
         "lookback_days": 2,
-            "max_records": 100,
-            "care_max_records": 50,
-            "page_size": 25,
+        "max_records": 100,
+        "care_max_records": 50,
+        "page_size": 25,
         "verticals": ["NURSERY"],
         "run_id": "run-1",
         "run_started_at": "2026-09-26T19:00:00Z",
@@ -668,7 +684,13 @@ def test_admin_detail_serializes_database_numeric_values(monkeypatch) -> None:
 
 def test_planning_reprocess_requires_administrator_group() -> None:
     response = handler(
-        event("/admin/planning/reprocess", "POST", body=json.dumps({"limit": 25})), None
+        event(
+            "/admin/planning/reprocess",
+            "POST",
+            body=json.dumps({"limit": 25}),
+            claims={"sub": "staff", "cognito:groups": ["Other"]},
+        ),
+        None,
     )
     assert response["statusCode"] == 403
     assert json.loads(response["body"]) == {"error": "administrator_role_required"}
@@ -808,7 +830,7 @@ def test_recruitment_reprocess_is_admin_only_and_bounded(monkeypatch) -> None:
             "/admin/recruitment/reprocess",
             "POST",
             body=json.dumps({"limit": 200}),
-            claims=CLAIMS,
+            claims={"sub": "staff", "cognito:groups": ["Other"]},
         ),
         None,
     )
@@ -841,7 +863,13 @@ def test_recruitment_reprocess_rejects_unbounded_id_lists() -> None:
 
 
 def test_opportunity_views_and_corrections_are_admin_only(monkeypatch) -> None:
-    denied = handler(event("/admin/opportunities"), None)
+    denied = handler(
+        event(
+            "/admin/opportunities",
+            claims={"sub": "staff", "cognito:groups": ["Other"]},
+        ),
+        None,
+    )
     assert denied["statusCode"] == 403
 
     monkeypatch.setattr(
@@ -884,7 +912,13 @@ def test_match_review_is_admin_only_and_bounded(monkeypatch) -> None:
         "app.handler.list_match_reviews",
         lambda settings, **kwargs: {"items": [], "total": 0, **kwargs},
     )
-    denied = handler(event("/admin/match-review"), None)
+    denied = handler(
+        event(
+            "/admin/match-review",
+            claims={"sub": "staff", "cognito:groups": ["Other"]},
+        ),
+        None,
+    )
     assert denied["statusCode"] == 403
     response = handler(
         event("/admin/match-review", claims={**CLAIMS, "cognito:groups": ["NurserySignalAdmins"]}),

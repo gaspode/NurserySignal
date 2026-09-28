@@ -27,6 +27,7 @@ def test_initial_migration_exists_and_contains_provenance_tables() -> None:
         "0019_historical_backtesting.sql",
         "0020_historical_research_corpus.sql",
         "0021_backtest_failed_retry.sql",
+        "0022_caresignal_customer_mvp.sql",
     ]
     sql = "\n".join(path.read_text(encoding="utf-8") for path in files)
     tables = (
@@ -58,6 +59,9 @@ def test_initial_migration_exists_and_contains_provenance_tables() -> None:
     assert "signalhub_check_opportunity_signal_vertical" in sql
     assert "supported_verticals" in sql
     assert "candidate_fingerprint" in sql
+    assert "CREATE TABLE IF NOT EXISTS customer_accounts" in sql
+    assert "CREATE TABLE IF NOT EXISTS customer_users" in sql
+    assert "CREATE TABLE IF NOT EXISTS customer_saved_opportunities" in sql
     assert "CREATE TABLE IF NOT EXISTS ofsted_urn_enrichments" in sql
     assert "provider_registered_address" in sql
     assert "CREATE TABLE IF NOT EXISTS benchmark_cases" in sql

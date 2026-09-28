@@ -394,3 +394,39 @@ Procurement source-value experiment:
 - This experiment does not block the next major product step. Proceed with a bounded customer-facing
   CareSignal MVP while procurement remains an internal evaluation source and the historical
   benchmark accumulates prospective coverage.
+
+## Phase 12 — CareSignal commercial pilot MVP
+
+Status: implementation complete; production deployment and pilot curation are the active gate.
+
+- Added a separate CareSignal customer experience over a strict server-side projection. SignalHub
+  remains admin-only; customers cannot access admin APIs, internal review/debug state, rejected
+  opportunities, private evidence, benchmark/source tooling or procurement shadow records.
+- Added tenant accounts and named users, `STARTER`/`PRO`/`BUSINESS` entitlements, server-enforced
+  Starter geography, personal watchlists, simple Pro saved searches, alert preferences, product
+  usage events and idempotent digest-run history. Pricing and self-service billing remain deferred.
+- Customer opportunity publication is explicit and audited. An item must be CareSignal,
+  non-rejected/current, explicitly `PUBLISHED`, and supported by approved non-procurement evidence.
+  No existing opportunity is automatically exposed by migration.
+- Delivered customer Opportunities, Saved, Alerts and Account views with concise titles, plain
+  language stage/strength labels, first/latest dates, customer-safe geography, organisation facts,
+  explainable evidence timelines and official public links. `INTERNAL_EXACT` locations expose only
+  outward postcode/area and never reconstruct Ofsted-redacted home addresses.
+- Added a bounded weekly digest path using the existing VPC backend for database projection, SQS,
+  and one non-VPC SES sender Lambda. This avoids NAT or another paid VPC endpoint. As no SES sender
+  identity is currently verified, the deployed schedule/consumer must remain disabled and the UI
+  offers digest preview only until `caresignal_email_from` is configured.
+- Added SignalHub Customers administration for manual account invitation, plan/geography assignment,
+  suspension/reactivation and customer-readiness counts; customer publication is managed on the
+  existing opportunity detail page.
+- Procurement remains manual/shadow and is explicitly excluded from customer eligibility/timelines.
+  Historical benchmarking continues prospectively and does not block pilot discovery interviews.
+
+Pilot gate:
+- deploy migration/code and confirm production health;
+- curate and explicitly publish the small set of CareSignal opportunities whose evidence is clear
+  enough for supplier conversations;
+- verify a real customer invitation, Starter geography isolation and account separation;
+- verify an SES sender and exercise one weekly digest before representing email delivery as live;
+- then invite 5–10 suppliers for paid-pilot conversations and measure viewing, saving, source-link
+  and alert usage before adding CRM, billing, exports or larger matching architecture.

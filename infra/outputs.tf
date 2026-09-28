@@ -82,6 +82,20 @@ output "cognito_admin_group" {
   value = aws_cognito_user_group.administrators.name
 }
 
+output "cognito_customer_group" {
+  value = aws_cognito_user_group.caresignal_customers.name
+}
+
+output "caresignal_customer_url" {
+  description = "CareSignal customer portal URL (role-routed after login)."
+  value       = "https://${aws_cloudfront_distribution.frontend.domain_name}/#/care/opportunities"
+}
+
+output "customer_weekly_digest_enabled" {
+  description = "Whether weekly CareSignal email delivery has a configured sender."
+  value       = var.caresignal_email_from != ""
+}
+
 output "github_actions_role_arn" {
   value = var.github_repository == "" ? null : aws_iam_role.github_actions[0].arn
 }
