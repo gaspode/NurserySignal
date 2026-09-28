@@ -50,6 +50,13 @@ def record_admin_audit(
     return str(row[0])
 
 
+def _postgres_text(value: Any) -> Any:
+    """Remove source control bytes PostgreSQL cannot store from normalized fields."""
+    if not isinstance(value, str):
+        return value
+    return value.replace("\x00", "")
+
+
 def _resolve_operator_id(conn: Any, name: Any, metadata: dict[str, Any]) -> Any | None:
     """Resolve a shared organisation without weakening vertical isolation."""
     display_name = str(name or "").strip()
@@ -91,6 +98,9 @@ def store_ofsted_urn_enrichment(
     retrieved_at: str,
 ) -> bool:
     """Persist immutable provider-level Ofsted evidence without changing site identity."""
+    database_value = {
+        key: _postgres_text(item) for key, item in value.items()
+    }
     with connection(settings) as conn:
         signal = conn.execute(
             """SELECT vertical, source_type, organisation_hint
@@ -102,7 +112,7 @@ def store_ofsted_urn_enrichment(
         if signal[0] != "CHILDRENS_HOME" or signal[1] != "ofsted":
             raise ValueError("Ofsted enrichment references an incompatible signal")
         observed_name = str(signal[2] or "").strip()
-        provider_name = str(value.get("registered_provider_name") or "").strip()
+        provider_name = str(database_value.get("registered_provider_name") or "").strip()
         operator_id = _resolve_operator_id(conn, observed_name or provider_name, {})
         if operator_id:
             for alias, source in (
@@ -139,25 +149,25 @@ def store_ofsted_urn_enrichment(
             (
                 signal_id,
                 operator_id,
-                value.get("urn"),
-                value.get("status"),
-                value.get("provider_page_url"),
-                value.get("provision_type"),
-                value.get("registration_date"),
-                value.get("local_authority"),
+                database_value.get("urn"),
+                database_value.get("status"),
+                database_value.get("provider_page_url"),
+                database_value.get("provision_type"),
+                database_value.get("registration_date"),
+                database_value.get("local_authority"),
                 provider_name or None,
-                value.get("provider_registered_address"),
-                value.get("provider_registered_locality"),
-                value.get("provider_registered_region"),
-                value.get("provider_registered_postcode"),
-                value.get("latest_report_type"),
-                value.get("latest_report_date"),
-                value.get("latest_report_publication_date"),
-                value.get("latest_report_url"),
-                int(value.get("report_count") or 0),
-                value.get("report_content_sha256"),
-                value.get("parser_version"),
-                value.get("failure_category"),
+                database_value.get("provider_registered_address"),
+                database_value.get("provider_registered_locality"),
+                database_value.get("provider_registered_region"),
+                database_value.get("provider_registered_postcode"),
+                database_value.get("latest_report_type"),
+                database_value.get("latest_report_date"),
+                database_value.get("latest_report_publication_date"),
+                database_value.get("latest_report_url"),
+                int(database_value.get("report_count") or 0),
+                database_value.get("report_content_sha256"),
+                database_value.get("parser_version"),
+                database_value.get("failure_category"),
                 evidence_bucket,
                 evidence_key,
                 content_sha256,

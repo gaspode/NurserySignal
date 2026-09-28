@@ -15,6 +15,7 @@ from app.ofsted_enrichment import (
     parse_report_pdf,
     persist_ofsted_urn_enrichment,
 )
+from app.repository import _postgres_text
 
 
 class Response(io.BytesIO):
@@ -254,6 +255,12 @@ def test_urn_enrichment_evidence_identity_ignores_retrieval_time(monkeypatch) ->
     assert uploaded[0][0] == uploaded[1][0]
     assert uploaded[0][1] == uploaded[1][1]
     assert stored[0]["content_sha256"] == stored[1]["content_sha256"]
+
+
+def test_normalized_ofsted_text_removes_nul_without_rewriting_source_value() -> None:
+    source = "Provider\x00 Office"
+    assert _postgres_text(source) == "Provider Office"
+    assert source == "Provider\x00 Office"
 
 
 def test_ofsted_is_supporting_regulatory_evidence_not_a_new_opportunity() -> None:
