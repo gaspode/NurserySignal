@@ -556,3 +556,8 @@ Paid-pilot activation check (2026-09-28):
   admitted as organisation identity, while the original report evidence remains preserved. Two items
   completed on the first redrive and the final two completed after the corrected worker deployment;
   all production queues and DLQs are now empty and the post-deployment Terraform plan is clean.
+- A live read-only check of URN-specific evidence then identified the malformed PDF delimiter behind
+  those run-on names: some reports repeat `Registered provider:` at the end of the document. The
+  source-aware parser now treats that repeated label as a boundary and is versioned `ofsted-urn-v3`;
+  the Bright Path-style production case extracts the concise registered-provider identity and its
+  provider-office postcode without exposing or inferring a children's-home address.

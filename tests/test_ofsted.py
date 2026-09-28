@@ -74,6 +74,14 @@ def _tagged_report_without_county() -> bytes:
     )
 
 
+def _tagged_report_with_repeated_provider_label() -> bytes:
+    return (
+        b"%PDF-1.7 /ActualText(Registered provider: Example Care Limited Monitoring visit) "
+        b"/ActualText(Report narrative which has no recognised provider terminator.) "
+        b"/ActualText(Registered provider: Example Care Limited)"
+    )
+
+
 def _ods(path: Path) -> None:
     headers = [
         "Web link",
@@ -190,6 +198,11 @@ def test_known_urn_page_and_report_extract_provider_identity_without_home_addres
     assert report["provider_registered_locality"] == "Blackpool"
     assert report["provider_registered_region"] == "Lancashire"
     assert report["provider_registered_postcode"] == "FY4 2FF"
+
+
+def test_repeated_provider_label_uses_final_bounded_identity() -> None:
+    report = parse_report_pdf(_tagged_report_with_repeated_provider_label())
+    assert report["registered_provider_name"] == "Example Care Limited"
     assert "home_address" not in report
     assert "manager" not in report
 

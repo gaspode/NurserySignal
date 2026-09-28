@@ -14,7 +14,7 @@ from app.repository import store_ofsted_urn_enrichment
 from app.storage import put_raw_evidence
 
 OFSTED_PROVIDER_URL = "https://reports.ofsted.gov.uk/provider/2/{urn}"
-PARSER_VERSION = "ofsted-urn-v2"
+PARSER_VERSION = "ofsted-urn-v3"
 USER_AGENT = "SignalHub/1.0"
 MAX_PAGE_BYTES = 2 * 1024 * 1024
 MAX_REPORT_BYTES = 12 * 1024 * 1024
@@ -252,9 +252,9 @@ def parse_report_pdf(report: bytes) -> dict[str, Any]:
     )
     normalized = " ".join(actual_text.split())
     provider_matches = re.findall(
-        r"Registered provider:\s*(.+?)(?=Registered provider address:|"
+        r"Registered provider:\s*(.+?)(?=Registered provider:|Registered provider address:|"
         r"Responsible individual:|Registered manager:|Inspectors)",
-        normalized,
+        f"{normalized} Inspectors",
         re.I,
     )
     address_matches = re.findall(
