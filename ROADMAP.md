@@ -561,3 +561,7 @@ Paid-pilot activation check (2026-09-28):
   source-aware parser now treats that repeated label as a boundary and is versioned `ofsted-urn-v3`;
   the Bright Path-style production case extracts the concise registered-provider identity and its
   provider-office postcode without exposing or inferring a children's-home address.
+- A one-record production run for Ofsted URN `2806691` fetched and persisted the corrected v3
+  enrichment with no errors; the ingestion queue drained and its DLQ remained empty. The official
+  Companies House number lookup also returns the active legal entity with exact provider-office
+  postcode agreement. The pending review remains admin-authoritative and was not silently resolved.
