@@ -117,10 +117,30 @@ def _safe_company(item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+_UK_LEGAL_SUFFIXES: tuple[tuple[tuple[str, ...], str], ...] = (
+    (("limited", "liability", "partnership"), "limited liability partnership"),
+    (("public", "limited", "company"), "public limited company"),
+    (("llp",), "limited liability partnership"),
+    (("plc",), "public limited company"),
+    (("ltd",), "limited"),
+    (("limited",), "limited"),
+)
+
+
+def normalize_uk_legal_name(value: Any) -> str:
+    """Canonicalise only recognised UK legal suffixes, preserving the name itself."""
+    words = normalize_identity(value).split()
+    for suffix, canonical in _UK_LEGAL_SUFFIXES:
+        if tuple(words[-len(suffix) :]) == suffix:
+            return " ".join((*words[: -len(suffix)], canonical)).strip()
+    return " ".join(words)
+
+
 def _name_without_legal_suffix(value: Any) -> str:
     words = normalize_identity(value).split()
-    while words and words[-1] in {"ltd", "limited", "plc", "llp"}:
-        words.pop()
+    for suffix, _canonical in _UK_LEGAL_SUFFIXES:
+        if tuple(words[-len(suffix) :]) == suffix:
+            return " ".join(words[: -len(suffix)])
     return " ".join(words)
 
 
@@ -147,7 +167,7 @@ def _identity_names(candidate: OrganisationCandidate) -> tuple[str, ...]:
     names: list[str] = []
     seen: set[str] = set()
     for value in values:
-        normalized = normalize_identity(value)
+        normalized = normalize_uk_legal_name(value)
         if normalized and normalized not in seen:
             seen.add(normalized)
             names.append(normalized)
@@ -165,8 +185,12 @@ def _compact_leading_name_variant(value: Any) -> str:
 def _discovery_queries(candidate: OrganisationCandidate) -> tuple[tuple[str, str], ...]:
     values = (
         (candidate.name, "OBSERVED_PROVIDER_NAME"),
-        (normalize_identity(candidate.name), "NORMALIZED_OBSERVED_PROVIDER_NAME"),
+        (normalize_uk_legal_name(candidate.name), "NORMALIZED_OBSERVED_PROVIDER_NAME"),
         (candidate.provider_registered_name, "OFSTED_REGISTERED_PROVIDER_NAME"),
+        (
+            normalize_uk_legal_name(candidate.provider_registered_name),
+            "NORMALIZED_OFSTED_REGISTERED_PROVIDER_NAME",
+        ),
         (
             _compact_leading_name_variant(candidate.provider_registered_name),
             "OFSTED_REGISTERED_PROVIDER_NAME_VARIANT",
@@ -191,12 +215,19 @@ def compare_company_candidate(
     candidate: OrganisationCandidate, company: dict[str, Any]
 ) -> dict[str, Any]:
     identity_names = _identity_names(candidate) or (normalize_identity(candidate.name),)
-    legal_name = normalize_identity(company.get("company_name"))
+    legal_name = normalize_uk_legal_name(company.get("company_name"))
     observed = max(
         identity_names,
         key=lambda value: SequenceMatcher(None, value, legal_name).ratio(),
     )
-    similarity = SequenceMatcher(None, observed, legal_name).ratio()
+    similarity = max(
+        SequenceMatcher(None, observed, legal_name).ratio(),
+        SequenceMatcher(
+            None,
+            _name_without_legal_suffix(observed),
+            _name_without_legal_suffix(legal_name),
+        ).ratio(),
+    )
     address = company.get("registered_office_address") or {}
     source_locality = normalize_identity(candidate.locality)
     company_locality = normalize_identity(address.get("locality"))
@@ -215,12 +246,23 @@ def compare_company_candidate(
     provider_postcode_agrees = bool(
         provider_postcode and provider_postcode == company_postcode
     )
+    provider_address = normalize_identity(candidate.provider_registered_address)
+    company_address_line = normalize_identity(address.get("address_line_1"))
+    provider_address_agrees = bool(
+        provider_postcode_agrees
+        and company_address_line
+        and (
+            company_address_line == provider_address
+            or company_address_line in provider_address
+        )
+    )
+    exact_normalized_legal_name = observed == legal_name
     reasons: list[str] = []
     cautions: list[str] = []
-    if observed == legal_name:
-        reasons.append("Exact normalised legal-name match")
-    elif _name_without_legal_suffix(observed) == _name_without_legal_suffix(legal_name):
-        reasons.append("Legal name differs only by company suffix")
+    match_features: list[str] = []
+    if exact_normalized_legal_name:
+        reasons.append("Exact normalized legal-name match")
+        match_features.append("EXACT_NORMALIZED_LEGAL_NAME")
     elif similarity >= 0.9:
         reasons.append("Strong legal-name similarity")
     elif similarity >= 0.75:
@@ -236,11 +278,12 @@ def compare_company_candidate(
     elif source_outward and company_outward:
         cautions.append("Registered-office postcode area differs from source context")
     if provider_locality_agrees:
-        reasons.append("Companies House office town matches Ofsted provider address")
+        reasons.append("Provider-office locality agrees")
     elif provider_locality and company_locality:
         cautions.append("Companies House office town differs from Ofsted provider address")
     if provider_postcode_agrees:
         reasons.append("Exact Ofsted provider-office postcode match")
+        match_features.append("EXACT_OFSTED_PROVIDER_OFFICE_POSTCODE")
     elif provider_postcode and company_postcode:
         cautions.append("Companies House office postcode differs from Ofsted provider office")
     incorporation_compatible = None
@@ -249,9 +292,12 @@ def compare_company_candidate(
             candidate.provider_registration_date
         )
         if incorporation_compatible:
-            reasons.append("Company existed before the Ofsted registration date")
+            reasons.append("Company existed before Ofsted registration")
         else:
-            cautions.append("Company was incorporated after the Ofsted registration date")
+            cautions.append("Company incorporated after Ofsted registration")
+    if provider_address_agrees:
+        reasons.append("Provider-office address agrees")
+        match_features.append("OFSTED_PROVIDER_OFFICE_ADDRESS_AGREES")
     if not any(
         (
             locality_agrees,
@@ -261,11 +307,8 @@ def compare_company_candidate(
         )
     ):
         cautions.append("Name match only; no location corroboration")
-    suffix_equivalent = _name_without_legal_suffix(observed) == _name_without_legal_suffix(
-        legal_name
-    )
-    outcome = "PROBABLE" if similarity >= 0.9 or suffix_equivalent else "UNCERTAIN"
-    if (observed == legal_name or suffix_equivalent) and (
+    outcome = "PROBABLE" if similarity >= 0.9 else "UNCERTAIN"
+    if exact_normalized_legal_name and (
         locality_agrees
         or postcode_area_agrees
         or provider_locality_agrees
@@ -278,27 +321,56 @@ def compare_company_candidate(
         "name_similarity": round(similarity, 4),
         "match_reasons": reasons,
         "match_cautions": cautions,
+        "match_features": match_features,
         "location_agreement": {
             "locality": locality_agrees,
             "postcode_area": postcode_area_agrees,
             "ofsted_provider_locality": provider_locality_agrees,
             "ofsted_provider_postcode": provider_postcode_agrees,
+            "ofsted_provider_address": provider_address_agrees,
             "incorporation_timing_compatible": incorporation_compatible,
         },
     }
 
 
-def _candidate_rank(item: dict[str, Any]) -> tuple[int, int, int, int, float, str]:
+def _candidate_support(item: dict[str, Any]) -> int:
     agreement = item.get("location_agreement") or {}
     timing = agreement.get("incorporation_timing_compatible")
     return (
+        (4 if "EXACT_NORMALIZED_LEGAL_NAME" in item.get("match_features", []) else 0)
+        + (4 if agreement.get("ofsted_provider_postcode") else 0)
+        + (2 if agreement.get("ofsted_provider_address") else 0)
+        + (1 if agreement.get("ofsted_provider_locality") else 0)
+        + (1 if timing is True else (-1 if timing is False else 0))
+    )
+
+
+def _candidate_rank(item: dict[str, Any]) -> tuple[int, int, int, int, int, float, str]:
+    agreement = item.get("location_agreement") or {}
+    timing = agreement.get("incorporation_timing_compatible")
+    return (
+        _candidate_support(item),
+        1 if "EXACT_NORMALIZED_LEGAL_NAME" in item.get("match_features", []) else 0,
         1 if agreement.get("ofsted_provider_postcode") else 0,
         1 if item.get("match_outcome") == "STRONG" else 0,
-        1 if agreement.get("ofsted_provider_locality") else 0,
         1 if timing is True else (-1 if timing is False else 0),
         float(item.get("name_similarity") or 0),
         str(item.get("company_number") or ""),
     )
+
+
+def rank_company_candidates(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Rank explainably and flag a materially better candidate without resolving it."""
+    ranked = sorted(items, key=_candidate_rank, reverse=True)
+
+    scores = [_candidate_support(item) for item in ranked]
+    materially_better = bool(
+        ranked and scores[0] >= 4 and (len(scores) == 1 or scores[0] - scores[1] >= 2)
+    )
+    return [
+        {**item, "best_supported_match": index == 0 and materially_better}
+        for index, item in enumerate(ranked)
+    ]
 
 
 class CompaniesHouseProvider:
@@ -408,7 +480,7 @@ class CompaniesHouseProvider:
                     SequenceMatcher(
                         None,
                         identity_name,
-                        normalize_identity(item.get("company_name")),
+                        normalize_uk_legal_name(item.get("company_name")),
                     ).ratio()
                     for identity_name in identity_names
                 ),
@@ -459,11 +531,11 @@ class CompaniesHouseProvider:
                 None,
                 (),
             )
-        target = normalize_identity(lookup_name)
+        target = normalize_uk_legal_name(lookup_name)
         exact = [
             item
             for item in results
-            if normalize_identity(item.get("company_name")) == target
+            if normalize_uk_legal_name(item.get("company_name")) == target
         ]
         if len(exact) == 1:
             compared_exact = compare_company_candidate(candidate, exact[0])
@@ -489,7 +561,7 @@ class CompaniesHouseProvider:
             )
         detailed = [self._detailed_candidate(item) for item in results]
         compared = [compare_company_candidate(candidate, item) for item in detailed]
-        ranked_compared = sorted(compared, key=_candidate_rank, reverse=True)
+        ranked_compared = rank_company_candidates(compared)
         provider_corroborated = [
             item
             for item in compared
@@ -516,7 +588,7 @@ class CompaniesHouseProvider:
         scored: list[tuple[float, dict[str, Any]]] = []
         for item in results:
             score = SequenceMatcher(
-                None, target, normalize_identity(item.get("company_name"))
+                None, target, normalize_uk_legal_name(item.get("company_name"))
             ).ratio()
             address = item.get("registered_office_address") or {}
             if locality and locality == normalize_identity(address.get("locality")):

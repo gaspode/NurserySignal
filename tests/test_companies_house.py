@@ -14,6 +14,8 @@ from app.companies_house import (
     OrganisationCandidate,
     compare_company_candidate,
     normalize_company_number,
+    normalize_uk_legal_name,
+    rank_company_candidates,
 )
 from app.config import Settings
 from app.organisation_enrichment import (
@@ -25,8 +27,72 @@ from app.repository import (
     add_manual_organisation_candidate,
     list_organisation_enrichment_candidates,
     list_organisation_match_reviews,
+    request_organisation_review_ofsted_enrichment,
     resolve_organisation_match_review,
 )
+
+
+@pytest.mark.parametrize(
+    ("left", "right"),
+    [
+        ("Bedspace Resource Ltd", "BEDSPACE RESOURCE LIMITED"),
+        ("Example Holdings PLC", "Example Holdings Public Limited Company"),
+        ("Example Partners LLP", "Example Partners Limited Liability Partnership"),
+    ],
+)
+def test_uk_legal_suffix_variants_have_one_canonical_name(left, right) -> None:
+    assert normalize_uk_legal_name(left) == normalize_uk_legal_name(right)
+
+
+def test_uk_legal_suffix_normalisation_preserves_substantive_words() -> None:
+    assert normalize_uk_legal_name("ABC Care Ltd") != normalize_uk_legal_name(
+        "ABC Care Group Limited"
+    )
+
+
+def test_bedspace_style_provider_evidence_is_explicit_and_ranked_first() -> None:
+    candidate = OrganisationCandidate(
+        "operator-1",
+        "Example Resource Ltd",
+        provider_registered_name="Example Resource Ltd",
+        provider_registered_locality="Manchester",
+        provider_registered_postcode="M16 9HF",
+        provider_registered_address="10 Example Road, Manchester, M16 9HF",
+        provider_registration_date="2024-05-01",
+    )
+    exact = compare_company_candidate(
+        candidate,
+        {
+            "company_name": "EXAMPLE RESOURCE LIMITED",
+            "company_number": "11111111",
+            "date_of_creation": "2002-06-10",
+            "registered_office_address": {
+                "address_line_1": "10 Example Road",
+                "locality": "Manchester",
+                "postal_code": "M16 9HF",
+            },
+        },
+    )
+    weak = compare_company_candidate(
+        candidate,
+        {
+            "company_name": "EXAMPLE RESOURCE GROUP LIMITED",
+            "company_number": "22222222",
+            "date_of_creation": "2025-06-10",
+            "registered_office_address": {
+                "locality": "London",
+                "postal_code": "N1 1AA",
+            },
+        },
+    )
+    ranked = rank_company_candidates([weak, exact])
+    assert ranked[0]["company_number"] == "11111111"
+    assert ranked[0]["best_supported_match"] is True
+    assert "EXACT_NORMALIZED_LEGAL_NAME" in ranked[0]["match_features"]
+    assert "Exact normalized legal-name match" in ranked[0]["match_reasons"]
+    assert "Exact Ofsted provider-office postcode match" in ranked[0]["match_reasons"]
+    assert "Provider-office address agrees" in ranked[0]["match_reasons"]
+    assert all("suffix" not in reason.lower() for reason in ranked[0]["match_reasons"])
 
 
 def test_company_number_normalisation_accepts_prefixed_numbers() -> None:
@@ -735,6 +801,7 @@ def test_ofsted_provider_name_expands_discovery_and_deduplicates_candidates() ->
     ] is False
     assert set(result.candidates[1]["discovery_sources"]) == {
         "APPROVED_ALIAS",
+        "NORMALIZED_OBSERVED_PROVIDER_NAME",
         "OBSERVED_PROVIDER_NAME",
         "OFSTED_REGISTERED_PROVIDER_NAME",
         "OFSTED_REGISTERED_PROVIDER_NAME_VARIANT",
@@ -994,3 +1061,56 @@ def test_manual_candidate_confirmation_has_distinct_audit_action(monkeypatch) ->
         params for sql, params in conn.statements if "INSERT INTO admin_audit_events" in sql
     )
     assert audit_params[0] == "organisation_match_manual_company_confirm"
+
+
+def test_missing_urn_enrichment_request_is_bounded_and_idempotent(monkeypatch) -> None:
+    requested_at = None
+    statements = []
+
+    class Result:
+        def __init__(self, row=None):
+            self.row = row
+
+        def fetchone(self):
+            return self.row
+
+    class Connection:
+        def execute(self, sql, params=()):
+            nonlocal requested_at
+            statements.append((sql, params))
+            if "SELECT status, ofsted_enrichment_requested_urn" in sql:
+                return Result(("PENDING", "2813108" if requested_at else None, requested_at))
+            if "UPDATE organisation_match_reviews" in sql:
+                requested_at = datetime.now(UTC)
+            return Result()
+
+        def commit(self):
+            return None
+
+    @contextmanager
+    def fake_connection(_settings):
+        yield Connection()
+
+    monkeypatch.setattr("app.repository.connection", fake_connection)
+    monkeypatch.setattr(
+        "app.repository.list_organisation_match_reviews",
+        lambda *_args, **_kwargs: [
+            {
+                "id": "review-1",
+                "source_context": {"missing_ofsted_urns": ["2813108"]},
+            }
+        ],
+    )
+    first = request_organisation_review_ofsted_enrichment(
+        Settings(), "review-1", actor="admin-1"
+    )
+    second = request_organisation_review_ofsted_enrichment(
+        Settings(), "review-1", actor="admin-1"
+    )
+    assert first == {"status": "QUEUED", "queued": True, "urn": "2813108"}
+    assert second == {
+        "status": "ALREADY_QUEUED",
+        "queued": False,
+        "urn": "2813108",
+    }
+    assert sum("INSERT INTO admin_audit_events" in sql for sql, _ in statements) == 1

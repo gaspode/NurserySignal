@@ -581,3 +581,12 @@ Paid-pilot activation check (2026-09-28):
   resolution gate, so admin confirmation remains required. An immediate unchanged rerun reused the
   same content-addressed evidence, created no duplicate candidate/review state, and left queues/DLQs
   empty.
+- Final organisation-resolution hardening canonicalizes only recognised UK corporate suffixes
+  (`Ltd/Limited`, `PLC/Public Limited Company`, and `LLP/Limited Liability Partnership`) while
+  retaining substantive name tokens and every raw observed name. Admin candidate evidence now
+  distinguishes exact normalized legal identity, exact Ofsted provider-office postcode, compatible
+  provider-office address/locality and incorporation timing, and marks a materially stronger candidate
+  as best supported without changing the automatic-resolution thresholds. Missing URN-specific
+  evidence can be requested from a pending review through a bounded, audited, deduplicated Ofsted run;
+  the review remains usable if that enrichment fails. Production Bedspace/Bright Path verification is
+  the final gate for this pass.

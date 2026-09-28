@@ -8,7 +8,11 @@ from uuid import UUID
 from psycopg.types.json import Jsonb
 
 from app.classification import CLASSIFICATION_RULE_VERSION
-from app.companies_house import OrganisationCandidate, compare_company_candidate
+from app.companies_house import (
+    OrganisationCandidate,
+    compare_company_candidate,
+    rank_company_candidates,
+)
 from app.config import Settings
 from app.correlation import (
     classify_match,
@@ -2610,6 +2614,13 @@ def list_organisation_match_reviews(
                 )
                 for evidence in ofsted_evidence
             ]
+            enriched_urns = {str(item.get("urn") or "").upper() for item in ofsted_items}
+            source_urns = {
+                str((signal[7] or {}).get("ofsted_urn") or "").strip().upper()
+                for signal in signals
+                if signal[3] == "ofsted"
+                and str((signal[7] or {}).get("ofsted_urn") or "").strip()
+            }
             candidates = row[5] or []
             if ofsted_items:
                 evidence = ofsted_items[0]
@@ -2639,7 +2650,7 @@ def list_organisation_match_reviews(
                         else None
                     ),
                 )
-                candidates = [
+                candidates = rank_company_candidates([
                     {
                         **compare_company_candidate(comparison_context, candidate),
                         "selection_source": candidate.get(
@@ -2648,18 +2659,7 @@ def list_organisation_match_reviews(
                     }
                     for candidate in candidates
                     if isinstance(candidate, dict)
-                ]
-                candidates.sort(
-                    key=lambda candidate: (
-                        1
-                        if (candidate.get("location_agreement") or {}).get(
-                            "ofsted_provider_postcode"
-                        )
-                        else 0,
-                        float(candidate.get("name_similarity") or 0),
-                    ),
-                    reverse=True,
-                )
+                ])
             results.append(
                 {
                     "id": row[0],
@@ -2696,6 +2696,7 @@ def list_organisation_match_reviews(
                                 or (signal[7] or {}).get("locality"),
                                 "local_authority": (signal[7] or {}).get("council")
                                 or (signal[7] or {}).get("local_authority"),
+                                "ofsted_urn": (signal[7] or {}).get("ofsted_urn"),
                                 "discovered_at": signal[8],
                             }
                             for signal in signals
@@ -2712,10 +2713,80 @@ def list_organisation_match_reviews(
                             for opportunity in opportunities
                         ],
                         "ofsted_evidence": ofsted_items,
+                        "missing_ofsted_urns": sorted(source_urns - enriched_urns),
                     },
                 }
             )
     return results
+
+
+def request_organisation_review_ofsted_enrichment(
+    settings: Settings,
+    review_id: str,
+    *,
+    actor: str,
+) -> dict[str, Any]:
+    """Reserve one bounded URN enrichment request without duplicating active work."""
+    review = next(
+        (
+            item
+            for item in list_organisation_match_reviews(settings, limit=100)
+            if str(item.get("id")) == review_id
+        ),
+        None,
+    )
+    if not review:
+        raise ValueError("organisation review not found")
+    missing = (review.get("source_context") or {}).get("missing_ofsted_urns") or []
+    if not missing:
+        return {"status": "ALREADY_ENRICHED", "queued": False}
+    urn = sorted({str(value).upper() for value in missing})[0]
+    with connection(settings) as conn:
+        row = conn.execute(
+            """SELECT status, ofsted_enrichment_requested_urn,
+                      ofsted_enrichment_requested_at
+               FROM organisation_match_reviews
+               WHERE id = %s FOR UPDATE""",
+            (review_id,),
+        ).fetchone()
+        if not row:
+            raise ValueError("organisation review not found")
+        if row[0] != "PENDING":
+            raise ValueError("organisation review is no longer pending")
+        requested_at = row[2]
+        if row[1] == urn and requested_at:
+            age_seconds = (datetime.now(UTC) - requested_at).total_seconds()
+            if age_seconds < 900:
+                return {"status": "ALREADY_QUEUED", "queued": False, "urn": urn}
+        conn.execute(
+            """UPDATE organisation_match_reviews
+               SET ofsted_enrichment_requested_urn = %s,
+                   ofsted_enrichment_requested_at = now()
+               WHERE id = %s""",
+            (urn, review_id),
+        )
+        conn.execute(
+            """INSERT INTO admin_audit_events (action, actor, target_type, details)
+               VALUES ('organisation_match_ofsted_enrichment_requested', %s,
+                       'organisation_match_review', %s)""",
+            (actor, Jsonb({"review_id": review_id, "urn": urn})),
+        )
+        conn.commit()
+    return {"status": "QUEUED", "queued": True, "urn": urn}
+
+
+def release_organisation_review_ofsted_enrichment_request(
+    settings: Settings, review_id: str, urn: str
+) -> None:
+    with connection(settings) as conn:
+        conn.execute(
+            """UPDATE organisation_match_reviews
+               SET ofsted_enrichment_requested_urn = NULL,
+                   ofsted_enrichment_requested_at = NULL
+               WHERE id = %s AND ofsted_enrichment_requested_urn = %s""",
+            (review_id, urn),
+        )
+        conn.commit()
 
 
 def _organisation_candidate_fingerprint(candidates: list[dict[str, Any]]) -> str:

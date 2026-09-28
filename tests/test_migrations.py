@@ -28,6 +28,7 @@ def test_initial_migration_exists_and_contains_provenance_tables() -> None:
         "0020_historical_research_corpus.sql",
         "0021_backtest_failed_retry.sql",
         "0022_caresignal_customer_mvp.sql",
+        "0023_organisation_review_ofsted_enrichment.sql",
     ]
     sql = "\n".join(path.read_text(encoding="utf-8") for path in files)
     tables = (

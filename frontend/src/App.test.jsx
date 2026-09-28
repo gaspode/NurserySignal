@@ -329,7 +329,7 @@ describe("admin frontend", () => {
   it("shows Companies House enrichment and keeps ambiguous matches reviewable", async () => {
     const apiClient = vi.fn()
       .mockResolvedValueOnce({ items: [{ id: "operator-1", name: "Acme Care", legal_name: "ACME CARE LIMITED", vertical: "CHILDRENS_HOME", companies_house_number: "12345678", company_status: "active", signal_count: 2, opportunity_count: 1 }] })
-      .mockResolvedValueOnce({ items: [{ id: "review-1", operator_id: "operator-2", organisation_name: "Other Care", reason: "multiple candidates", source_context: { observed_name: "Other Care", verticals: ["CHILDRENS_HOME"], source_types: ["planning", "ofsted"], website: "https://other.example", aliases: [{ alias: "Other Care Ltd" }], signals: [{ id: "signal-1", title: "Change of use to children's home", source_type: "planning", vertical: "CHILDRENS_HOME", organisation_name: "Other Care", town: "Coventry", postcode: "CV1 2AB", source_url: "https://planning.example/1" }], opportunities: [{ id: "opportunity-1", name: "New children's home — Coventry", vertical: "CHILDRENS_HOME", town: "Coventry" }], ofsted_evidence: [{ urn: "2766766", registered_provider_name: "Other Care Limited", provider_registered_address: "1 Provider Office, Blackpool, FY4 2FF", provider_registered_locality: "Blackpool", provider_registered_region: "Lancashire", provider_registered_postcode: "FY4 2FF", latest_report_url: "https://files.ofsted.gov.uk/v1/file/50311430", provider_page_url: "https://reports.ofsted.gov.uk/provider/2/2766766" }] }, candidates: [{ company_name: "OTHER CARE LIMITED", company_number: "87654321", company_status: "active", date_of_creation: "2020-03-04", type: "ltd", registered_office_address: { locality: "Coventry", postal_code: "CV1 2AB" }, sic_descriptions: [{ code: "87900", description: "Other residential care activities not elsewhere classified" }], companies_house_url: "https://find-and-update.company-information.service.gov.uk/company/87654321", match_outcome: "STRONG", match_reasons: ["Legal name differs only by company suffix", "Same town/locality as source evidence"], match_cautions: [] }] }] })
+      .mockResolvedValueOnce({ items: [{ id: "review-1", operator_id: "operator-2", organisation_name: "Other Care", reason: "multiple candidates", source_context: { observed_name: "Other Care", verticals: ["CHILDRENS_HOME"], source_types: ["planning", "ofsted"], website: "https://other.example", aliases: [{ alias: "Other Care Ltd" }], signals: [{ id: "signal-1", title: "Change of use to children's home", source_type: "planning", vertical: "CHILDRENS_HOME", organisation_name: "Other Care", town: "Coventry", postcode: "CV1 2AB", source_url: "https://planning.example/1" }], opportunities: [{ id: "opportunity-1", name: "New children's home — Coventry", vertical: "CHILDRENS_HOME", town: "Coventry" }], ofsted_evidence: [{ urn: "2766766", registered_provider_name: "Other Care Limited", provider_registered_address: "1 Provider Office, Blackpool, FY4 2FF", provider_registered_locality: "Blackpool", provider_registered_region: "Lancashire", provider_registered_postcode: "FY4 2FF", latest_report_url: "https://files.ofsted.gov.uk/v1/file/50311430", provider_page_url: "https://reports.ofsted.gov.uk/provider/2/2766766" }] }, candidates: [{ company_name: "OTHER CARE LIMITED", company_number: "87654321", company_status: "active", date_of_creation: "2020-03-04", type: "ltd", registered_office_address: { locality: "Coventry", postal_code: "CV1 2AB" }, sic_descriptions: [{ code: "87900", description: "Other residential care activities not elsewhere classified" }], companies_house_url: "https://find-and-update.company-information.service.gov.uk/company/87654321", match_outcome: "STRONG", best_supported_match: true, match_reasons: ["Exact normalized legal-name match", "Same town/locality as source evidence"], match_cautions: [] }] }] })
       .mockResolvedValueOnce({ id: "review-1", status: "CONFIRMED" })
       .mockResolvedValueOnce({ items: [] })
       .mockResolvedValueOnce({ items: [] });
@@ -340,7 +340,8 @@ describe("admin frontend", () => {
     expect(screen.getByText("Change of use to children's home")).toBeInTheDocument();
     expect(screen.getByText("Coventry, CV1 2AB")).toBeInTheDocument();
     expect(screen.getByText("Other residential care activities not elsewhere classified", { exact: false })).toBeInTheDocument();
-    expect(screen.getByText("Legal name differs only by company suffix")).toBeInTheDocument();
+    expect(screen.getByText("Exact normalized legal-name match")).toBeInTheDocument();
+    expect(screen.getByText("Best supported match")).toBeInTheDocument();
     expect(screen.getByText("Ofsted provider evidence")).toBeInTheDocument();
     expect(screen.getByText("URN 2766766 · Blackpool · Lancashire · FY4 2FF")).toBeInTheDocument();
     expect(screen.getByText(/Provider registered office: 1 Provider Office/)).toBeInTheDocument();
@@ -381,6 +382,20 @@ describe("admin frontend", () => {
     expect(screen.getByText("Exact Ofsted provider-office postcode match")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Use this company" }));
     expect(await screen.findByRole("dialog")).toHaveTextContent("Original names remain as aliases");
+  });
+
+  it("queues missing Ofsted provider evidence without blocking the review", async () => {
+    const apiClient = vi.fn()
+      .mockResolvedValueOnce({ items: [{ id: "operator-1", name: "Example Care", vertical: "CHILDRENS_HOME", signal_count: 1, opportunity_count: 0 }] })
+      .mockResolvedValueOnce({ items: [{ id: "review-1", operator_id: "operator-1", organisation_name: "Example Care", source_context: { missing_ofsted_urns: ["2813108"], signals: [], opportunities: [] }, candidates: [] }] })
+      .mockResolvedValueOnce({ status: "QUEUED", queued: true, urn: "2813108" });
+    render(<OrganisationsPage apiClient={apiClient} />);
+    await userEvent.click(await screen.findByRole("button", { name: "Enrich Ofsted provider evidence" }));
+    expect(apiClient).toHaveBeenCalledWith(
+      "/admin/organisation-match-review/review-1/enrich-ofsted",
+      { method: "POST", body: JSON.stringify({}) },
+    );
+    expect(await screen.findByRole("button", { name: "Enrichment queued" })).toBeDisabled();
   });
 
   it("rejects candidate companies without rejecting the observed organisation", async () => {

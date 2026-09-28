@@ -65,8 +65,10 @@ from app.repository import (
     organisation_detail,
     recalculate_opportunity_creation,
     record_admin_audit,
+    release_organisation_review_ofsted_enrichment_request,
     reprocess_planning_signals,
     reprocess_recruitment_signals,
+    request_organisation_review_ofsted_enrichment,
     resolve_match_review,
     resolve_organisation_match_review,
     review_signal,
@@ -261,7 +263,12 @@ def _admin_path(path: str) -> tuple[str, str | None]:
         return "organisation-review-list", None
     if path.startswith("/admin/organisation-match-review/"):
         parts = path[len("/admin/organisation-match-review/") :].split("/")
-        if len(parts) == 2 and parts[1] in {"confirm", "reject", "lookup"}:
+        if len(parts) == 2 and parts[1] in {
+            "confirm",
+            "reject",
+            "lookup",
+            "enrich-ofsted",
+        }:
             return f"organisation-review-{parts[1]}", parts[0]
     if path.startswith("/admin/organisations/"):
         return "organisation-detail", path[len("/admin/organisations/") :]
@@ -782,6 +789,50 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                         payload.get("company_number"),
                     ),
                 )
+            if (
+                action == "organisation-review-enrich-ofsted"
+                and method == "POST"
+                and signal_id
+            ):
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                if not settings.ofsted_manual_run_queue_url:
+                    return _response(503, {"error": "ofsted_enrichment_not_configured"})
+                actor = str(claims.get("sub") or claims.get("username") or "unknown")
+                result = request_organisation_review_ofsted_enrichment(
+                    settings, signal_id, actor=actor
+                )
+                if not result.get("queued"):
+                    return _response(200, result)
+                urn = str(result["urn"])
+                try:
+                    response = boto3.client("sqs").send_message(
+                        QueueUrl=settings.ofsted_manual_run_queue_url,
+                        MessageBody=json.dumps(
+                            {
+                                "source": "organisation_review",
+                                "registered_since_days": 3650,
+                                "max_records": 1,
+                                "active_only": True,
+                                "urns": [urn],
+                                "urn_enrichment_limit": 1,
+                            },
+                            separators=(",", ":"),
+                        ),
+                    )
+                    if not response.get("MessageId"):
+                        raise RuntimeError("Ofsted enrichment command was not accepted")
+                except Exception as exc:
+                    release_organisation_review_ofsted_enrichment_request(
+                        settings, signal_id, urn
+                    )
+                    logger.error(
+                        "organisation_review_ofsted_enrichment_failed error_type=%s",
+                        type(exc).__name__,
+                    )
+                    return _response(503, {"error": "ofsted_enrichment_request_failed"})
+                return _response(202, result)
             if action == "source-list" and method == "GET":
                 admin_error = _require_admin(claims, settings)
                 if admin_error:
