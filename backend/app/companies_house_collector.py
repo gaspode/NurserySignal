@@ -64,6 +64,11 @@ def collect_companies_house(
                 if item.get("provider_registration_date")
                 else None
             ),
+            aliases=tuple(
+                str(alias).strip()
+                for alias in (item.get("aliases") or [])[:10]
+                if str(alias).strip()
+            ),
         )
         for item in raw_candidates[:limit]
         if isinstance(item, dict) and item.get("operator_id") and item.get("name")

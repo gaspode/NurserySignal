@@ -41,6 +41,8 @@ def _safe_candidates(values: Any) -> list[dict[str, Any]]:
             "match_cautions": item.get("match_cautions") or [],
             "location_agreement": item.get("location_agreement") or {},
             "selection_source": item.get("selection_source") or "SUGGESTED",
+            "discovery_sources": item.get("discovery_sources") or [],
+            "discovery_queries": item.get("discovery_queries") or [],
         }
         for item in values[:10]
         if isinstance(item, dict)

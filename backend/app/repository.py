@@ -2364,6 +2364,11 @@ def list_organisation_enrichment_candidates(
             ).fetchone()
             if not operator:
                 continue
+            aliases = conn.execute(
+                """SELECT alias FROM organisation_aliases
+                   WHERE operator_id = %s ORDER BY created_at DESC LIMIT 10""",
+                (operator_id,),
+            ).fetchall()
             refreshed_at = operator[2]
             if (
                 refreshed_at
@@ -2397,6 +2402,11 @@ def list_organisation_enrichment_candidates(
                         if provider_registration_date
                         else None
                     ),
+                    "aliases": [
+                        str(alias[0]).strip()
+                        for alias in aliases
+                        if str(alias[0] or "").strip()
+                    ],
                 }
             )
             if len(candidates) >= limit:

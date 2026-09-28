@@ -5,6 +5,7 @@ import json
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from urllib.error import HTTPError
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 from app.companies_house import (
@@ -237,6 +238,7 @@ def test_signal_only_operator_is_materialised_as_enrichment_candidate(monkeypatc
             "provider_registered_postcode": None,
             "provider_registered_address": None,
             "provider_registration_date": None,
+            "aliases": [],
         }
     ]
     assert conn.committed is True
@@ -286,6 +288,8 @@ def test_new_ofsted_provider_evidence_bypasses_stale_company_cache(monkeypatch) 
                         provider_evidence_at - timedelta(minutes=1),
                     )
                 )
+            if "SELECT alias FROM organisation_aliases" in sql:
+                return Result(rows=[("Oaktree Childcare Group",)])
             return Result()
 
         def commit(self):
@@ -300,6 +304,7 @@ def test_new_ofsted_provider_evidence_bypasses_stale_company_cache(monkeypatch) 
     result = list_organisation_enrichment_candidates(Settings(), limit=1)
     assert result[0]["provider_registered_name"] == "Oaktree Childcare Limited"
     assert result[0]["provider_registered_postcode"] == "FY4 2FF"
+    assert result[0]["aliases"] == ["Oaktree Childcare Group"]
 
 
 def test_companies_house_evidence_identity_ignores_retrieval_time() -> None:
@@ -650,6 +655,89 @@ def test_exact_ofsted_provider_office_postcode_ranks_above_name_only_candidate()
     assert "Exact Ofsted provider-office postcode match" in result.candidates[0][
         "match_reasons"
     ]
+
+
+def test_ofsted_provider_name_expands_discovery_and_deduplicates_candidates() -> None:
+    candidate = OrganisationCandidate(
+        "operator-1",
+        "North Star Services Ltd",
+        provider_registered_name="North Star Care Limited",
+        provider_registered_locality="Exampleton",
+        provider_registered_postcode="AB1 2CD",
+        provider_registration_date="2024-10-04",
+        aliases=("North Star Services",),
+    )
+    searched = []
+
+    def opener(request, timeout):
+        if "/company/11111111" in request.full_url:
+            return Response(
+                json.dumps(
+                    {
+                        "company_name": "NORTHSTAR CARE LIMITED",
+                        "company_number": "11111111",
+                        "company_status": "active",
+                        "date_of_creation": "2022-03-10",
+                        "registered_office_address": {
+                            "locality": "Exampleton",
+                            "postal_code": "AB1 2CD",
+                        },
+                    }
+                ).encode()
+            )
+        if "/company/22222222" in request.full_url:
+            return Response(
+                json.dumps(
+                    {
+                        "company_name": "NORTH STAR SERVICES LIMITED",
+                        "company_number": "22222222",
+                        "company_status": "active",
+                        "date_of_creation": "2025-01-10",
+                        "registered_office_address": {
+                            "locality": "Elsewhere",
+                            "postal_code": "ZZ1 1ZZ",
+                        },
+                    }
+                ).encode()
+            )
+        query = parse_qs(urlparse(request.full_url).query)["q"][0]
+        searched.append(query)
+        items = [
+            {"title": "NORTH STAR SERVICES LIMITED", "company_number": "22222222"}
+        ]
+        if query == "North Star Care Limited":
+            items.insert(
+                0,
+                {"title": "NORTHSTAR CARE LIMITED", "company_number": "11111111"},
+            )
+        return Response(json.dumps({"items": items}).encode())
+
+    result = CompaniesHouseProvider("key", opener=opener).resolve(candidate)
+
+    assert "North Star Services Ltd" in searched
+    assert "North Star Care Limited" in searched
+    assert "North Star Services" in searched
+    assert result.status == "MATCHED"
+    assert result.outcome == "STRONG"
+    assert [item["company_number"] for item in result.candidates] == [
+        "11111111",
+        "22222222",
+    ]
+    assert "OFSTED_REGISTERED_PROVIDER_NAME" in result.candidates[0][
+        "discovery_sources"
+    ]
+    assert "Exact Ofsted provider-office postcode match" in result.candidates[0][
+        "match_reasons"
+    ]
+    assert result.candidates[1]["location_agreement"][
+        "incorporation_timing_compatible"
+    ] is False
+    assert set(result.candidates[1]["discovery_sources"]) == {
+        "APPROVED_ALIAS",
+        "OBSERVED_PROVIDER_NAME",
+        "OFSTED_REGISTERED_PROVIDER_NAME",
+    }
+    assert len(result.candidates) == 2
 
 
 def test_region_only_evidence_does_not_make_candidate_strong() -> None:

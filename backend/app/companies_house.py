@@ -55,6 +55,7 @@ class OrganisationCandidate:
     provider_registered_postcode: str | None = None
     provider_registered_address: str | None = None
     provider_registration_date: str | None = None
+    aliases: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -137,11 +138,52 @@ def normalize_company_number(value: Any) -> str:
     return normalized
 
 
+def _identity_names(candidate: OrganisationCandidate) -> tuple[str, ...]:
+    values = (
+        candidate.provider_registered_name,
+        candidate.name,
+        *candidate.aliases,
+    )
+    names: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        normalized = normalize_identity(value)
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            names.append(normalized)
+    return tuple(names)
+
+
+def _discovery_queries(candidate: OrganisationCandidate) -> tuple[tuple[str, str], ...]:
+    values = (
+        (candidate.name, "OBSERVED_PROVIDER_NAME"),
+        (normalize_identity(candidate.name), "NORMALIZED_OBSERVED_PROVIDER_NAME"),
+        (candidate.provider_registered_name, "OFSTED_REGISTERED_PROVIDER_NAME"),
+        *((alias, "APPROVED_ALIAS") for alias in candidate.aliases[:10]),
+    )
+    queries: list[tuple[str, str]] = []
+    seen: dict[str, int] = {}
+    for raw_value, source in values:
+        value = " ".join(str(raw_value or "").split()).strip()
+        if not value:
+            continue
+        key = value.casefold()
+        if key in seen:
+            continue
+        seen[key] = len(queries)
+        queries.append((value, source))
+    return tuple(queries[:8])
+
+
 def compare_company_candidate(
     candidate: OrganisationCandidate, company: dict[str, Any]
 ) -> dict[str, Any]:
-    observed = normalize_identity(candidate.provider_registered_name or candidate.name)
+    identity_names = _identity_names(candidate) or (normalize_identity(candidate.name),)
     legal_name = normalize_identity(company.get("company_name"))
+    observed = max(
+        identity_names,
+        key=lambda value: SequenceMatcher(None, value, legal_name).ratio(),
+    )
     similarity = SequenceMatcher(None, observed, legal_name).ratio()
     address = company.get("registered_office_address") or {}
     source_locality = normalize_identity(candidate.locality)
@@ -234,12 +276,14 @@ def compare_company_candidate(
     }
 
 
-def _candidate_rank(item: dict[str, Any]) -> tuple[int, int, int, float, str]:
+def _candidate_rank(item: dict[str, Any]) -> tuple[int, int, int, int, float, str]:
     agreement = item.get("location_agreement") or {}
+    timing = agreement.get("incorporation_timing_compatible")
     return (
         1 if agreement.get("ofsted_provider_postcode") else 0,
         1 if item.get("match_outcome") == "STRONG" else 0,
         1 if agreement.get("ofsted_provider_locality") else 0,
+        1 if timing is True else (-1 if timing is False else 0),
         float(item.get("name_similarity") or 0),
         str(item.get("company_number") or ""),
     )
@@ -312,6 +356,71 @@ class CompaniesHouseProvider:
             if isinstance(item, dict)
         )
 
+    def discover(self, candidate: OrganisationCandidate) -> tuple[dict[str, Any], ...]:
+        """Search every bounded identity name and merge results by company number."""
+        merged: dict[str, dict[str, Any]] = {}
+        for query, source in _discovery_queries(candidate):
+            for item in self.search(query):
+                company_number = str(item.get("company_number") or "").strip().upper()
+                if not company_number:
+                    continue
+                existing = merged.get(company_number, {})
+                discovery_sources = sorted(
+                    {
+                        *existing.get("discovery_sources", []),
+                        source,
+                    }
+                )
+                discovery_queries = sorted(
+                    {
+                        *existing.get("discovery_queries", []),
+                        query,
+                    }
+                )
+                merged[company_number] = {
+                    **existing,
+                    **{
+                        key: value
+                        for key, value in item.items()
+                        if value not in (None, "", [], {})
+                    },
+                    "company_number": company_number,
+                    "discovery_sources": discovery_sources,
+                    "discovery_queries": discovery_queries,
+                }
+        identity_names = _identity_names(candidate)
+        ordered = sorted(
+            merged.values(),
+            key=lambda item: max(
+                (
+                    SequenceMatcher(
+                        None,
+                        identity_name,
+                        normalize_identity(item.get("company_name")),
+                    ).ratio()
+                    for identity_name in identity_names
+                ),
+                default=0,
+            ),
+            reverse=True,
+        )
+        return tuple(ordered[:10])
+
+    def _detailed_candidate(self, item: dict[str, Any]) -> dict[str, Any]:
+        company = item
+        company_number = str(item.get("company_number") or "")
+        if company_number:
+            try:
+                company = self.company_profile(company_number)
+            except CompaniesHouseError:
+                # The search result still gives an admin a safe bounded fallback.
+                company = item
+        return {
+            **company,
+            "discovery_sources": item.get("discovery_sources") or [],
+            "discovery_queries": item.get("discovery_queries") or [],
+        }
+
     def resolve(self, candidate: OrganisationCandidate) -> CompanyResolution:
         if candidate.company_number:
             profile = self.company_profile(candidate.company_number)
@@ -326,7 +435,7 @@ class CompaniesHouseProvider:
                 (),
             )
         lookup_name = candidate.provider_registered_name or candidate.name
-        results = self.search(lookup_name)
+        results = self.discover(candidate)
         if not results:
             return CompanyResolution(
                 candidate.operator_id,
@@ -339,14 +448,18 @@ class CompaniesHouseProvider:
                 (),
             )
         target = normalize_identity(lookup_name)
-        exact = [item for item in results if normalize_identity(item.get("company_name")) == target]
+        exact = [
+            item
+            for item in results
+            if normalize_identity(item.get("company_name")) == target
+        ]
         if len(exact) == 1:
             compared_exact = compare_company_candidate(candidate, exact[0])
             ofsted_location_agrees = any(
                 (compared_exact.get("location_agreement") or {}).get(key)
                 for key in ("ofsted_provider_locality", "ofsted_provider_postcode")
             )
-            profile = self.company_profile(str(exact[0]["company_number"]))
+            profile = self._detailed_candidate(exact[0])
             return CompanyResolution(
                 candidate.operator_id,
                 candidate.name,
@@ -362,7 +475,9 @@ class CompaniesHouseProvider:
                 profile,
                 (compared_exact,),
             )
-        compared = [compare_company_candidate(candidate, item) for item in results]
+        detailed = [self._detailed_candidate(item) for item in results]
+        compared = [compare_company_candidate(candidate, item) for item in detailed]
+        ranked_compared = sorted(compared, key=_candidate_rank, reverse=True)
         provider_corroborated = [
             item
             for item in compared
@@ -374,7 +489,7 @@ class CompaniesHouseProvider:
         ]
         if len(provider_corroborated) == 1:
             selected = provider_corroborated[0]
-            profile = self.company_profile(str(selected["company_number"]))
+            profile = self._detailed_candidate(selected)
             return CompanyResolution(
                 candidate.operator_id,
                 candidate.name,
@@ -383,7 +498,7 @@ class CompaniesHouseProvider:
                 0.98,
                 "unique legal-name match corroborated by Ofsted provider address",
                 profile,
-                tuple(compared),
+                tuple(ranked_compared),
             )
         locality = normalize_identity(candidate.locality)
         scored: list[tuple[float, dict[str, Any]]] = []
@@ -398,7 +513,7 @@ class CompaniesHouseProvider:
         scored.sort(key=lambda value: value[0], reverse=True)
         best_score, best = scored[0]
         if best_score >= 0.94 and (len(scored) == 1 or best_score - scored[1][0] >= 0.08):
-            profile = self.company_profile(str(best["company_number"]))
+            profile = self._detailed_candidate(best)
             return CompanyResolution(
                 candidate.operator_id,
                 candidate.name,
@@ -407,20 +522,9 @@ class CompaniesHouseProvider:
                 best_score,
                 "strong legal-name match corroborated by a clear search lead",
                 profile,
-                results,
+                tuple(ranked_compared),
             )
-        detailed_candidates: list[dict[str, Any]] = []
-        for item in results:
-            company = item
-            company_number = str(item.get("company_number") or "")
-            if company_number:
-                try:
-                    company = self.company_profile(company_number)
-                except CompaniesHouseError:
-                    # The search result still gives an admin a safe bounded fallback.
-                    company = item
-            detailed_candidates.append(compare_company_candidate(candidate, company))
-        detailed_candidates.sort(key=_candidate_rank, reverse=True)
+        detailed_candidates = ranked_compared
         return CompanyResolution(
             candidate.operator_id,
             candidate.name,

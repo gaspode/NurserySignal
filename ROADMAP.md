@@ -565,3 +565,9 @@ Paid-pilot activation check (2026-09-28):
   enrichment with no errors; the ingestion queue drained and its DLQ remained empty. The official
   Companies House number lookup also returns the active legal entity with exact provider-office
   postcode agreement. The pending review remains admin-authoritative and was not silently resolved.
+- Companies House candidate discovery now performs bounded searches across the observed provider,
+  its normalized form, the URN-enriched Ofsted registered-provider name and stored organisation
+  aliases, then deduplicates results by company number before applying the unchanged resolution
+  thresholds. Discovery provenance is retained with immutable enrichment evidence; provider-office
+  identity remains strictly separate from opportunity/site geography. Production refresh of the
+  existing URN `2806691` review is the final validation gate for this refinement.
