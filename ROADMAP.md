@@ -440,3 +440,29 @@ Pilot gate:
 - verify an SES sender and exercise one weekly digest before representing email delivery as live;
 - then invite 5–10 suppliers for paid-pilot conversations and measure viewing, saving, source-link
   and alert usage before adding CRM, billing, exports or larger matching architecture.
+
+Paid-pilot activation check (2026-09-28):
+- Reviewed all 13 current, non-rejected CareSignal opportunities through the bounded customer-safe
+  curation projection. Published six explicit new-home Planning opportunities: Wolverhampton,
+  Sandwell, Bolton and three distinct Liverpool postcode areas. All six are `PLANNING` / `OPENING`,
+  have approved evidence and working official source links, and were first detected on 26 September.
+- Deferred seven rather than padding the launch inventory: two new-home conversions are currently
+  mislabeled as expansions, three are condition/follow-up records with potentially stale commercial
+  timing, one lawfulness record has ambiguous existing/proposed wording, and one otherwise strong
+  Milton Keynes record has a broken public TLS certificate from the authority portal.
+- Customer-safe generated titles now add only the outward postcode, making same-authority records
+  distinguishable without exposing an exact CareSignal residential address. Digest presentation now
+  uses a CareSignal sender display name and includes a link to alert preferences.
+- Added a bounded IAM-only curation inventory/explicit publication operation and the practical
+  `docs/caresignal-pilot-operations.md` runbook. There is still no bulk customer/public publication
+  API and every publication uses the existing audit trail.
+- Production remains healthy and drift-free after deployment. Planning and Recruitment retain their
+  daily schedules; ingestion, enrichment, digest and collector DLQs are empty.
+- Gate remains `NOT_READY_FOR_PAID_PILOT`: SES `eu-west-1` has no verified identity and remains in
+  sandbox, and no authorised pilot recipient/customer identity has been supplied. Therefore the
+  digest schedule/consumer correctly remain disabled and the required real invitation, clean-browser
+  journey, Starter geography, tenant-isolation and delivered-email checks cannot yet be completed.
+  Exact next step: supply/control a CareSignal sender identity and authorised test recipient, verify
+  them in SES (or provide a DNS zone for domain verification), then provision that recipient through
+  SignalHub and complete the documented end-to-end gate. Procurement stays manual/shadow,
+  benchmarking continues prospectively and larger architecture work remains deferred.
