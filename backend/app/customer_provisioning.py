@@ -12,7 +12,10 @@ logger = logging.getLogger("nurserysignal")
 
 
 def _subject(user: dict[str, Any]) -> str:
-    attributes = {item["Name"]: item["Value"] for item in user.get("UserAttributes", [])}
+    attributes = {
+        item["Name"]: item["Value"]
+        for item in (user.get("Attributes") or user.get("UserAttributes") or [])
+    }
     value = str(attributes.get("sub") or "").strip()
     if not value:
         raise RuntimeError("Cognito did not return a user subject")

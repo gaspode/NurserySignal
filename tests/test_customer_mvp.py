@@ -359,7 +359,7 @@ def test_customer_provisioning_worker_creates_identity_and_records_account(monke
     class Cognito:
         def admin_create_user(self, **kwargs):
             calls.append(("create", kwargs))
-            return {"User": {"UserAttributes": [{"Name": "sub", "Value": "sub-1"}]}}
+            return {"User": {"Attributes": [{"Name": "sub", "Value": "sub-1"}]}}
 
         def admin_add_user_to_group(self, **kwargs):
             calls.append(("group", kwargs))
@@ -409,7 +409,7 @@ def test_customer_provisioning_worker_rolls_back_new_identity_on_persistence_fai
 
     class Cognito:
         def admin_create_user(self, **_kwargs):
-            return {"User": {"UserAttributes": [{"Name": "sub", "Value": "sub-1"}]}}
+            return {"User": {"Attributes": [{"Name": "sub", "Value": "sub-1"}]}}
 
         def admin_add_user_to_group(self, **_kwargs):
             return None

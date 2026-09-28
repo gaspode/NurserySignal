@@ -493,4 +493,7 @@ Paid-pilot activation check (2026-09-28):
   created when persistence fails. The admin UI reports the invitation as queued rather than delivered.
   The first production apply safely stopped when the GitHub OIDC role lacked `iam:TagRole` for the new
   provisioner role; the scoped deployment policy and dependency ordering were corrected before retry.
-  Production completion and the real invite/digest/customer-session checks remain the immediate gate.
+  The first queued live attempt then exposed Cognito's distinct create/read attribute keys; rollback
+  removed the transient identity and no tenant state was written. Normalization now supports both
+  official response shapes. Production completion and the real invite/digest/customer-session checks
+  remain the immediate gate.
