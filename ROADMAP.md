@@ -611,6 +611,10 @@ Paid-pilot activation check (2026-09-28):
   the same visual language without changing customer entitlements, tenant isolation or SignalHub.
   Public pilot requests are bounded, deduplicated and stored separately from customer accounts for
   authenticated SignalHub review; no self-service signup, billing or unauthenticated admin action was
-  introduced. The next gate is production deployment plus desktop/mobile, sign-in and form-flow
-  verification on `careprospect.co.uk`; after that, commercial pilot recruitment remains the primary
-  milestone while procurement and larger matching architecture stay deferred.
+  introduced. Commit `ef79251` is deployed through the normal GitHub Actions/OIDC workflow. Live
+  desktop and iPhone-width checks confirm that the homepage, pricing, FAQ, request-access and customer
+  sign-in views preserve the approved design without clipping or horizontal overflow; public metadata,
+  HTTPS, API/database health and the idempotent request flow also pass. The post-deployment Terraform
+  plan is clean, daily planning/recruitment and weekly digest schedules remain enabled, and all primary
+  queues and DLQs are empty. Commercial pilot recruitment is now the primary milestone while
+  procurement and larger matching architecture remain deferred.
