@@ -86,6 +86,14 @@ used as site truth. Site accuracy is not calculated for cases without independen
 identity. This is expected to show whether a future Site model is justified, without presupposing
 that architectural decision.
 
+The first production `care-ofsted-v2` replay attempted 50 outcomes. Five were reconstructable in
+the canonical 365-day window (all detected; median lead time 207 days, observed range 96–348), and
+seven were reconstructable at both 450 and 540 days (all detected; median 290 days, range 96–389).
+Planning was the first and only source for six wider-window cases; Recruitment was the first and
+only source for one. The remaining 43 cases are excluded rather than counted as misses because
+historic source coverage is incomplete. These results describe the bounded reconstructable sample,
+not all children-home registrations, and precision is not available without reliable negatives.
+
 ## Admin API
 
 - `GET /admin/backtesting?vertical=CHILDRENS_HOME`

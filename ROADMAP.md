@@ -369,8 +369,33 @@ Implementation status:
   same-authority and undated findings remain excluded because redacted Ofsted geography cannot
   establish site identity. The replay now reports observed min/max, fixed lead-time bands,
   source-specific quartiles, exclusion counts, and an internal marketing-safe summary with up to
-  eight representative cases. Production 365/450/540 metrics remain the release gate until the v2
-  corpus is deployed/imported and replayed; do not publish the candidate wording beforehand.
+  eight representative cases.
+- The v2 production replay attempted all 50 outcomes. At the canonical 365-day window, 5 cases were
+  honestly reconstructable and all 5 were detected: median lead time 207 days, p25 97, p75 290,
+  p90 324.8, and observed range 96–348 days. Planning first discovered 4 cases (median 248.5 days)
+  and recruitment uniquely discovered 1 (97 days). The distribution was 0 under 90 days, 2 at
+  90–179, 1 at 180–269, 2 at 270–364, and 0 at 365+.
+- At both 450 and 540 days, 7 cases were reconstructable and detected: median 290 days, p25 152,
+  p75 360, p90 378.8, and range 96–389 days. Planning uniquely discovered 6 (median 319 days;
+  p25 227.75, p75 366), while recruitment uniquely discovered 1. Two cases were admitted solely by
+  the wider window. No case had both source families. Forty-three outcomes remain excluded because
+  the historic archive cannot distinguish no early signal from unavailable source history.
+- Precision remains unavailable because there are no reliable negative labels. The replay produced
+  no incorrect merge or review item, but the two Birch House recruitment adverts still produce one
+  duplicate opportunity. Organisation resolution was correct for 4/7 wider-window cases. Site
+  accuracy remains unmeasurable/zero against the two cases with independent site truth, confirming
+  that source coverage and site identity are the main evidence gaps rather than classifier recall.
+- An immediate unchanged rerun reused the same run IDs for all three windows, proving replay
+  idempotency. The production API/database is healthy, every DLQ is empty, scheduled Planning and
+  Recruitment collection is unchanged, and the post-deployment Terraform plan is clean. Marketing
+  wording must remain bounded: “Across 7 reconstructable historical registrations, relevant public
+  signals were available a median of 290 days before Ofsted registration.” Always retain the caveat
+  that this is a small reconstructable sample, not an average for all openings or a future promise.
+- Gate decision: the requested 25-case usable sample was not achievable honestly from current
+  historic coverage. Continue prospective immutable retention and targeted official-source corpus
+  expansion; do not tune matching or publish population-level claims from seven cases. The measured
+  next engineering issues are historic/source coverage first and the known same-site recruitment
+  duplicate/site-identity weakness second; neither yet justifies a broad architecture rewrite.
 
 Procurement source-value experiment:
 - Added a bounded, manual-only CareSignal procurement family over the official Find a Tender and
