@@ -362,3 +362,35 @@ Implementation status:
   stronger prospective source coverage and more labelled outcomes. Track the exact-workplace
   duplicate exposed by the two Birch House adverts, but do not widen automatic site matching from
   one case; rerun this fixed benchmark as coverage grows before extending it to NurserySignal.
+
+Procurement source-value experiment:
+- Added a bounded, manual-only CareSignal procurement family over the official Find a Tender and
+  Contracts Finder OCDS feeds. Immutable release versions retain platform/OCID/notice identity,
+  buyer and award organisations, dates, value/category metadata and source links while excluding
+  contact-person details.
+- Procurement is deliberately `SHADOW_ONLY`: it can be inspected in SignalHub and correlated for
+  evaluation, but cannot create or advance a live opportunity. Find a Tender and Contracts Finder
+  have no EventBridge schedule.
+- The initial 548-day production run inspected 610 releases (309 Find a Tender, 301 Contracts
+  Finder), excluded 598, and retained 12: 2 new-capacity engagement releases, 4 operator-procurement
+  releases, 2 awards, 1 routine placement framework and 3 uncertain records. The eight strong
+  releases represent four procurement processes because successive Hackney notices correctly
+  remain versioned under one OCID.
+- Representative strong records showed materially useful buyer-led intelligence: three proposed
+  Camden homes, two Hackney council-owned homes with a later named operator, Hampshire's programme
+  for new residential provision, and a Milton Keynes award naming an operator. A broad YPO
+  placements framework was correctly kept routine, while unclear placement/Regulation 44 records
+  remained uncertain.
+- No strong process could be defensibly linked to the existing 21-case Ofsted benchmark or current
+  stored planning/recruitment corpus, so the canonical benchmark remains unchanged. Procurement
+  nevertheless demonstrated a modelling/usefulness advantage: it can identify commissioning
+  authorities, home counts and intended contract timing before an operator or exact site is known.
+- An unchanged production rerun retained 12 evidence objects, created no duplicate enrichment and
+  created no opportunities. Queues and DLQs remained clear.
+- Gate decision: `KEEP_AS_MANUAL/SHADOW_SOURCE`. The seeded evaluation proves potential value but
+  does not yet provide an unbiased prevalence/noise estimate or benchmark lift sufficient to enable
+  scheduling. Re-run bounded prospective samples and link outcomes as they emerge; do not redesign
+  the opportunity model or automate procurement creation from this sample.
+- This experiment does not block the next major product step. Proceed with a bounded customer-facing
+  CareSignal MVP while procurement remains an internal evaluation source and the historical
+  benchmark accumulates prospective coverage.
