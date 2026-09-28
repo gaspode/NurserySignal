@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import json
 import re
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -678,8 +679,8 @@ def digest_preview(
     )
     preferences_url = f"{portal_url}/#/care/alerts" if portal_url else ""
     body = (
-        "<div style=\"font-family:Arial,sans-serif;max-width:680px;margin:auto\">"
-        "<h1 style=\"color:#193d35\">CareProspect weekly update</h1>"
+        '<div style="font-family:Arial,sans-serif;max-width:680px;margin:auto">'
+        '<h1 style="color:#193d35">CareProspect weekly update</h1>'
         f"<p>{len(items)} opportunities were added or meaningfully updated in the "
         f"last seven days.</p><ul>{rows}</ul>"
         + (
@@ -698,11 +699,7 @@ def digest_preview(
     }
 
 
-def provision_customer_account(
-    settings: Settings, payload: dict[str, Any], actor: str
-) -> dict[str, Any]:
-    if not settings.cognito_user_pool_id:
-        raise RuntimeError("customer identity provisioning is not configured")
+def _validated_customer_account(payload: dict[str, Any]) -> dict[str, Any]:
     name = str(payload.get("name") or "").strip()[:160]
     email = str(payload.get("email") or "").strip().lower()[:254]
     plan = str(payload.get("plan") or "STARTER").upper()
@@ -716,69 +713,104 @@ def provision_customer_account(
     authorities = _clean_list(payload.get("allowed_local_authorities"))
     if plan == "STARTER" and not regions and not authorities:
         raise ValueError("starter accounts require an allowed geography")
-    cognito = boto3.client("cognito-idp")
-    response = cognito.admin_create_user(
-        UserPoolId=settings.cognito_user_pool_id,
-        Username=email,
-        UserAttributes=[
-            {"Name": "email", "Value": email},
-            {"Name": "email_verified", "Value": "true"},
-        ],
-        DesiredDeliveryMediums=["EMAIL"],
-    )
-    attributes = {item["Name"]: item["Value"] for item in response["User"].get("Attributes", [])}
-    subject = attributes.get("sub")
-    if not subject:
-        raise RuntimeError("Cognito did not return a user subject")
-    cognito.admin_add_user_to_group(
-        UserPoolId=settings.cognito_user_pool_id, Username=email, GroupName=settings.customer_group
-    )
-    try:
-        with connection(settings) as conn:
-            account = conn.execute(
-                """INSERT INTO customer_accounts
-                   (name, status, plan, allowed_regions, allowed_local_authorities, created_by)
-                   VALUES (%s, 'PILOT', %s, %s, %s, %s) RETURNING id, created_at""",
-                (name, plan, regions, authorities, actor),
-            ).fetchone()
-            user = conn.execute(
-                """INSERT INTO customer_users
-                   (account_id, cognito_sub, email, role) VALUES (%s, %s, %s, 'OWNER')
-                   RETURNING id""",
-                (account[0], subject, email),
-            ).fetchone()
-            conn.execute(
-                """INSERT INTO customer_alert_preferences (customer_user_id, frequency)
-                   VALUES (%s, 'WEEKLY')""",
-                (user[0],),
-            )
-            conn.execute(
-                """INSERT INTO admin_audit_events (action, actor, target_type, details)
-                   VALUES ('customer_account_provisioned', %s, 'customer_account', %s)""",
-                (
-                    actor,
-                    Jsonb(
-                        {
-                            "account_id": str(account[0]),
-                            "email": email,
-                            "plan": plan,
-                            "allowed_regions": regions,
-                            "allowed_local_authorities": authorities,
-                        }
-                    ),
-                ),
-            )
-            conn.commit()
-    except Exception:
-        cognito.admin_delete_user(UserPoolId=settings.cognito_user_pool_id, Username=email)
-        raise
     return {
-        "id": account[0],
         "name": name,
-        "status": "PILOT",
+        "email": email,
         "plan": plan,
-        "owner_email": email,
-        "created_at": account[1],
+        "allowed_regions": regions,
+        "allowed_local_authorities": authorities,
+    }
+
+
+def queue_customer_account_provision(
+    settings: Settings, payload: dict[str, Any], actor: str
+) -> dict[str, Any]:
+    if not settings.customer_provisioning_queue_url:
+        raise RuntimeError("customer identity provisioning is not configured")
+    request = _validated_customer_account(payload)
+    request["actor"] = actor[:200]
+    boto3.client("sqs").send_message(
+        QueueUrl=settings.customer_provisioning_queue_url,
+        MessageBody=json.dumps(request, separators=(",", ":")),
+    )
+    return {"status": "QUEUED", "name": request["name"], "owner_email": request["email"]}
+
+
+def record_customer_account(
+    settings: Settings, payload: dict[str, Any], actor: str, cognito_sub: str
+) -> dict[str, Any]:
+    request = _validated_customer_account(payload)
+    subject = str(cognito_sub or "").strip()[:200]
+    if not subject:
+        raise ValueError("missing customer identity subject")
+    with connection(settings) as conn:
+        existing = conn.execute(
+            """SELECT a.id, a.name, a.status, a.plan, u.email, a.created_at, u.cognito_sub
+               FROM customer_users u JOIN customer_accounts a ON a.id = u.account_id
+               WHERE u.cognito_sub = %s OR lower(u.email) = %s
+               ORDER BY a.created_at LIMIT 1 FOR UPDATE""",
+            (subject, request["email"]),
+        ).fetchone()
+        if existing:
+            if existing[6] != subject:
+                raise ValueError("customer email belongs to another identity")
+            return {
+                "id": str(existing[0]),
+                "name": existing[1],
+                "status": existing[2],
+                "plan": existing[3],
+                "owner_email": existing[4],
+                "created_at": existing[5].isoformat(),
+                "idempotent": True,
+            }
+        account = conn.execute(
+            """INSERT INTO customer_accounts
+               (name, status, plan, allowed_regions, allowed_local_authorities, created_by)
+               VALUES (%s, 'PILOT', %s, %s, %s, %s) RETURNING id, created_at""",
+            (
+                request["name"],
+                request["plan"],
+                request["allowed_regions"],
+                request["allowed_local_authorities"],
+                actor,
+            ),
+        ).fetchone()
+        user = conn.execute(
+            """INSERT INTO customer_users
+               (account_id, cognito_sub, email, role) VALUES (%s, %s, %s, 'OWNER')
+               RETURNING id""",
+            (account[0], subject, request["email"]),
+        ).fetchone()
+        conn.execute(
+            """INSERT INTO customer_alert_preferences (customer_user_id, frequency)
+               VALUES (%s, 'WEEKLY')""",
+            (user[0],),
+        )
+        conn.execute(
+            """INSERT INTO admin_audit_events (action, actor, target_type, details)
+               VALUES ('customer_account_provisioned', %s, 'customer_account', %s)""",
+            (
+                actor,
+                Jsonb(
+                    {
+                        "account_id": str(account[0]),
+                        "email": request["email"],
+                        "plan": request["plan"],
+                        "allowed_regions": request["allowed_regions"],
+                        "allowed_local_authorities": request["allowed_local_authorities"],
+                    }
+                ),
+            ),
+        )
+        conn.commit()
+    return {
+        "id": str(account[0]),
+        "name": request["name"],
+        "status": "PILOT",
+        "plan": request["plan"],
+        "owner_email": request["email"],
+        "created_at": account[1].isoformat(),
+        "idempotent": False,
     }
 
 
@@ -959,8 +991,9 @@ def pilot_curation_inventory(settings: Settings, *, limit: int = 100) -> dict[st
                LIMIT %s""",
             (bounded_limit,),
         ).fetchall()
-        evidence_rows = conn.execute(
-            """SELECT os.opportunity_id, rs.id, rs.source_type, rs.discovered_at,
+        evidence_rows = (
+            conn.execute(
+                """SELECT os.opportunity_id, rs.id, rs.source_type, rs.discovered_at,
                       rs.title, rs.source_url, rs.external_id, rs.metadata,
                       se.review_status, se.confidence, se.extracted_facts,
                       os.created_by, os.match_reason
@@ -970,8 +1003,11 @@ def pilot_curation_inventory(settings: Settings, *, limit: int = 100) -> dict[st
                WHERE os.status = 'ACTIVE'
                  AND os.opportunity_id = ANY(%s::uuid[])
                ORDER BY os.opportunity_id, rs.discovered_at, rs.id""",
-            ([str(row[0]) for row in opportunity_rows],),
-        ).fetchall() if opportunity_rows else []
+                ([str(row[0]) for row in opportunity_rows],),
+            ).fetchall()
+            if opportunity_rows
+            else []
+        )
 
     evidence_by_opportunity: dict[str, list[dict[str, Any]]] = {}
     for row in evidence_rows:

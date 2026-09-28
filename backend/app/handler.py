@@ -36,7 +36,8 @@ from app.customer import (
     list_customer_opportunities,
     list_saved_searches,
     pilot_curation_inventory,
-    provision_customer_account,
+    queue_customer_account_provision,
+    record_customer_account,
     record_customer_event,
     save_customer_opportunity,
     set_opportunity_publication,
@@ -326,7 +327,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             actor=str(event.get("actor") or "iam-operational-pilot-activation")[:200],
         )
     if event.get("operation") == "customer_pilot_provision" and not event.get("requestContext"):
-        return provision_customer_account(
+        return queue_customer_account_provision(
             settings,
             {
                 "name": event.get("name"),
@@ -336,6 +337,13 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 "allowed_local_authorities": event.get("allowed_local_authorities"),
             },
             actor=str(event.get("actor") or "iam-operational-pilot-activation")[:200],
+        )
+    if event.get("operation") == "customer_pilot_record" and not event.get("requestContext"):
+        return record_customer_account(
+            settings,
+            event,
+            actor=str(event.get("actor") or "customer-provisioning-worker")[:200],
+            cognito_sub=str(event.get("cognito_sub") or ""),
         )
     if event.get("operation") == "customer_weekly_digest" and not event.get("requestContext"):
         return queue_weekly_digests(settings)
@@ -452,9 +460,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                         customer,
                         {
                             "event_type": (
-                                "OPPORTUNITY_SAVED"
-                                if method == "POST"
-                                else "OPPORTUNITY_UNSAVED"
+                                "OPPORTUNITY_SAVED" if method == "POST" else "OPPORTUNITY_UNSAVED"
                             ),
                             "opportunity_id": opportunity_id,
                         },
@@ -483,9 +489,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             if path == "/customer/digest/preview" and method == "GET":
                 return _response(200, digest_preview(settings, customer))
             if path == "/customer/events" and method == "POST":
-                record_customer_event(
-                    settings, customer, parse_json_payload(_raw_body(event))
-                )
+                record_customer_event(settings, customer, parse_json_payload(_raw_body(event)))
                 return _response(202, {"status": "recorded"})
         except PermissionError as exc:
             return _response(403, {"error": str(exc)})
@@ -514,8 +518,8 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 if method == "POST":
                     actor = str(claims.get("sub") or claims.get("username") or "unknown")
                     return _response(
-                        201,
-                        provision_customer_account(
+                        202,
+                        queue_customer_account_provision(
                             settings, parse_json_payload(_raw_body(event)), actor
                         ),
                     )
@@ -834,24 +838,17 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 raw_payload = _raw_body(event)
                 payload_body = parse_json_payload(raw_payload) if raw_payload else {}
                 vertical = validate_vertical_filter(payload_body.get("vertical"))
-                if (
-                    vertical != ALL_VERTICALS
-                    and vertical not in definition["supported_verticals"]
-                ):
+                if vertical != ALL_VERTICALS and vertical not in definition["supported_verticals"]:
                     raise ValueError("source does not support vertical")
                 parameters = dict(definition["default_parameters"])
                 if vertical != ALL_VERTICALS:
                     parameters["verticals"] = [vertical]
                 if signal_id == "companies_house":
-                    candidate_vertical = (
-                        "CHILDRENS_HOME" if vertical == ALL_VERTICALS else vertical
-                    )
-                    parameters["organisation_candidates"] = (
-                        list_organisation_enrichment_candidates(
-                            settings,
-                            limit=int(parameters["max_organisations"]),
-                            vertical=candidate_vertical,
-                        )
+                    candidate_vertical = "CHILDRENS_HOME" if vertical == ALL_VERTICALS else vertical
+                    parameters["organisation_candidates"] = list_organisation_enrichment_candidates(
+                        settings,
+                        limit=int(parameters["max_organisations"]),
+                        vertical=candidate_vertical,
                     )
                 run_id, started_at = start_run(
                     settings,
@@ -1215,4 +1212,3 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         return _response(404, {"error": "not_found"})
 
     return _response(404, {"error": "not_found"})
-    organisation_detail,

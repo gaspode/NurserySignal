@@ -1,7 +1,7 @@
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { BacktestingPage, Dashboard, LoginPage, MatchReviewPage, OpportunitiesPage, OpportunityDetail, OrganisationsPage, ProcurementEvaluationPage, ReviewInboxPage, ReviewedSignalsPage, SignalDetail, SourcesPage, UnmatchedSignalsPage, restoredVertical, verticalScopedPath } from "./App.jsx";
+import { BacktestingPage, CustomersPage, Dashboard, LoginPage, MatchReviewPage, OpportunitiesPage, OpportunityDetail, OrganisationsPage, ProcurementEvaluationPage, ReviewInboxPage, ReviewedSignalsPage, SignalDetail, SourcesPage, UnmatchedSignalsPage, restoredVertical, verticalScopedPath } from "./App.jsx";
 
 const pendingItem = {
   id: "signal-1",
@@ -66,6 +66,24 @@ describe("admin frontend", () => {
     await userEvent.type(screen.getByLabelText("Password"), "not-a-real-password");
     await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
     await waitFor(() => expect(onLogin).toHaveBeenCalledWith("staff@example.com", "not-a-real-password"));
+  });
+
+  it("shows customer invitations as queued rather than already delivered", async () => {
+    const apiClient = vi.fn()
+      .mockResolvedValueOnce({ items: [] })
+      .mockResolvedValueOnce({ customer_eligible: 6, draft_candidates: 0, email_delivery_configured: true })
+      .mockResolvedValueOnce({ status: "QUEUED", owner_email: "pilot@example.test", name: "Pilot supplier" })
+      .mockResolvedValueOnce({ items: [] })
+      .mockResolvedValueOnce({ customer_eligible: 6, draft_candidates: 0, email_delivery_configured: true });
+    render(<CustomersPage apiClient={apiClient} />);
+    await screen.findByRole("heading", { name: "CareProspect customers" });
+    await userEvent.type(screen.getByLabelText("Organisation"), "Pilot supplier");
+    await userEvent.type(screen.getByLabelText("Owner email"), "pilot@example.test");
+    await userEvent.type(screen.getByLabelText("Allowed local authorities"), "Liverpool");
+    await userEvent.click(screen.getByRole("button", { name: "Create account and invite" }));
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Invitation queued for pilot@example.test to join Pilot supplier"
+    );
   });
 
   it("shows only pending records in the review inbox", async () => {

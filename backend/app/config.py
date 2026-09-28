@@ -30,6 +30,7 @@ class Settings:
     caresignal_email_from: str | None = None
     caresignal_portal_url: str | None = None
     customer_digest_queue_url: str | None = None
+    customer_provisioning_queue_url: str | None = None
     ai_shadow_enabled: bool = False
     ai_model_id: str = "eu.amazon.nova-lite-v1:0"
     ai_prompt_version: str = "shadow-v3"
@@ -80,6 +81,7 @@ class Settings:
             caresignal_email_from=os.getenv("CARESIGNAL_EMAIL_FROM") or None,
             caresignal_portal_url=os.getenv("CARESIGNAL_PORTAL_URL") or None,
             customer_digest_queue_url=os.getenv("CUSTOMER_DIGEST_QUEUE_URL") or None,
+            customer_provisioning_queue_url=(os.getenv("CUSTOMER_PROVISIONING_QUEUE_URL") or None),
             ai_shadow_enabled=os.getenv("AI_SHADOW_ENABLED", "false").lower()
             in {"1", "true", "yes"},
             ai_model_id=os.getenv("AI_MODEL_ID", "eu.amazon.nova-lite-v1:0"),

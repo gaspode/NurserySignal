@@ -53,15 +53,6 @@ resource "aws_iam_role_policy" "lambda_application" {
       },
       {
         Effect = "Allow"
-        Action = [
-          "cognito-idp:AdminCreateUser",
-          "cognito-idp:AdminAddUserToGroup",
-          "cognito-idp:AdminDeleteUser"
-        ]
-        Resource = aws_cognito_user_pool.main.arn
-      },
-      {
-        Effect = "Allow"
         Action = ["sqs:SendMessage"]
         Resource = [
           aws_sqs_queue.planning_manual_runs.arn,
@@ -69,7 +60,8 @@ resource "aws_iam_role_policy" "lambda_application" {
           aws_sqs_queue.ofsted_manual_runs.arn,
           aws_sqs_queue.companies_house_manual_runs.arn,
           aws_sqs_queue.procurement_manual_runs.arn,
-          aws_sqs_queue.customer_digest.arn
+          aws_sqs_queue.customer_digest.arn,
+          aws_sqs_queue.customer_provisioning.arn
         ]
       }
     ]

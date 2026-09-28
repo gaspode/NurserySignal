@@ -101,6 +101,11 @@ output "customer_weekly_digest_enabled" {
   value       = var.caresignal_email_from != ""
 }
 
+output "customer_provisioning_queue_url" {
+  description = "Bounded CareProspect customer invitation queue."
+  value       = aws_sqs_queue.customer_provisioning.url
+}
+
 output "github_actions_role_arn" {
   value = var.github_repository == "" ? null : aws_iam_role.github_actions[0].arn
 }

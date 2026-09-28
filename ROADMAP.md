@@ -484,3 +484,11 @@ Paid-pilot activation check (2026-09-28):
   customer group or tenant tables: doing so would make the isolation test meaningless. SES recipient
   verification remains pending; use a distinct non-admin mailbox (or a confirmed mailbox alias that
   Cognito can treat as a separate email username) for the pilot account.
+- A distinct controlled recipient, `willypayne@gmail.com`, is now verified for SES sandbox delivery.
+  The first bounded provisioning attempt exposed a real infrastructure defect: the transactional
+  backend runs in private subnets and could not reach the Cognito control plane, so the request timed
+  out before creating either an identity or tenant. Customer invitation now uses an encrypted,
+  DLQ-backed bounded queue and a least-privilege non-VPC identity worker; the worker calls the backend
+  synchronously for idempotent tenant/preferences/audit persistence and rolls back only identities it
+  created when persistence fails. The admin UI reports the invitation as queued rather than delivered.
+  Production deployment and the real invite/digest/customer-session checks remain the immediate gate.

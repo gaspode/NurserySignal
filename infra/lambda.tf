@@ -44,6 +44,7 @@ resource "aws_lambda_function" "backend" {
       CARESIGNAL_EMAIL_FROM                = var.caresignal_email_from
       CARESIGNAL_PORTAL_URL                = "https://careprospect.co.uk"
       CUSTOMER_DIGEST_QUEUE_URL            = aws_sqs_queue.customer_digest.url
+      CUSTOMER_PROVISIONING_QUEUE_URL      = aws_sqs_queue.customer_provisioning.url
       AI_MODEL_ID                          = var.ai_model_id
       AI_PROMPT_VERSION                    = var.ai_prompt_version
       AI_PLANNING_PROMPT_VERSION           = var.ai_planning_prompt_version

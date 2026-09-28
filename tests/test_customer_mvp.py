@@ -13,8 +13,10 @@ from app.customer import (
     apply_pilot_publications,
     list_customer_opportunities,
     pilot_curation_inventory,
+    queue_customer_account_provision,
 )
 from app.customer_digest import queue_weekly_digests, sender_handler
+from app.customer_provisioning import handler as provisioning_handler
 from app.handler import handler
 
 ADMIN = {"sub": "admin", "cognito:groups": ["NurserySignalAdmins"]}
@@ -162,8 +164,8 @@ def test_starter_geography_is_enforced_in_database_query(monkeypatch) -> None:
 
 def test_admin_can_provision_but_customer_cannot(monkeypatch) -> None:
     monkeypatch.setattr(
-        "app.handler.provision_customer_account",
-        lambda *_: {"id": "account-1", "owner_email": "pilot@example.test"},
+        "app.handler.queue_customer_account_provision",
+        lambda *_: {"status": "QUEUED", "owner_email": "pilot@example.test"},
     )
     payload = json.dumps(
         {
@@ -176,7 +178,35 @@ def test_admin_can_provision_but_customer_cannot(monkeypatch) -> None:
     denied = handler(event("/admin/customer-accounts", "POST", body=payload), None)
     allowed = handler(event("/admin/customer-accounts", "POST", body=payload, claims=ADMIN), None)
     assert denied["statusCode"] == 403
-    assert allowed["statusCode"] == 201
+    assert allowed["statusCode"] == 202
+
+
+def test_customer_provisioning_request_is_bounded_and_queued(monkeypatch) -> None:
+    sent = []
+
+    class Sqs:
+        def send_message(self, **kwargs):
+            sent.append(kwargs)
+
+    monkeypatch.setattr("app.customer.boto3.client", lambda _service: Sqs())
+    result = queue_customer_account_provision(
+        Settings(customer_provisioning_queue_url="https://sqs.example.test/provisioning"),
+        {
+            "name": " Pilot supplier ",
+            "email": " PILOT@example.test ",
+            "plan": "STARTER",
+            "allowed_local_authorities": ["Liverpool"],
+        },
+        "admin-1",
+    )
+    assert result == {
+        "status": "QUEUED",
+        "name": "Pilot supplier",
+        "owner_email": "pilot@example.test",
+    }
+    message = json.loads(sent[0]["MessageBody"])
+    assert message["allowed_local_authorities"] == ["Liverpool"]
+    assert message["actor"] == "admin-1"
 
 
 def test_weekly_digest_remains_disabled_without_verified_sender() -> None:
@@ -192,10 +222,9 @@ def test_pilot_publication_is_explicit_bounded_and_audited(monkeypatch) -> None:
     calls = []
     monkeypatch.setattr(
         "app.customer.set_opportunity_publication",
-        lambda settings, opportunity_id, payload, actor: calls.append(
-            (opportunity_id, payload, actor)
-        )
-        or {"id": opportunity_id},
+        lambda settings, opportunity_id, payload, actor: (
+            calls.append((opportunity_id, payload, actor)) or {"id": opportunity_id}
+        ),
     )
     result = apply_pilot_publications(
         SimpleNamespace(),
@@ -301,9 +330,10 @@ def test_internal_pilot_operations_are_not_exposed_through_http(monkeypatch) -> 
     assert direct == {"count": 0}
     provisioned = []
     monkeypatch.setattr(
-        "app.handler.provision_customer_account",
-        lambda _settings, payload, actor: provisioned.append((payload, actor))
-        or {"status": "PILOT"},
+        "app.handler.queue_customer_account_provision",
+        lambda _settings, payload, actor: (
+            provisioned.append((payload, actor)) or {"status": "QUEUED"}
+        ),
     )
     provision = handler(
         {
@@ -315,12 +345,113 @@ def test_internal_pilot_operations_are_not_exposed_through_http(monkeypatch) -> 
         },
         None,
     )
-    assert provision == {"status": "PILOT"}
+    assert provision == {"status": "QUEUED"}
     assert provisioned[0][0]["allowed_local_authorities"] == ["Liverpool"]
     assert provisioned[0][1] == "iam-operational-pilot-activation"
     monkeypatch.setattr("app.handler.customer_context", lambda *_: customer_context())
     response = handler(event("/customer/pilot-inventory", claims=CUSTOMER), None)
     assert response["statusCode"] == 404
+
+
+def test_customer_provisioning_worker_creates_identity_and_records_account(monkeypatch) -> None:
+    calls = []
+
+    class Cognito:
+        def admin_create_user(self, **kwargs):
+            calls.append(("create", kwargs))
+            return {"User": {"UserAttributes": [{"Name": "sub", "Value": "sub-1"}]}}
+
+        def admin_add_user_to_group(self, **kwargs):
+            calls.append(("group", kwargs))
+
+        def admin_delete_user(self, **kwargs):
+            calls.append(("delete", kwargs))
+
+    class Payload:
+        def read(self):
+            return b'{"status":"PILOT"}'
+
+    class Lambda:
+        def invoke(self, **kwargs):
+            calls.append(("invoke", kwargs))
+            return {"StatusCode": 200, "Payload": Payload()}
+
+    monkeypatch.setenv("COGNITO_USER_POOL_ID", "pool-1")
+    monkeypatch.setenv("CUSTOMER_GROUP", "CareSignalCustomers")
+    monkeypatch.setenv("BACKEND_FUNCTION_NAME", "backend")
+    monkeypatch.setattr(
+        "app.customer_provisioning.boto3.client",
+        lambda service: Cognito() if service == "cognito-idp" else Lambda(),
+    )
+    request = {
+        "name": "Pilot supplier",
+        "email": "pilot@example.test",
+        "plan": "STARTER",
+        "allowed_regions": [],
+        "allowed_local_authorities": ["Liverpool"],
+        "actor": "admin-1",
+    }
+    result = provisioning_handler(
+        {"Records": [{"messageId": "message-1", "body": json.dumps(request)}]}, None
+    )
+    assert result == {"batchItemFailures": []}
+    assert [item[0] for item in calls] == ["create", "group", "invoke"]
+    invoked = json.loads(calls[2][1]["Payload"])
+    assert invoked["operation"] == "customer_pilot_record"
+    assert invoked["cognito_sub"] == "sub-1"
+    assert invoked["email"] == "pilot@example.test"
+
+
+def test_customer_provisioning_worker_rolls_back_new_identity_on_persistence_failure(
+    monkeypatch,
+) -> None:
+    calls = []
+
+    class Cognito:
+        def admin_create_user(self, **_kwargs):
+            return {"User": {"UserAttributes": [{"Name": "sub", "Value": "sub-1"}]}}
+
+        def admin_add_user_to_group(self, **_kwargs):
+            return None
+
+        def admin_delete_user(self, **kwargs):
+            calls.append(kwargs)
+
+    class Payload:
+        def read(self):
+            return b'{"errorMessage":"database unavailable"}'
+
+    class Lambda:
+        def invoke(self, **_kwargs):
+            return {"StatusCode": 200, "FunctionError": "Unhandled", "Payload": Payload()}
+
+    monkeypatch.setenv("COGNITO_USER_POOL_ID", "pool-1")
+    monkeypatch.setenv("CUSTOMER_GROUP", "CareSignalCustomers")
+    monkeypatch.setenv("BACKEND_FUNCTION_NAME", "backend")
+    monkeypatch.setattr(
+        "app.customer_provisioning.boto3.client",
+        lambda service: Cognito() if service == "cognito-idp" else Lambda(),
+    )
+    result = provisioning_handler(
+        {
+            "Records": [
+                {
+                    "messageId": "message-1",
+                    "body": json.dumps(
+                        {
+                            "name": "Pilot supplier",
+                            "email": "pilot@example.test",
+                            "plan": "STARTER",
+                            "allowed_local_authorities": ["Liverpool"],
+                        }
+                    ),
+                }
+            ]
+        },
+        None,
+    )
+    assert result == {"batchItemFailures": [{"itemIdentifier": "message-1"}]}
+    assert calls == [{"UserPoolId": "pool-1", "Username": "pilot@example.test"}]
 
 
 def test_digest_sender_uses_ses_and_reports_delivery(monkeypatch) -> None:

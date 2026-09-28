@@ -701,7 +701,7 @@ export function CustomersPage({ apiClient }) {
     event.preventDefault(); setBusy(true); setError(""); setNotice("");
     try {
       const value = await apiClient("/admin/customer-accounts", { method: "POST", body: JSON.stringify({ ...form, allowed_regions: form.allowed_regions.split(",").map((value) => value.trim()).filter(Boolean), allowed_local_authorities: form.allowed_local_authorities.split(",").map((value) => value.trim()).filter(Boolean) }) });
-      setNotice(`Invited ${value.owner_email} to ${value.name}.`);
+      setNotice(`Invitation queued for ${value.owner_email} to join ${value.name}. Refresh shortly to see the account.`);
       setForm({ name: "", email: "", plan: "STARTER", allowed_regions: "", allowed_local_authorities: "" });
       await load();
     } catch (provisionError) { setError(provisionError.message || "Customer could not be provisioned."); }
