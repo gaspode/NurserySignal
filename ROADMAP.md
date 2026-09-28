@@ -621,5 +621,6 @@ Paid-pilot activation check (2026-09-28):
 - The CareProspect desktop hero now uses bounded, content-driven spacing instead of reserving the
   browser viewport. Wide-screen copy and opportunity preview remain balanced, the timing section
   follows the actual content, and the layout stacks at 900px to avoid a cramped tablet composition.
-  Frontend regression coverage prevents viewport-height sizing from returning; production deployment
-  and desktop/mobile verification are the completion gate for this focused correction.
+  Frontend regression coverage prevents viewport-height sizing from returning. Commit `71dca1a` is
+  deployed through the normal workflow; live checks at 1280, 1440, 1920, 1024, 768 and 390 pixels
+  confirm content-driven flow and no horizontal overflow, completing this focused correction.
