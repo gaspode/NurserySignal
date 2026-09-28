@@ -325,6 +325,18 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             event.get("publications"),
             actor=str(event.get("actor") or "iam-operational-pilot-activation")[:200],
         )
+    if event.get("operation") == "customer_pilot_provision" and not event.get("requestContext"):
+        return provision_customer_account(
+            settings,
+            {
+                "name": event.get("name"),
+                "email": event.get("email"),
+                "plan": event.get("plan"),
+                "allowed_regions": event.get("allowed_regions"),
+                "allowed_local_authorities": event.get("allowed_local_authorities"),
+            },
+            actor=str(event.get("actor") or "iam-operational-pilot-activation")[:200],
+        )
     if event.get("operation") == "customer_weekly_digest" and not event.get("requestContext"):
         return queue_weekly_digests(settings)
     if event.get("operation") == "customer_digest_delivery" and not event.get("requestContext"):

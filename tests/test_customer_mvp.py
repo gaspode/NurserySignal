@@ -299,6 +299,25 @@ def test_internal_pilot_operations_are_not_exposed_through_http(monkeypatch) -> 
     )
     direct = handler({"operation": "customer_pilot_inventory", "limit": 5}, None)
     assert direct == {"count": 0}
+    provisioned = []
+    monkeypatch.setattr(
+        "app.handler.provision_customer_account",
+        lambda _settings, payload, actor: provisioned.append((payload, actor))
+        or {"status": "PILOT"},
+    )
+    provision = handler(
+        {
+            "operation": "customer_pilot_provision",
+            "name": "Controlled pilot",
+            "email": "pilot@example.test",
+            "plan": "STARTER",
+            "allowed_local_authorities": ["Liverpool"],
+        },
+        None,
+    )
+    assert provision == {"status": "PILOT"}
+    assert provisioned[0][0]["allowed_local_authorities"] == ["Liverpool"]
+    assert provisioned[0][1] == "iam-operational-pilot-activation"
     monkeypatch.setattr("app.handler.customer_context", lambda *_: customer_context())
     response = handler(event("/customer/pilot-inventory", claims=CUSTOMER), None)
     assert response["statusCode"] == 404
