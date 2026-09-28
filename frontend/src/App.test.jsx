@@ -343,7 +343,8 @@ describe("admin frontend", () => {
     expect(screen.getByText("Legal name differs only by company suffix")).toBeInTheDocument();
     expect(screen.getByText("Ofsted provider evidence")).toBeInTheDocument();
     expect(screen.getByText("URN 2766766 · Blackpool · Lancashire · FY4 2FF")).toBeInTheDocument();
-    expect(screen.getByText(/Provider registered office \(not home\/site\): 1 Provider Office/)).toBeInTheDocument();
+    expect(screen.getByText(/Provider registered office: 1 Provider Office/)).toBeInTheDocument();
+    expect(screen.getByText(/not the children’s-home location/)).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "View latest Ofsted report" })).toHaveAttribute("target", "_blank");
     expect(screen.getByRole("link", { name: "View Companies House" })).toHaveAttribute("target", "_blank");
     expect(screen.getByRole("link", { name: "View signal" })).toHaveAttribute("href", "#/history/signal-1");
@@ -355,6 +356,31 @@ describe("admin frontend", () => {
       "/admin/organisation-match-review/review-1/confirm",
       { method: "POST", body: JSON.stringify({ company_number: "87654321" }) },
     );
+  });
+
+  it("looks up a manually entered company number before requiring confirmation", async () => {
+    const review = { id: "review-1", operator_id: "operator-1", organisation_name: "Example Care", candidates: [] };
+    const manualCandidate = { company_name: "EXAMPLE CARE LIMITED", company_number: "12345678", company_status: "dissolved", date_of_creation: "2020-03-04", registered_office_address: { locality: "Blackpool", postal_code: "FY4 2FF" }, match_outcome: "STRONG", match_reasons: ["Exact Ofsted provider-office postcode match"], selection_source: "MANUAL_LOOKUP" };
+    const apiClient = vi.fn()
+      .mockResolvedValueOnce({ items: [{ id: "operator-1", name: "Example Care", vertical: "CHILDRENS_HOME", signal_count: 1, opportunity_count: 0 }] })
+      .mockResolvedValueOnce({ items: [review] })
+      .mockResolvedValueOnce(manualCandidate)
+      .mockResolvedValueOnce({ id: "review-1", status: "CONFIRMED" })
+      .mockResolvedValueOnce({ items: [] })
+      .mockResolvedValueOnce({ items: [] });
+    render(<OrganisationsPage apiClient={apiClient} />);
+    await screen.findByText("Organisation resolution review");
+    await userEvent.type(screen.getByLabelText("Companies House number"), "1234 5678");
+    await userEvent.click(screen.getByRole("button", { name: "Look up" }));
+    expect(apiClient).toHaveBeenCalledWith(
+      "/admin/organisation-match-review/review-1/lookup",
+      { method: "POST", body: JSON.stringify({ company_number: "1234 5678" }) },
+    );
+    expect(await screen.findByText("EXAMPLE CARE LIMITED")).toBeInTheDocument();
+    expect(screen.getByText("Dissolved")).toBeInTheDocument();
+    expect(screen.getByText("Exact Ofsted provider-office postcode match")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Use this company" }));
+    expect(await screen.findByRole("dialog")).toHaveTextContent("Original names remain as aliases");
   });
 
   it("rejects candidate companies without rejecting the observed organisation", async () => {

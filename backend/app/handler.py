@@ -49,6 +49,7 @@ from app.db import check_connection
 from app.historical_research_repository import import_bundled_historical_corpus
 from app.ingestion import NormalizedSignal
 from app.logging import configure_logging
+from app.organisation_lookup import ManualCompanyLookupError, lookup_manual_company_candidate
 from app.repository import (
     create_opportunity_from_signal,
     link_signal_to_opportunity,
@@ -260,7 +261,7 @@ def _admin_path(path: str) -> tuple[str, str | None]:
         return "organisation-review-list", None
     if path.startswith("/admin/organisation-match-review/"):
         parts = path[len("/admin/organisation-match-review/") :].split("/")
-        if len(parts) == 2 and parts[1] in {"confirm", "reject"}:
+        if len(parts) == 2 and parts[1] in {"confirm", "reject", "lookup"}:
             return f"organisation-review-{parts[1]}", parts[0]
     if path.startswith("/admin/organisations/"):
         return "organisation-detail", path[len("/admin/organisations/") :]
@@ -768,6 +769,19 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                         company_number=payload.get("company_number"),
                     ),
                 )
+            if action == "organisation-review-lookup" and method == "POST" and signal_id:
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                payload = parse_json_payload(_raw_body(event))
+                return _response(
+                    200,
+                    lookup_manual_company_candidate(
+                        settings,
+                        signal_id,
+                        payload.get("company_number"),
+                    ),
+                )
             if action == "source-list" and method == "GET":
                 admin_error = _require_admin(claims, settings)
                 if admin_error:
@@ -1210,6 +1224,8 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 if not review_signal(settings, signal_id, status, reviewer):
                     return _response(404, {"error": "enrichment_not_found"})
                 return _response(200, {"signal_id": signal_id, "review_status": status})
+        except ManualCompanyLookupError as exc:
+            return _response(exc.status_code, {"error": exc.code})
         except (ValueError, TypeError):
             return _response(400, {"error": "invalid_admin_request"})
         except Exception:

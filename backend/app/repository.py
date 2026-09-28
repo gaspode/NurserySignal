@@ -8,6 +8,7 @@ from uuid import UUID
 from psycopg.types.json import Jsonb
 
 from app.classification import CLASSIFICATION_RULE_VERSION
+from app.companies_house import OrganisationCandidate, compare_company_candidate
 from app.config import Settings
 from app.correlation import (
     classify_match,
@@ -2232,12 +2233,13 @@ def list_organisation_enrichment_candidates(
                (name, companies_house_number, locality, postcode, address, website_url,
                 provider_registered_name,
                 provider_registered_locality, provider_registered_postcode,
-                provider_registered_address, provider_evidence_at, priority)
+                provider_registered_address, provider_registration_date,
+                provider_evidence_at, priority)
                AS (
                  SELECT op.name, op.companies_house_number,
                         NULLIF(o.town, '') AS locality, NULLIF(o.postcode, ''),
                         NULLIF(o.address, ''), NULLIF(op.website_url, ''),
-                        NULL::text, NULL::text, NULL::text, NULL::text,
+                        NULL::text, NULL::text, NULL::text, NULL::text, NULL::date,
                         NULL::timestamptz, 0 AS priority
                  FROM operators op
                  JOIN opportunities o ON o.operator_id = op.id
@@ -2246,7 +2248,7 @@ def list_organisation_enrichment_candidates(
                  UNION ALL
                  SELECT o.operator_name, NULL, NULLIF(o.town, ''),
                         NULLIF(o.postcode, ''), NULLIF(o.address, ''), NULL,
-                        NULL::text, NULL::text, NULL::text, NULL::text,
+                        NULL::text, NULL::text, NULL::text, NULL::text, NULL::date,
                         NULL::timestamptz, 1
                  FROM opportunities o
                  WHERE o.vertical = %s
@@ -2270,6 +2272,7 @@ def list_organisation_enrichment_candidates(
                         NULLIF(oe.provider_registered_locality, ''),
                         NULLIF(oe.provider_registered_postcode, ''),
                         NULLIF(oe.provider_registered_address, ''),
+                        oe.registration_date,
                         oe.retrieved_at,
                         CASE WHEN rs.source_type = 'ofsted' THEN 2 ELSE 3 END
                  FROM raw_signals rs
@@ -2277,7 +2280,7 @@ def list_organisation_enrichment_candidates(
                  LEFT JOIN LATERAL (
                    SELECT registered_provider_name, provider_registered_locality,
                           provider_registered_postcode, provider_registered_address,
-                          retrieved_at
+                          registration_date, retrieved_at
                    FROM ofsted_urn_enrichments
                    WHERE raw_signal_id = rs.id
                    ORDER BY retrieved_at DESC, created_at DESC LIMIT 1
@@ -2292,7 +2295,8 @@ def list_organisation_enrichment_candidates(
                       max(provider_registered_name),
                       max(provider_registered_locality),
                       max(provider_registered_postcode),
-                      max(provider_registered_address), max(provider_evidence_at),
+                      max(provider_registered_address), max(provider_registration_date),
+                      max(provider_evidence_at),
                       min(priority)
                FROM activity
                WHERE lower(trim(name)) NOT IN ('unknown', 'not provided', 'redacted')
@@ -2314,6 +2318,7 @@ def list_organisation_enrichment_candidates(
             provider_locality,
             provider_postcode,
             provider_address,
+            provider_registration_date,
             provider_evidence_at,
             _priority,
         ) in rows:
@@ -2327,7 +2332,12 @@ def list_organisation_enrichment_candidates(
                 {"companies_house_number": company_number} if company_number else {},
             )
             operator = conn.execute(
-                """SELECT name, companies_house_number, companies_house_refreshed_at
+                """SELECT name, companies_house_number, companies_house_refreshed_at,
+                          EXISTS (
+                            SELECT 1 FROM organisation_match_reviews
+                            WHERE operator_id = operators.id
+                              AND provider = 'COMPANIES_HOUSE' AND status = 'PENDING'
+                          )
                    FROM operators WHERE id = %s""",
                 (operator_id,),
             ).fetchone()
@@ -2338,6 +2348,7 @@ def list_organisation_enrichment_candidates(
                 refreshed_at
                 and refreshed_at > datetime.now(UTC) - timedelta(days=30)
                 and (not provider_evidence_at or provider_evidence_at <= refreshed_at)
+                and not (provider_name and len(operator) > 3 and operator[3])
             ):
                 continue
             conn.execute(
@@ -2360,6 +2371,11 @@ def list_organisation_enrichment_candidates(
                     "provider_registered_locality": provider_locality,
                     "provider_registered_postcode": provider_postcode,
                     "provider_registered_address": provider_address,
+                    "provider_registration_date": (
+                        provider_registration_date.isoformat()
+                        if provider_registration_date
+                        else None
+                    ),
                 }
             )
             if len(candidates) >= limit:
@@ -2539,6 +2555,80 @@ def list_organisation_match_reviews(
                        ORDER BY urn, retrieved_at DESC, created_at DESC""",
                     (signal_ids,),
                 ).fetchall()
+            ofsted_items = [
+                dict(
+                    zip(
+                        (
+                            "urn",
+                            "registered_provider_name",
+                            "provision_type",
+                            "registration_date",
+                            "local_authority",
+                            "provider_registered_address",
+                            "provider_registered_locality",
+                            "provider_registered_region",
+                            "provider_registered_postcode",
+                            "latest_report_date",
+                            "latest_report_publication_date",
+                            "latest_report_url",
+                            "provider_page_url",
+                            "retrieved_at",
+                        ),
+                        evidence,
+                    )
+                )
+                for evidence in ofsted_evidence
+            ]
+            candidates = row[5] or []
+            if ofsted_items:
+                evidence = ofsted_items[0]
+                source_signal = signals[0] if signals else None
+                comparison_context = OrganisationCandidate(
+                    operator_id=str(row[1]),
+                    name=str(row[4] or row[2]),
+                    locality=(source_signal[7] or {}).get("town")
+                    if source_signal
+                    else None,
+                    postcode=(source_signal[7] or {}).get("postcode")
+                    if source_signal
+                    else None,
+                    provider_registered_name=evidence.get("registered_provider_name"),
+                    provider_registered_locality=evidence.get(
+                        "provider_registered_locality"
+                    ),
+                    provider_registered_postcode=evidence.get(
+                        "provider_registered_postcode"
+                    ),
+                    provider_registered_address=evidence.get(
+                        "provider_registered_address"
+                    ),
+                    provider_registration_date=(
+                        str(evidence["registration_date"])
+                        if evidence.get("registration_date")
+                        else None
+                    ),
+                )
+                candidates = [
+                    {
+                        **compare_company_candidate(comparison_context, candidate),
+                        "selection_source": candidate.get(
+                            "selection_source", "SUGGESTED"
+                        ),
+                    }
+                    for candidate in candidates
+                    if isinstance(candidate, dict)
+                ]
+                candidates.sort(
+                    key=lambda candidate: (
+                        1
+                        if (candidate.get("location_agreement") or {}).get(
+                            "ofsted_provider_postcode"
+                        )
+                        else 0,
+                        float(candidate.get("name_similarity") or 0),
+                    ),
+                    reverse=True,
+                )
             results.append(
                 {
                     "id": row[0],
@@ -2546,7 +2636,7 @@ def list_organisation_match_reviews(
                     "organisation_name": row[2],
                     "provider": row[3],
                     "query_name": row[4],
-                    "candidates": row[5],
+                    "candidates": candidates,
                     "reason": row[6],
                     "created_at": row[7],
                     "source_context": {
@@ -2590,30 +2680,7 @@ def list_organisation_match_reviews(
                             }
                             for opportunity in opportunities
                         ],
-                        "ofsted_evidence": [
-                            dict(
-                                zip(
-                                    (
-                                        "urn",
-                                        "registered_provider_name",
-                                        "provision_type",
-                                        "registration_date",
-                                        "local_authority",
-                                        "provider_registered_address",
-                                        "provider_registered_locality",
-                                        "provider_registered_region",
-                                        "provider_registered_postcode",
-                                        "latest_report_date",
-                                        "latest_report_publication_date",
-                                        "latest_report_url",
-                                        "provider_page_url",
-                                        "retrieved_at",
-                                    ),
-                                    evidence,
-                                )
-                            )
-                            for evidence in ofsted_evidence
-                        ],
+                        "ofsted_evidence": ofsted_items,
                     },
                 }
             )
@@ -2631,6 +2698,48 @@ def _organisation_candidate_fingerprint(candidates: list[dict[str, Any]]) -> str
         }
     )
     return hashlib.sha256("\n".join(values).encode()).hexdigest()
+
+
+def add_manual_organisation_candidate(
+    settings: Settings,
+    review_id: str,
+    *,
+    candidate: dict[str, Any],
+) -> dict[str, Any]:
+    """Persist an official manual lookup result without resolving the review."""
+    company_number = str(candidate.get("company_number") or "").strip().upper()
+    if not company_number:
+        raise ValueError("manual company candidate has no company number")
+    manual_candidate = {**candidate, "selection_source": "MANUAL_LOOKUP"}
+    with connection(settings) as conn:
+        row = conn.execute(
+            """SELECT candidates, status FROM organisation_match_reviews
+               WHERE id = %s FOR UPDATE""",
+            (review_id,),
+        ).fetchone()
+        if not row:
+            raise ValueError("organisation review not found")
+        if row[1] != "PENDING":
+            raise ValueError("organisation review is no longer pending")
+        candidates = [
+            item
+            for item in (row[0] or [])
+            if isinstance(item, dict)
+            and str(item.get("company_number") or "").strip().upper() != company_number
+        ]
+        candidates.append(manual_candidate)
+        conn.execute(
+            """UPDATE organisation_match_reviews
+               SET candidates = %s, candidate_fingerprint = %s
+               WHERE id = %s""",
+            (
+                Jsonb(candidates),
+                _organisation_candidate_fingerprint(candidates),
+                review_id,
+            ),
+        )
+        conn.commit()
+    return manual_candidate
 
 
 def resolve_organisation_match_review(
@@ -2653,6 +2762,7 @@ def resolve_organisation_match_review(
             raise ValueError("organisation review not found")
         if row[3] != "PENDING":
             return {"id": review_id, "status": row[3]}
+        manual_selection = False
         if action == "confirm":
             candidates = row[2] or []
             selected = next(
@@ -2666,6 +2776,12 @@ def resolve_organisation_match_review(
             )
             if not selected:
                 raise ValueError("selected company is not a review candidate")
+            manual_selection = selected.get("selection_source") == "MANUAL_LOOKUP"
+            resolution_reason = (
+                "administrator confirmed a manually entered Companies House number"
+                if manual_selection
+                else "administrator confirmed an ambiguous company match"
+            )
             conn.execute(
                 """UPDATE operators SET companies_house_number = %s, legal_name = %s,
                    company_status = %s, incorporation_date = %s,
@@ -2689,8 +2805,13 @@ def resolve_organisation_match_review(
                     Jsonb(
                         {
                             "provider": "COMPANIES_HOUSE",
-                            "reason": "administrator confirmed an ambiguous company match",
+                            "reason": resolution_reason,
                             "review_id": review_id,
+                            "selection_source": (
+                                "MANUAL_COMPANY_NUMBER"
+                                if manual_selection
+                                else "SUGGESTED_CANDIDATE"
+                            ),
                         }
                     ),
                     row[1],
@@ -2728,7 +2849,11 @@ def resolve_organisation_match_review(
             """INSERT INTO admin_audit_events (action, actor, target_type, details)
                VALUES (%s, %s, 'organisation_match_review', %s)""",
             (
-                f"organisation_match_{action}",
+                (
+                    "organisation_match_manual_company_confirm"
+                    if action == "confirm" and manual_selection
+                    else f"organisation_match_{action}"
+                ),
                 actor,
                 Jsonb(
                     {

@@ -11,17 +11,27 @@ from app.companies_house import (
     CompaniesHouseError,
     CompaniesHouseProvider,
     OrganisationCandidate,
+    compare_company_candidate,
+    normalize_company_number,
 )
 from app.config import Settings
 from app.organisation_enrichment import (
     organisation_evidence_document,
     process_organisation_enrichment,
 )
+from app.organisation_lookup import ManualCompanyLookupError, lookup_manual_company_candidate
 from app.repository import (
+    add_manual_organisation_candidate,
     list_organisation_enrichment_candidates,
     list_organisation_match_reviews,
     resolve_organisation_match_review,
 )
+
+
+def test_company_number_normalisation_accepts_prefixed_numbers() -> None:
+    assert normalize_company_number(" ce 016318 ") == "CE016318"
+    with pytest.raises(ValueError):
+        normalize_company_number("123")
 
 
 class Response(io.BytesIO):
@@ -186,6 +196,7 @@ def test_signal_only_operator_is_materialised_as_enrichment_candidate(monkeypatc
                             None,
                             None,
                             None,
+                            None,
                             3,
                         )
                     ]
@@ -225,6 +236,7 @@ def test_signal_only_operator_is_materialised_as_enrichment_candidate(monkeypatc
             "provider_registered_locality": None,
             "provider_registered_postcode": None,
             "provider_registered_address": None,
+            "provider_registration_date": None,
         }
     ]
     assert conn.committed is True
@@ -260,6 +272,7 @@ def test_new_ofsted_provider_evidence_bypasses_stale_company_cache(monkeypatch) 
                             "Blackpool",
                             "FY4 2FF",
                             "Provider office, Blackpool, FY4 2FF",
+                            datetime(2024, 10, 4, tzinfo=UTC).date(),
                             provider_evidence_at,
                             2,
                         )
@@ -582,6 +595,80 @@ def test_ofsted_provider_identity_and_office_can_make_company_match_strong() -> 
     assert result.company["company_number"] == "10445560"
 
 
+def test_exact_ofsted_provider_office_postcode_ranks_above_name_only_candidate() -> None:
+    candidate = OrganisationCandidate(
+        "operator-1",
+        "Example Path care ltd",
+        provider_registered_name="Example Path Care",
+        provider_registered_locality="Thornton-Cleveleys",
+        provider_registered_postcode="FY5 5HT",
+        provider_registration_date="2024-10-04",
+    )
+
+    def opener(request, timeout):
+        if "/company/11111111" in request.full_url:
+            company = {
+                "company_name": "EXAMPLE PATH CARE LIMITED",
+                "company_number": "11111111",
+                "company_status": "active",
+                "date_of_creation": "2022-03-10",
+                "registered_office_address": {
+                    "locality": "Thornton Cleveleys",
+                    "postal_code": "FY5 5HT",
+                },
+            }
+        elif "/company/22222222" in request.full_url:
+            company = {
+                "company_name": "EXAMPLE PATH CARE LTD",
+                "company_number": "22222222",
+                "company_status": "active",
+                "date_of_creation": "2022-03-10",
+                "registered_office_address": {
+                    "locality": "Thornton-Cleveleys",
+                    "postal_code": "FY8 1AA",
+                },
+            }
+        else:
+            return Response(
+                json.dumps(
+                    {
+                        "items": [
+                            {"title": "EXAMPLE PATH CARE LTD", "company_number": "22222222"},
+                            {
+                                "title": "EXAMPLE PATH CARE LIMITED",
+                                "company_number": "11111111",
+                            },
+                        ]
+                    }
+                ).encode()
+            )
+        return Response(json.dumps(company).encode())
+
+    result = CompaniesHouseProvider("key", opener=opener).resolve(candidate)
+    assert result.status == "AMBIGUOUS"
+    assert result.candidates[0]["company_number"] == "11111111"
+    assert "Exact Ofsted provider-office postcode match" in result.candidates[0][
+        "match_reasons"
+    ]
+
+
+def test_region_only_evidence_does_not_make_candidate_strong() -> None:
+    compared = compare_company_candidate(
+        OrganisationCandidate(
+            "operator-1",
+            "Example Care",
+            provider_registered_name="Example Care",
+        ),
+        {
+            "company_name": "EXAMPLE CARE GROUP LIMITED",
+            "company_number": "12345678",
+            "registered_office_address": {"region": "Lancashire"},
+        },
+    )
+    assert compared["match_outcome"] != "STRONG"
+    assert "Name match only; no location corroboration" in compared["match_cautions"]
+
+
 def test_confirmed_organisation_review_preserves_aliases_and_audit(monkeypatch) -> None:
     class Result:
         def __init__(self, row=None):
@@ -637,3 +724,183 @@ def test_confirmed_organisation_review_preserves_aliases_and_audit(monkeypatch) 
     assert result["status"] == "CONFIRMED"
     assert any("INSERT INTO organisation_aliases" in sql for sql, _ in conn.statements)
     assert any("INSERT INTO admin_audit_events" in sql for sql, _ in conn.statements)
+
+
+def test_manual_company_number_lookup_persists_candidate_without_resolving(monkeypatch) -> None:
+    review = {
+        "id": "review-1",
+        "operator_id": "operator-1",
+        "organisation_name": "Example Care",
+        "source_context": {
+            "observed_name": "Example Care",
+            "signals": [],
+            "ofsted_evidence": [
+                {
+                    "registered_provider_name": "Example Care Limited",
+                    "provider_registered_locality": "Blackpool",
+                    "provider_registered_postcode": "FY4 2FF",
+                }
+            ],
+        },
+    }
+    monkeypatch.setattr(
+        "app.organisation_lookup.list_organisation_match_reviews",
+        lambda *_args, **_kwargs: [review],
+    )
+    captured = {}
+
+    def persist(_settings, review_id, *, candidate):
+        captured.update(review_id=review_id, candidate=candidate)
+        return candidate
+
+    monkeypatch.setattr("app.organisation_lookup.add_manual_organisation_candidate", persist)
+
+    class LambdaClient:
+        def invoke(self, **kwargs):
+            captured["invoke"] = kwargs
+            return {
+                "Payload": io.BytesIO(
+                    json.dumps(
+                        {
+                            "status": "FOUND",
+                            "company": {
+                                "company_name": "EXAMPLE CARE LIMITED",
+                                "company_number": "12345678",
+                                "company_status": "dissolved",
+                                "registered_office_address": {"postal_code": "FY4 2FF"},
+                            },
+                        }
+                    ).encode()
+                )
+            }
+
+    result = lookup_manual_company_candidate(
+        Settings(companies_house_lookup_function_name="lookup-function"),
+        "review-1",
+        "1234 5678",
+        lambda_client=LambdaClient(),
+    )
+    assert result["company_status"] == "dissolved"
+    assert result["selection_source"] == "MANUAL_LOOKUP"
+    assert "Exact Ofsted provider-office postcode match" in result["match_reasons"]
+    assert captured["review_id"] == "review-1"
+
+
+def test_repeated_manual_lookup_replaces_same_candidate_without_duplication(monkeypatch) -> None:
+    class Result:
+        def __init__(self, row=None):
+            self.row = row
+
+        def fetchone(self):
+            return self.row
+
+    class Connection:
+        updated_candidates = None
+
+        def execute(self, sql, params=()):
+            if "SELECT candidates, status" in sql:
+                return Result(
+                    ([{"company_number": "12345678", "company_name": "OLD"}], "PENDING")
+                )
+            if "UPDATE organisation_match_reviews" in sql:
+                self.updated_candidates = params[0].obj
+            return Result()
+
+        def commit(self):
+            return None
+
+    conn = Connection()
+
+    @contextmanager
+    def fake_connection(_settings):
+        yield conn
+
+    monkeypatch.setattr("app.repository.connection", fake_connection)
+    add_manual_organisation_candidate(
+        Settings(),
+        "review-1",
+        candidate={"company_number": "12345678", "company_name": "UPDATED"},
+    )
+    assert len(conn.updated_candidates) == 1
+    assert conn.updated_candidates[0]["company_name"] == "UPDATED"
+    assert conn.updated_candidates[0]["selection_source"] == "MANUAL_LOOKUP"
+
+
+@pytest.mark.parametrize(
+    ("number", "expected"),
+    [("bad", "invalid_company_number"), ("12345678", "company_not_found")],
+)
+def test_manual_company_lookup_validation(monkeypatch, number, expected) -> None:
+    monkeypatch.setattr(
+        "app.organisation_lookup.list_organisation_match_reviews",
+        lambda *_args, **_kwargs: [
+            {"id": "review-1", "operator_id": "operator-1", "source_context": {}}
+        ],
+    )
+
+    class LambdaClient:
+        def invoke(self, **_kwargs):
+            return {"Payload": io.BytesIO(b'{"status":"NOT_FOUND"}')}
+
+    with pytest.raises(ManualCompanyLookupError) as error:
+        lookup_manual_company_candidate(
+            Settings(companies_house_lookup_function_name="lookup-function"),
+            "review-1",
+            number,
+            lambda_client=LambdaClient(),
+        )
+    assert error.value.code == expected
+
+
+def test_manual_candidate_confirmation_has_distinct_audit_action(monkeypatch) -> None:
+    class Result:
+        def __init__(self, row=None):
+            self.row = row
+
+        def fetchone(self):
+            return self.row
+
+    class Connection:
+        statements = []
+
+        def execute(self, sql, params=()):
+            self.statements.append((sql, params))
+            if "FROM organisation_match_reviews WHERE id" in sql:
+                return Result(
+                    (
+                        "review-1",
+                        "operator-1",
+                        [
+                            {
+                                "company_number": "12345678",
+                                "company_name": "EXAMPLE CARE LIMITED",
+                                "selection_source": "MANUAL_LOOKUP",
+                            }
+                        ],
+                        "PENDING",
+                        "Example Care",
+                    )
+                )
+            return Result()
+
+        def commit(self):
+            return None
+
+    conn = Connection()
+
+    @contextmanager
+    def fake_connection(_settings):
+        yield conn
+
+    monkeypatch.setattr("app.repository.connection", fake_connection)
+    resolve_organisation_match_review(
+        Settings(),
+        "review-1",
+        action="confirm",
+        actor="admin-1",
+        company_number="12345678",
+    )
+    audit_params = next(
+        params for sql, params in conn.statements if "INSERT INTO admin_audit_events" in sql
+    )
+    assert audit_params[0] == "organisation_match_manual_company_confirm"

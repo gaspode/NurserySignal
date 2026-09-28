@@ -136,6 +136,16 @@ resource "aws_vpc_endpoint" "bedrock_runtime" {
   tags               = local.common_tags
 }
 
+resource "aws_vpc_endpoint" "lambda" {
+  vpc_id              = data.aws_vpc.default.id
+  service_name        = "com.amazonaws.${var.aws_region}.lambda"
+  vpc_endpoint_type   = "Interface"
+  private_dns_enabled = true
+  subnet_ids          = [local.lambda_subnet_ids[0]]
+  security_group_ids  = [aws_security_group.secrets_endpoint.id]
+  tags                = local.common_tags
+}
+
 resource "aws_vpc_endpoint" "s3" {
   vpc_id            = data.aws_vpc.default.id
   service_name      = "com.amazonaws.${var.aws_region}.s3"

@@ -56,12 +56,17 @@ resource "aws_lambda_function" "backend" {
       RECRUITMENT_MANUAL_RUN_QUEUE_URL     = aws_sqs_queue.recruitment_manual_runs.url
       OFSTED_MANUAL_RUN_QUEUE_URL          = aws_sqs_queue.ofsted_manual_runs.url
       COMPANIES_HOUSE_MANUAL_RUN_QUEUE_URL = aws_sqs_queue.companies_house_manual_runs.url
+      COMPANIES_HOUSE_LOOKUP_FUNCTION_NAME = aws_lambda_function.companies_house_collector.function_name
       PROCUREMENT_MANUAL_RUN_QUEUE_URL     = aws_sqs_queue.procurement_manual_runs.url
     }
   }
 
-  depends_on = [aws_cloudwatch_log_group.backend, aws_vpc_endpoint.bedrock_runtime]
-  tags       = local.common_tags
+  depends_on = [
+    aws_cloudwatch_log_group.backend,
+    aws_vpc_endpoint.bedrock_runtime,
+    aws_vpc_endpoint.lambda,
+  ]
+  tags = local.common_tags
 }
 
 resource "aws_lambda_function" "migration" {

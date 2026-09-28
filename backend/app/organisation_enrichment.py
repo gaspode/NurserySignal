@@ -40,6 +40,7 @@ def _safe_candidates(values: Any) -> list[dict[str, Any]]:
             "match_reasons": item.get("match_reasons") or [],
             "match_cautions": item.get("match_cautions") or [],
             "location_agreement": item.get("location_agreement") or {},
+            "selection_source": item.get("selection_source") or "SUGGESTED",
         }
         for item in values[:10]
         if isinstance(item, dict)
@@ -179,6 +180,23 @@ def process_organisation_enrichment(settings: Settings, payload: dict[str, Any])
                          AND status = 'PENDING'""",
                     (operator_id,),
                 )
+                if not operator[2]:
+                    conn.execute(
+                        """INSERT INTO admin_audit_events
+                           (action, actor, target_type, details)
+                           VALUES ('organisation_match_automatic_resolution', 'SYSTEM',
+                                   'organisation', %s)""",
+                        (
+                            Jsonb(
+                                {
+                                    "operator_id": operator_id,
+                                    "company_number": company_number,
+                                    "provider": "COMPANIES_HOUSE",
+                                    "outcome": outcome,
+                                }
+                            ),
+                        ),
+                    )
         if effective_status == "AMBIGUOUS":
             conn.execute(
                 """UPDATE operators SET companies_house_refreshed_at = %s::timestamptz,

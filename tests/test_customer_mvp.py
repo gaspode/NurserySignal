@@ -113,6 +113,9 @@ def test_customer_projection_redacts_internal_exact_location() -> None:
             "source_types": ["planning"],
             "first_seen_at": datetime(2026, 1, 1, tzinfo=UTC),
             "latest_update_at": datetime(2026, 2, 1, tzinfo=UTC),
+            "provider_registered_address": "17 Provider Office Street",
+            "provider_registered_postcode": "FY5 5HT",
+            "internal_match_reason": "Exact Ofsted provider-office postcode match",
         },
         saved=False,
     )
@@ -122,6 +125,9 @@ def test_customer_projection_redacts_internal_exact_location() -> None:
     assert "address" not in item
     assert "confidence" not in item
     assert "review_status" not in item
+    assert "provider_registered_address" not in item
+    assert "provider_registered_postcode" not in item
+    assert "internal_match_reason" not in item
 
 
 def test_customer_eligibility_excludes_rejected_and_procurement_only() -> None:

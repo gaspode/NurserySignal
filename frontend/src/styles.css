@@ -96,6 +96,9 @@ h2 { color: #102a43; font-size: 1rem; margin-bottom: 1rem; }
 .match-explanation { background: #f8fafc; border-radius: 6px; font-size: 0.78rem; margin-bottom: 1rem; padding: 0.75rem; }
 .match-explanation ul { margin: 0.35rem 0 0.75rem; padding-left: 1.2rem; }.candidate-cautions { color: #8d5e00; }
 .candidate-actions { margin-top: auto; }.candidate-actions .button { text-decoration: none; }
+.manual-company-lookup { align-items: end; background: #f8fafc; border: 1px solid #d9e2ec; border-radius: 8px; display: flex; flex-wrap: wrap; gap: 0.8rem; margin: 1rem 0; padding: 1rem; }
+.manual-company-lookup > div:first-child { display: grid; gap: 0.45rem; min-width: min(100%, 280px); }
+.inline-alert { background: #fff1f0; border: 1px solid #f3b6b2; border-radius: 6px; color: #9d2727; flex-basis: 100%; font-size: 0.8rem; padding: 0.7rem; }
 
 .filter-bar { align-items: end; background: #fff; border: 1px solid #e4e7eb; border-radius: 10px; display: flex; flex-wrap: wrap; gap: 0.8rem; margin-bottom: 1.25rem; padding: 1rem; }
 label { color: #52606d; display: grid; font-size: 0.75rem; font-weight: 700; gap: 0.35rem; }

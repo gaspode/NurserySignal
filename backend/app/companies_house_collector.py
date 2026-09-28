@@ -7,7 +7,12 @@ from typing import Any
 import boto3
 
 from app.collector_events import collector_payload
-from app.companies_house import CompaniesHouseProvider, OrganisationCandidate
+from app.companies_house import (
+    CompaniesHouseError,
+    CompaniesHouseProvider,
+    OrganisationCandidate,
+    normalize_company_number,
+)
 from app.config import Settings
 from app.logging import configure_logging
 from app.secrets import provider_api_key_from_secret
@@ -52,6 +57,11 @@ def collect_companies_house(
             provider_registered_address=(
                 str(item["provider_registered_address"])
                 if item.get("provider_registered_address")
+                else None
+            ),
+            provider_registration_date=(
+                str(item["provider_registration_date"])
+                if item.get("provider_registration_date")
                 else None
             ),
         )
@@ -162,5 +172,26 @@ def collect_companies_house(
     return counts
 
 
-def handler(event: dict[str, Any], context: Any) -> dict[str, int]:
+def lookup_company_profile(settings: Settings, event: dict[str, Any]) -> dict[str, Any]:
+    company_number = normalize_company_number(event.get("company_number"))
+    if not settings.companies_house_secret_arn:
+        raise RuntimeError("COMPANIES_HOUSE_SECRET_ARN is not configured")
+    provider = CompaniesHouseProvider(
+        provider_api_key_from_secret(settings.companies_house_secret_arn),
+        base_url=settings.companies_house_base_url,
+        timeout=8,
+    )
+    try:
+        return {"status": "FOUND", "company": provider.company_profile(company_number)}
+    except CompaniesHouseError as exc:
+        if exc.status_code == 404:
+            return {"status": "NOT_FOUND"}
+        if exc.status_code == 429:
+            return {"status": "RATE_LIMITED"}
+        raise
+
+
+def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
+    if event.get("operation") == "company_profile_lookup":
+        return lookup_company_profile(Settings.from_env(), event)
     return collect_companies_house(Settings.from_env(), collector_payload(event))

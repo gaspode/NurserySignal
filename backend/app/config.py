@@ -43,6 +43,7 @@ class Settings:
     recruitment_manual_run_queue_url: str | None = None
     ofsted_manual_run_queue_url: str | None = None
     companies_house_manual_run_queue_url: str | None = None
+    companies_house_lookup_function_name: str | None = None
     procurement_manual_run_queue_url: str | None = None
 
     @classmethod
@@ -104,6 +105,9 @@ class Settings:
             ofsted_manual_run_queue_url=os.getenv("OFSTED_MANUAL_RUN_QUEUE_URL") or None,
             companies_house_manual_run_queue_url=(
                 os.getenv("COMPANIES_HOUSE_MANUAL_RUN_QUEUE_URL") or None
+            ),
+            companies_house_lookup_function_name=(
+                os.getenv("COMPANIES_HOUSE_LOOKUP_FUNCTION_NAME") or None
             ),
             procurement_manual_run_queue_url=(
                 os.getenv("PROCUREMENT_MANUAL_RUN_QUEUE_URL") or None

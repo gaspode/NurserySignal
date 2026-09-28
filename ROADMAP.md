@@ -529,3 +529,18 @@ Paid-pilot activation check (2026-09-28):
   the first batch, aggregates accurate counters and refreshes the opportunity list on completion.
   Signal-detail Approve/Reject and deliberate decision corrections now execute immediately without a
   confirmation dialog; bulk review and destructive opportunity operations retain confirmation.
+- Organisation resolution now reuses stored URN-specific Ofsted provider identity and registered-
+  office evidence without treating that office as a children's-home site. Exact provider-office
+  postcode agreement is explicitly ranked above name-only candidates, appears as an explainable
+  admin reason, and can safely re-score an existing pending review without duplicating it; region-only
+  agreement remains insufficient. The Companies House manual source can re-evaluate pending reviews
+  against newer Ofsted evidence under the existing automatic-resolution threshold.
+- Organisation Review now also supports a bounded official Companies House number lookup. Lookup is
+  performed by the existing internet-facing Companies House collector under least-privilege Lambda
+  invocation through a private Lambda VPC endpoint, persists the profile as a manual candidate, and
+  requires a separate confirmation before changing organisation identity. Suggested selection,
+  manual-number selection, automatic resolution
+  and rejection have distinct audit provenance; aliases and prior review history remain intact.
+- Customer-safe CareProspect projections remain unchanged and cannot expose Ofsted provider-office
+  street addresses or internal match reasoning. Production deployment and a real pending-review
+  verification are the remaining gates for this focused organisation-resolution improvement.

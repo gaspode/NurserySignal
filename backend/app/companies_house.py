@@ -54,6 +54,7 @@ class OrganisationCandidate:
     provider_registered_locality: str | None = None
     provider_registered_postcode: str | None = None
     provider_registered_address: str | None = None
+    provider_registration_date: str | None = None
 
 
 @dataclass(frozen=True)
@@ -126,7 +127,17 @@ def _outward_postcode(value: Any) -> str:
     return str(value or "").strip().upper().replace(" ", "")[:-3]
 
 
-def _candidate_comparison(
+def normalize_company_number(value: Any) -> str:
+    """Return a safe Companies House lookup key or reject malformed input."""
+    normalized = re.sub(r"[\s-]+", "", str(value or "")).upper()
+    if not re.fullmatch(r"[A-Z0-9]{8}", normalized) or not any(
+        character.isdigit() for character in normalized
+    ):
+        raise ValueError("invalid Companies House company number")
+    return normalized
+
+
+def compare_company_candidate(
     candidate: OrganisationCandidate, company: dict[str, Any]
 ) -> dict[str, Any]:
     observed = normalize_identity(candidate.provider_registered_name or candidate.name)
@@ -175,9 +186,18 @@ def _candidate_comparison(
     elif provider_locality and company_locality:
         cautions.append("Companies House office town differs from Ofsted provider address")
     if provider_postcode_agrees:
-        reasons.append("Companies House office postcode matches Ofsted provider address")
+        reasons.append("Exact Ofsted provider-office postcode match")
     elif provider_postcode and company_postcode:
-        cautions.append("Companies House office postcode differs from Ofsted provider address")
+        cautions.append("Companies House office postcode differs from Ofsted provider office")
+    incorporation_compatible = None
+    if candidate.provider_registration_date and company.get("date_of_creation"):
+        incorporation_compatible = str(company["date_of_creation"]) <= str(
+            candidate.provider_registration_date
+        )
+        if incorporation_compatible:
+            reasons.append("Company existed before the Ofsted registration date")
+        else:
+            cautions.append("Company was incorporated after the Ofsted registration date")
     if not any(
         (
             locality_agrees,
@@ -209,8 +229,20 @@ def _candidate_comparison(
             "postcode_area": postcode_area_agrees,
             "ofsted_provider_locality": provider_locality_agrees,
             "ofsted_provider_postcode": provider_postcode_agrees,
+            "incorporation_timing_compatible": incorporation_compatible,
         },
     }
+
+
+def _candidate_rank(item: dict[str, Any]) -> tuple[int, int, int, float, str]:
+    agreement = item.get("location_agreement") or {}
+    return (
+        1 if agreement.get("ofsted_provider_postcode") else 0,
+        1 if item.get("match_outcome") == "STRONG" else 0,
+        1 if agreement.get("ofsted_provider_locality") else 0,
+        float(item.get("name_similarity") or 0),
+        str(item.get("company_number") or ""),
+    )
 
 
 class CompaniesHouseProvider:
@@ -309,7 +341,7 @@ class CompaniesHouseProvider:
         target = normalize_identity(lookup_name)
         exact = [item for item in results if normalize_identity(item.get("company_name")) == target]
         if len(exact) == 1:
-            compared_exact = _candidate_comparison(candidate, exact[0])
+            compared_exact = compare_company_candidate(candidate, exact[0])
             ofsted_location_agrees = any(
                 (compared_exact.get("location_agreement") or {}).get(key)
                 for key in ("ofsted_provider_locality", "ofsted_provider_postcode")
@@ -330,7 +362,7 @@ class CompaniesHouseProvider:
                 profile,
                 (compared_exact,),
             )
-        compared = [_candidate_comparison(candidate, item) for item in results]
+        compared = [compare_company_candidate(candidate, item) for item in results]
         provider_corroborated = [
             item
             for item in compared
@@ -387,10 +419,8 @@ class CompaniesHouseProvider:
                 except CompaniesHouseError:
                     # The search result still gives an admin a safe bounded fallback.
                     company = item
-            detailed_candidates.append(_candidate_comparison(candidate, company))
-        detailed_candidates.sort(
-            key=lambda item: float(item.get("name_similarity") or 0), reverse=True
-        )
+            detailed_candidates.append(compare_company_candidate(candidate, company))
+        detailed_candidates.sort(key=_candidate_rank, reverse=True)
         return CompanyResolution(
             candidate.operator_id,
             candidate.name,
