@@ -15,7 +15,7 @@ from app.customer import (
     pilot_curation_inventory,
     queue_customer_account_provision,
 )
-from app.customer_digest import queue_weekly_digests, sender_handler
+from app.customer_digest import _safe_provider_error, queue_weekly_digests, sender_handler
 from app.customer_provisioning import handler as provisioning_handler
 from app.handler import handler
 
@@ -216,6 +216,24 @@ def test_weekly_digest_remains_disabled_without_verified_sender() -> None:
         "duplicates": 0,
         "errors": 0,
     }
+
+
+def test_digest_provider_diagnostics_redact_recipient() -> None:
+    from botocore.exceptions import ClientError
+
+    error = ClientError(
+        {
+            "Error": {
+                "Code": "MessageRejected",
+                "Message": "Email address willypayne@gmail.com is not verified",
+            }
+        },
+        "SendEmail",
+    )
+    code, message = _safe_provider_error(error)
+    assert code == "MessageRejected"
+    assert "willypayne@gmail.com" not in message
+    assert "[redacted-email]" in message
 
 
 def test_pilot_publication_is_explicit_bounded_and_audited(monkeypatch) -> None:

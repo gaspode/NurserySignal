@@ -3,16 +3,28 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import boto3
+from botocore.exceptions import ClientError
 
 from app.config import Settings
 from app.customer import PLAN_ENTITLEMENTS, digest_preview
 from app.db import connection
 
 logger = logging.getLogger("nurserysignal")
+
+
+def _safe_provider_error(exc: Exception) -> tuple[str, str]:
+    if not isinstance(exc, ClientError):
+        return type(exc).__name__, ""
+    error = exc.response.get("Error", {})
+    code = str(error.get("Code") or "ClientError")[:80]
+    message = str(error.get("Message") or "")[:240]
+    message = re.sub(r"[^\s@]+@[^\s,;]+", "[redacted-email]", message)
+    return code, message
 
 
 def _period(now: datetime) -> tuple[datetime, datetime]:
@@ -147,7 +159,12 @@ def sender_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
             )
             _notify_delivery(lambda_client, backend_function, payload["run_id"], "SENT")
         except Exception as exc:
-            logger.error("customer_digest_send_failed error_type=%s", type(exc).__name__)
+            error_code, safe_message = _safe_provider_error(exc)
+            logger.error(
+                "customer_digest_send_failed error_code=%s provider_message=%s",
+                error_code,
+                safe_message,
+            )
             try:
                 body = json.loads(record.get("body") or "{}")
                 if body.get("run_id"):

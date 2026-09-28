@@ -497,3 +497,8 @@ Paid-pilot activation check (2026-09-28):
   removed the transient identity and no tenant state was written. Normalization now supports both
   official response shapes. Production completion and the real invite/digest/customer-session checks
   remain the immediate gate.
+- The isolated Starter identity and tenant were then provisioned successfully with Liverpool-only
+  access; provisioning and DLQ queues drained. The first digest generated and queued exactly once,
+  but SES rejected the worker call despite verified domain/recipient and an allowed IAM simulation.
+  Delivery retry was paused and bounded, email-redacting SES diagnostics were added to identify the
+  provider rejection before retrying. A delivered digest and customer first-login remain launch gates.
