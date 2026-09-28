@@ -397,7 +397,8 @@ Procurement source-value experiment:
 
 ## Phase 12 — CareSignal commercial pilot MVP
 
-Status: implementation complete; production deployment and pilot curation are the active gate.
+Status: deployed to production on 2026-09-28; pilot curation and one real-customer smoke test are
+the active gate.
 
 - Added a separate CareSignal customer experience over a strict server-side projection. SignalHub
   remains admin-only; customers cannot access admin APIs, internal review/debug state, rejected
@@ -421,6 +422,15 @@ Status: implementation complete; production deployment and pilot curation are th
   existing opportunity detail page.
 - Procurement remains manual/shadow and is explicitly excluded from customer eligibility/timelines.
   Historical benchmarking continues prospectively and does not block pilot discovery interviews.
+- Production migration `0022` and the customer/API/frontend infrastructure were deployed from
+  commit `07b7d34a`; the API/database and CloudFront frontend are healthy, unauthenticated customer
+  and admin requests return `401`, the post-deployment Terraform plan is clean, and ingestion,
+  enrichment, customer-digest and collector DLQs are empty. Planning and Recruitment remain enabled
+  at their existing daily cadence. The weekly customer digest rule and its queue consumer remain
+  intentionally disabled because no SES sender identity is configured.
+- No historical opportunity was auto-published. Customer-visible inventory therefore starts empty
+  by design and must be explicitly curated in SignalHub before a supplier account is invited; this
+  is the remaining content-quality gate rather than an ingestion or deployment failure.
 
 Pilot gate:
 - deploy migration/code and confirm production health;
