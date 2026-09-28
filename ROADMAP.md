@@ -506,3 +506,13 @@ Paid-pilot activation check (2026-09-28):
   as well as the sender. The sender role is therefore allowed over SES identities only when the exact
   configured `alerts@careprospect.co.uk` From address is used; it cannot send from another identity.
   This replaces the sender-domain-only resource statement that rejected the controlled recipient.
+- The corrected delivery completed successfully: SES accepted one branded weekly digest for the
+  authorised pilot recipient, a repeat run reported one idempotent duplicate and queued no second
+  email, and digest/provisioning/live ingestion queues plus every DLQ are empty. The weekly Monday
+  08:00 UTC rule remains enabled; Planning and Recruitment remain enabled at `rate(1 day)`. Production
+  API/database and branded HTTPS health checks pass, and a fresh workflow plan reported `No changes`
+  with `0 added, 0 changed, 0 destroyed`.
+- Remaining paid-pilot gates are external/user-visible: complete and confirm the invited customer's
+  first-login password challenge and clean-session journey, inspect the delivered Gmail headers for
+  SPF/DKIM/DMARC alignment, and obtain SES production access (still pending/sandboxed) before inviting
+  unverified supplier recipients. Until those checks pass, status remains `NOT_READY_FOR_PAID_PILOT`.
