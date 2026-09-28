@@ -458,11 +458,24 @@ Paid-pilot activation check (2026-09-28):
   API and every publication uses the existing audit trail.
 - Production remains healthy and drift-free after deployment. Planning and Recruitment retain their
   daily schedules; ingestion, enrichment, digest and collector DLQs are empty.
-- Gate remains `NOT_READY_FOR_PAID_PILOT`: SES `eu-west-1` has no verified identity and remains in
-  sandbox, and no authorised pilot recipient/customer identity has been supplied. Therefore the
-  digest schedule/consumer correctly remain disabled and the required real invitation, clean-browser
-  journey, Starter geography, tenant-isolation and delivered-email checks cannot yet be completed.
-  Exact next step: supply/control a CareSignal sender identity and authorised test recipient, verify
-  them in SES (or provide a DNS zone for domain verification), then provision that recipient through
-  SignalHub and complete the documented end-to-end gate. Procurement stays manual/shadow,
-  benchmarking continues prospectively and larger architecture work remains deferred.
+- Public customer branding is now **CareProspect** while `CHILDRENS_HOME`, SignalHub, benchmark IDs,
+  Cognito group names and historical technical identifiers remain stable. `careprospect.co.uk` was
+  registered for one year under the existing business ownership, with auto-renew and supported
+  contact privacy enabled. Route 53 delegation, an ACM-managed TLS certificate, CloudFront alias and
+  customer API CORS are live; the customer portal and digest links use the branded HTTPS domain.
+- SES `eu-west-1` now has a verified `careprospect.co.uk` domain identity, successful Easy DKIM,
+  aligned `bounce.careprospect.co.uk` custom MAIL FROM/SPF, and cautious DMARC `p=none`. The sender is
+  `CareProspect <alerts@careprospect.co.uk>` with no unmonitored reply-to. The weekly Monday 08:00 UTC
+  digest rule and SQS consumer are enabled, idempotency is unchanged, and the queue/DLQ are empty.
+  SES production access has been requested accurately but remains pending/sandboxed.
+- The six explicitly published Planning/Opening opportunities remain customer-visible under the new
+  brand (Wolverhampton 1, Sandwell 1, Liverpool 3, Bolton 1); all retain at least one customer-safe
+  evidence item. Procurement remains manual/shadow and excluded.
+- Gate remains `NOT_READY_FOR_PAID_PILOT`: no separate authorised pilot recipient/customer identity
+  exists. The sole existing internal Cognito identity is already the SignalHub administrator and
+  cannot be reused as an isolated customer tenant. Consequently no real invite/digest can be sent and
+  the clean-session Starter geography, tenant-isolation, suspension/reactivation and delivery-header
+  checks remain pending. Exact next step: supply one controlled, non-admin test recipient, verify it
+  in SES while sandboxed, provision it as a Starter account, and complete the documented end-to-end
+  gate. Commercial outreach starts only after that succeeds; benchmarking continues prospectively
+  and larger architecture work remains deferred.

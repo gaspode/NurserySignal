@@ -3,6 +3,13 @@
 This checklist is for the manually operated first 5–10 supplier accounts. SignalHub remains the
 administrative system; customers use the separate CareProspect role-routed portal.
 
+Customer portal: `https://careprospect.co.uk`
+
+Digest sender: `CareProspect <alerts@careprospect.co.uk>`. Replies are not advertised because no
+monitored CareProspect mailbox is configured. SES domain identity, DKIM, custom MAIL FROM/SPF and
+DMARC are managed by Terraform. Check SES production access before inviting an external recipient;
+while the account is sandboxed, each test recipient must also be verified in SES.
+
 ## Publish an opportunity
 
 1. In SignalHub, select **CareProspect** and open **Opportunities**.
@@ -40,12 +47,12 @@ an HTTP route and each publication uses the normal audit event.
 
 ## Email and digest test
 
-1. Confirm the configured SES sender identity is verified in `eu-west-1`. If the SES account is in
+1. Confirm the `careprospect.co.uk` SES domain identity and DKIM are verified in `eu-west-1`. If the SES account is in
    sandbox, the recipient must also be verified; request production access before inviting external
    pilot customers.
-2. Configure Terraform variable `caresignal_email_from` (and, if needed, the customer-visible
-   `caresignal_email_from_name`), review the plan, deploy through GitHub Actions, and verify both the
-   weekly EventBridge rule and digest SQS event-source mapping are enabled.
+2. Confirm Terraform still configures `caresignal_email_from=alerts@careprospect.co.uk` and the
+   customer-visible sender name `CareProspect`; these technical variable names are intentionally
+   retained. Verify both the weekly EventBridge rule and digest SQS event-source mapping are enabled.
 3. Set the authorised test user's preference to `WEEKLY` and invoke the bounded
    `customer_weekly_digest` backend operation once.
 4. Confirm one digest run progresses `QUEUED → SENT`, the email is delivered, links open the
