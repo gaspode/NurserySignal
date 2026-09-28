@@ -554,4 +554,5 @@ Paid-pilot activation check (2026-09-28):
   fields also contained run-on report text too large for an indexed organisation alias. Extracted
   organisation names now have a conservative identity-boundary check: malformed run-on text is not
   admitted as organisation identity, while the original report evidence remains preserved. Two items
-  completed on the first redrive; the remaining two require the corrected worker deployment and retry.
+  completed on the first redrive and the final two completed after the corrected worker deployment;
+  all production queues and DLQs are now empty and the post-deployment Terraform plan is clean.
