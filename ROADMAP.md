@@ -570,8 +570,14 @@ Paid-pilot activation check (2026-09-28):
   aliases, then deduplicates results by company number before applying the unchanged resolution
   thresholds. Discovery provenance is retained with immutable enrichment evidence; provider-office
   identity remains strictly separate from opportunity/site geography. Production refresh of the
-  existing URN `2806691` review is the final validation gate for this refinement.
+  existing URN `2806691` review was the final validation gate for this refinement.
 - The first bounded production refresh still returned the previous five weak candidates because the
   official Ofsted identity and Companies House legal name differ in token spacing. Discovery now also
   tries one generic, bounded leading-token spacing variant for the authoritative Ofsted provider name
   and requests at most ten results per query; no matching or automatic-resolution threshold changed.
+- The final bounded URN `2806691` refresh expanded the review from five to ten unique candidates and
+  automatically discovered company `13962842` at rank one. Exact provider-office postcode and locality
+  agreement plus plausible incorporation timing raised it to `PROBABLE`, below the unchanged automatic
+  resolution gate, so admin confirmation remains required. An immediate unchanged rerun reused the
+  same content-addressed evidence, created no duplicate candidate/review state, and left queues/DLQs
+  empty.
