@@ -15,7 +15,7 @@ describe("CareProspect public website", () => {
   it("presents the approved evidence-led homepage structure", () => {
     const { container } = render(<PublicSite />);
     expect(screen.getByRole("heading", { name: "Find new children’s homes before they appear on the register." })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Registration is the last signal, not the first" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Signals can appear months before registration" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Built for suppliers to children’s homes" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Signals in, one opportunity out" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "How we handle evidence" })).toBeInTheDocument();
@@ -32,6 +32,18 @@ describe("CareProspect public website", () => {
     expect(desktopHeroRule).not.toMatch(/padding\s*:[^;]*vh/);
     expect(desktopHeroRule).toContain("padding: 80px 2rem");
     expect(styles).toContain("@media (max-width: 900px)");
+  });
+
+  it("presents the timing evidence as an accessible registration timeline", () => {
+    const { container } = render(<PublicSite />);
+    expect(screen.getByLabelText("Signals before Ofsted registration timeline")).toBeInTheDocument();
+    expect(screen.getByLabelText(/Planning evidence was observed from 389 to 96 days/)).toBeInTheDocument();
+    expect(screen.getByLabelText("A recruitment signal appeared 97 days before registration.")).toBeInTheDocument();
+    expect(screen.getByLabelText("Ofsted registration is the endpoint at 0 days.")).toBeInTheDocument();
+    expect(screen.getByText("Based on retrospective analysis of reconstructable historical registrations. Timing varies, and not every home produces every type of signal.")).toBeInTheDocument();
+    expect(container.querySelector(".cp-bars")).not.toBeInTheDocument();
+    expect(container.textContent).not.toContain("1 case");
+    expect(container.textContent).not.toContain("one example in sample");
   });
 
   it("submits a bounded access request and shows an in-page result", async () => {

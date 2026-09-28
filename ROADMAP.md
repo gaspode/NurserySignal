@@ -665,3 +665,11 @@ Paid-pilot activation check (2026-09-28):
   branding is unchanged. Commit `ba52ccf` is deployed through the normal workflow; live desktop,
   tablet, iPhone-width and sign-in checks confirm crisp proportions, unwrapped navigation and no
   horizontal overflow, completing the brand update.
+- The public timing section now presents the expanded Phase 11 evidence as a dark, Gantt-style
+  opportunity timeline rather than four individual benchmark bars. Planning shows its 96–389 day
+  observed range, 228–366 day middle 50% and 319-day median; Recruitment remains explicitly one
+  discrete 97-day example; Ofsted registration is the zero-day endpoint. Main-page sample counts
+  have been removed in favour of a restrained reconstructable-history qualification. Desktop uses a
+  shared six-point axis, while mobile stacks the same rows so every marker and the registration
+  endpoint remain visible without page or local horizontal overflow. No customer-product, benchmark,
+  matching or portal behaviour changed.

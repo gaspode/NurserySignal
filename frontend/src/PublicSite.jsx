@@ -21,6 +21,62 @@ const opportunityExamples = [
   { place: "Sandwell B43", stage: "Registration", tone: "registration", detected: "22 May", strength: "Confirmed" },
 ];
 
+const registrationTiming = {
+  axisMaxDays: 390,
+  planning: { minDays: 96, q1Days: 228, medianDays: 319, q3Days: 366, maxDays: 389 },
+  recruitment: { exampleDays: 97 },
+  registration: { days: 0 },
+  ticks: [
+    { label: "13 months", daysLabel: "≈ 390 days", days: 390 },
+    { label: "10 months", daysLabel: "≈ 300 days", days: 300 },
+    { label: "7 months", daysLabel: "≈ 210 days", days: 210 },
+    { label: "4 months", daysLabel: "≈ 120 days", days: 120 },
+    { label: "1 month", daysLabel: "≈ 30 days", days: 30 },
+    { label: "Ofsted registration", daysLabel: "0 days", days: 0 },
+  ],
+};
+
+function timingPosition(days) {
+  return `${((registrationTiming.axisMaxDays - days) / registrationTiming.axisMaxDays) * 100}%`;
+}
+
+function TimingSection() {
+  const { planning, recruitment, registration, ticks } = registrationTiming;
+  const observedLeft = timingPosition(planning.maxDays);
+  const observedWidth = `${((planning.maxDays - planning.minDays) / registrationTiming.axisMaxDays) * 100}%`;
+  const middleLeft = timingPosition(planning.q3Days);
+  const middleWidth = `${((planning.q3Days - planning.q1Days) / registrationTiming.axisMaxDays) * 100}%`;
+  return <section className="cp-lead-time" id="how-early">
+    <div className="cp-section-intro"><p className="cp-kicker">The timing advantage</p><h2>Signals can appear months before registration</h2><p>CareProspect watches for the public evidence that appears as a new children’s home develops. Different signals can emerge at different stages, often long before the home reaches the Ofsted register.</p></div>
+    <div className="cp-timing-scroll" tabIndex="0" aria-label="Signals before Ofsted registration timeline">
+      <div className="cp-timing-chart">
+        <div className="cp-timing-axis-label">Months before Ofsted registration</div>
+        <div className="cp-timing-axis" aria-hidden="true">{ticks.map((tick) => <div className="cp-timing-tick" key={tick.days} style={{ left: timingPosition(tick.days) }}><strong>{tick.label}</strong><span>{tick.daysLabel}</span></div>)}</div>
+        <div className="cp-timing-grid" aria-hidden="true">{ticks.map((tick) => <i key={tick.days} style={{ left: timingPosition(tick.days) }} />)}</div>
+
+        <div className="cp-timing-label planning"><strong>Planning</strong><span>Planning applications and related council records</span></div>
+        <div className="cp-timing-plot planning" aria-label="Planning evidence was observed from 389 to 96 days before registration, with a middle 50 percent range of 228 to 366 days and a median of 319 days.">
+          <div className="cp-planning-range" style={{ left: observedLeft, width: observedWidth }}><span className="cp-range-start">389 days<small>Earliest observed</small></span><span className="cp-range-end">96 days<small>Latest observed</small></span></div>
+          <div className="cp-planning-middle" style={{ left: middleLeft, width: middleWidth }}><span>Middle 50%<small>228–366 days</small></span></div>
+          <div className="cp-planning-median" style={{ left: timingPosition(planning.medianDays) }}><i /><strong>Median</strong><span>319 days</span></div>
+        </div>
+
+        <div className="cp-timing-label recruitment"><strong>Recruitment signal</strong><span>Job advert / recruitment evidence</span></div>
+        <div className="cp-timing-plot recruitment" aria-label="A recruitment signal appeared 97 days before registration."><div className="cp-recruitment-point" style={{ left: timingPosition(recruitment.exampleDays) }}><i /><strong>97 days</strong><span>Recruitment example</span></div></div>
+
+        <div className="cp-timing-label registration"><strong>Ofsted registration</strong><span>Home appears on the Ofsted register</span></div>
+        <div className="cp-timing-plot registration" aria-label={`Ofsted registration is the endpoint at ${registration.days} days.`}><div className="cp-registration-point"><i /><strong>Ofsted registration</strong><span>0 days</span></div></div>
+      </div>
+    </div>
+    <div className="cp-timing-highlights" aria-label="Timing highlights">
+      <article><span>Earliest observed signal</span><strong>389 days</strong><small>before registration</small></article>
+      <article><span>Planning median</span><strong>319 days</strong><small>before registration</small></article>
+      <article className="recruitment"><span>Recruitment example</span><strong>97 days</strong><small>before registration</small></article>
+    </div>
+    <p className="cp-benchmark-note">Based on retrospective analysis of reconstructable historical registrations. Timing varies, and not every home produces every type of signal.</p>
+  </section>;
+}
+
 function StageBadge({ tone, children }) {
   return <span className={`cp-stage cp-stage-${tone}`}><span aria-hidden="true" />{children}</span>;
 }
@@ -88,7 +144,7 @@ export default function PublicSite() {
   return <div className="cp-public"><PublicHeader /><main>
     <section className="cp-hero"><div className="cp-hero-copy"><p className="cp-kicker">Early commercial intelligence for children’s-home suppliers</p><h1>Find new children’s homes before they appear on the register.</h1><p className="cp-lede">CareProspect follows planning, recruitment and regulatory evidence and links it into one opportunity, while supplier decisions may still be open.</p><div className="cp-hero-actions"><a className="cp-button primary" href="#request-access">Request access</a><a className="cp-button secondary" href="#product-example">See an example</a></div><p className="cp-trust-note"><span aria-hidden="true">◇</span> Public official sources only. Redacted addresses are never reconstructed.</p></div><div className="cp-hero-preview" id="product-example"><div className="cp-preview-layer back" /><div className="cp-preview-layer middle" /><ExampleOpportunity /></div></section>
 
-    <section className="cp-lead-time" id="how-early"><div className="cp-section-intro"><p className="cp-kicker">The timing advantage</p><h2>Registration is the last signal, not the first</h2><p>Each bar is one historical benchmark case, measured from the first evidence we detected to Ofsted registration.</p></div><div className="cp-bars">{[{ days: 348, source: "Planning", width: 100, tone: "planning" }, { days: 290, source: "Planning", width: 83, tone: "planning" }, { days: 207, source: "Planning", width: 59, tone: "planning" }, { days: 97, source: "Recruitment", width: 28, tone: "recruitment" }].map((item) => <div className="cp-bar-row" key={item.days}><span>{item.days} days</span><div><i className={item.tone} style={{ width: `${item.width}%` }} /><b>{item.source}</b></div></div>)}</div><p className="cp-benchmark-note">Individual cases from a small historical sample. Not an average, and not a promise about future openings.</p></section>
+    <TimingSection />
 
     <section className="cp-product-section" id="how-it-works"><div className="cp-section-intro"><p className="cp-kicker">What you receive</p><h2>An evidence-led opportunity feed, not another list of records</h2><p>Filter by commercial relevance, follow an opportunity as it develops and open the official evidence behind it.</p></div><div className="cp-product-demo"><div className="cp-feed-example"><div className="cp-demo-filters"><span>Search opportunities</span><span>Region</span><span>Stage</span></div>{opportunityExamples.map((item) => <article key={item.place}><div><StageBadge tone={item.tone}>{item.stage}</StageBadge><small>Example</small></div><h3>New children’s home — {item.place}</h3><p>First detected {item.detected} · {item.strength} evidence</p><button type="button">☆ Watch</button></article>)}<aside><strong>Alerts</strong><span>New planning evidence · Liverpool</span><span>Operator identified · Wolverhampton</span></aside></div><ExampleOpportunity detailed /></div></section>
 
