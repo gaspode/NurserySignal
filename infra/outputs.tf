@@ -92,12 +92,12 @@ output "cognito_customer_group" {
 }
 
 output "caresignal_customer_url" {
-  description = "CareSignal customer portal URL (role-routed after login)."
-  value       = "https://${aws_cloudfront_distribution.frontend.domain_name}/#/care/opportunities"
+  description = "CareProspect customer portal URL (role-routed after login)."
+  value       = "https://careprospect.co.uk/#/care/opportunities"
 }
 
 output "customer_weekly_digest_enabled" {
-  description = "Whether weekly CareSignal email delivery has a configured sender."
+  description = "Whether weekly CareProspect email delivery has a configured sender."
   value       = var.caresignal_email_from != ""
 }
 

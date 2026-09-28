@@ -298,13 +298,13 @@ describe("admin frontend", () => {
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
   });
 
-  it("runs a bounded CareSignal backfill from stored evidence", async () => {
+  it("runs a bounded CareProspect backfill from stored evidence", async () => {
     const apiClient = vi.fn()
       .mockResolvedValueOnce({ items: [] })
       .mockResolvedValueOnce({ evaluated: 25, planning_evaluated: 20, recruitment_evaluated: 5, relevant: 3, accepted: 3 });
     render(<SourcesPage apiClient={apiClient} />);
     await screen.findByRole("heading", { name: "Stored-evidence backfill" });
-    await userEvent.click(screen.getByRole("button", { name: "Run CareSignal backfill" }));
+    await userEvent.click(screen.getByRole("button", { name: "Run CareProspect backfill" }));
     expect(apiClient).toHaveBeenCalledWith(
       "/admin/verticals/CHILDRENS_HOME/backfill",
       { method: "POST", body: JSON.stringify({ days: 60, limit: 25 }) },
@@ -356,7 +356,7 @@ describe("admin frontend", () => {
     expect(screen.getByText("Needs review")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "None of these companies" }));
     const dialog = await screen.findByRole("dialog");
-    expect(dialog).toHaveTextContent("organisation and its CareSignal evidence will not be rejected");
+    expect(dialog).toHaveTextContent("organisation and its CareProspect evidence will not be rejected");
     await userEvent.click(within(dialog).getByRole("button", { name: "None of these companies" }));
     expect(apiClient).toHaveBeenCalledWith(
       "/admin/organisation-match-review/review-1/reject",
@@ -524,7 +524,7 @@ describe("admin frontend", () => {
     const care = { ...pendingItem, id: "care-1", vertical: "CHILDRENS_HOME", title: "New children's home" };
     render(<ReviewInboxPage apiClient={vi.fn().mockResolvedValue(listResult([nursery, care]))} onNavigate={vi.fn()} showVertical />);
     expect(await screen.findByText("NurserySignal")).toBeInTheDocument();
-    expect(screen.getByText("CareSignal")).toBeInTheDocument();
+    expect(screen.getByText("CareProspect")).toBeInTheDocument();
   });
 
   it("preserves valid vertical selection and rejects disabled stored contexts", () => {
@@ -655,7 +655,7 @@ describe("admin frontend", () => {
     expect(screen.getByRole("dialog")).toHaveTextContent("does not call Plota");
   });
 
-  it("renders CareSignal historical metrics and starts only a bounded replay", async () => {
+  it("renders CareProspect historical metrics and starts only a bounded replay", async () => {
     const summary = {
       benchmarks: [{ benchmark_version: "care-ofsted-v1", vertical: "CHILDRENS_HOME", case_count: 24, from_date: "2025-01-01", to_date: "2026-09-01" }],
       runs: [],
@@ -734,7 +734,7 @@ describe("admin frontend", () => {
       .mockResolvedValueOnce(preview);
     render(<BacktestingPage apiClient={apiClient} selectedVertical="CHILDRENS_HOME" />);
     expect(await screen.findByText("Support Worker")).toBeInTheDocument();
-    expect(screen.getByText("Read-only evaluation of the latest 25 stored CareSignal recruitment records.")).toBeInTheDocument();
+    expect(screen.getByText("Read-only evaluation of the latest 25 stored CareProspect recruitment records.")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Compare lookbacks" }));
     expect(apiClient).toHaveBeenCalledWith("/admin/backtesting/sensitivity", {
       method: "POST",

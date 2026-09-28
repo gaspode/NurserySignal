@@ -332,7 +332,7 @@ def test_digest_sender_uses_ses_and_reports_delivery(monkeypatch) -> None:
                         {
                             "run_id": str(uuid4()),
                             "to": "pilot@example.test",
-                            "subject": "CareSignal weekly update",
+                            "subject": "CareProspect weekly update",
                             "html": "<h1>CareSignal</h1>",
                         }
                     ),

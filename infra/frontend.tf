@@ -38,6 +38,7 @@ resource "aws_cloudfront_distribution" "frontend" {
   comment             = "${local.name_prefix} frontend"
   default_root_object = "index.html"
   price_class         = "PriceClass_100"
+  aliases             = ["careprospect.co.uk"]
 
   origin {
     domain_name              = aws_s3_bucket.frontend.bucket_regional_domain_name
@@ -77,7 +78,9 @@ resource "aws_cloudfront_distribution" "frontend" {
   }
 
   viewer_certificate {
-    cloudfront_default_certificate = true
+    acm_certificate_arn      = aws_acm_certificate_validation.careprospect.certificate_arn
+    minimum_protocol_version = "TLSv1.2_2021"
+    ssl_support_method       = "sni-only"
   }
 
   tags = local.common_tags

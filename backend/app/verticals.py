@@ -23,7 +23,7 @@ VERTICAL_REGISTRY = {
         NURSERY, "NurserySignal", True, "nursery", ("Education and early years",)
     ),
     CHILDRENS_HOME: VerticalDefinition(
-        CHILDRENS_HOME, "CareSignal", True, "children-home", ("Care services",)
+        CHILDRENS_HOME, "CareProspect", True, "children-home", ("Care services",)
     ),
     DENTAL: VerticalDefinition(DENTAL, "DentalSignal", False, "dental"),
 }
@@ -81,7 +81,7 @@ class NurseryVerticalPolicy:
 
 
 class ChildrenHomeVerticalPolicy:
-    """CareSignal interpretation behind the shared SignalHub boundary."""
+    """Children's-home interpretation behind the shared SignalHub boundary."""
 
     key = CHILDRENS_HOME
 

@@ -48,14 +48,14 @@ variable "ai_shadow_enabled" {
 
 variable "caresignal_email_from" {
   type        = string
-  default     = ""
-  description = "Verified SES sender for CareSignal digests. Empty keeps delivery in preview mode."
+  default     = "alerts@careprospect.co.uk"
+  description = "Verified SES sender for CareProspect digests. Empty keeps delivery in preview mode."
 }
 
 variable "caresignal_email_from_name" {
-  description = "Customer-visible display name for CareSignal digest email."
+  description = "Customer-visible display name for CareProspect digest email."
   type        = string
-  default     = "CareSignal"
+  default     = "CareProspect"
 }
 
 variable "ai_model_id" {

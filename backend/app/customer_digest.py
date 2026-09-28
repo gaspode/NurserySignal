@@ -124,7 +124,7 @@ def update_digest_delivery(
 
 def sender_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     sender = os.environ.get("CARESIGNAL_EMAIL_FROM", "").strip()
-    sender_name = os.environ.get("CARESIGNAL_EMAIL_FROM_NAME", "CareSignal").strip()
+    sender_name = os.environ.get("CARESIGNAL_EMAIL_FROM_NAME", "CareProspect").strip()
     backend_function = os.environ.get("BACKEND_FUNCTION_NAME", "").strip()
     ses = boto3.client("sesv2")
     lambda_client = boto3.client("lambda")

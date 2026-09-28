@@ -430,7 +430,7 @@ def customer_opportunity_detail(
     projected["evidence_timeline"] = [_project_evidence(item, row) for item in evidence]
     projected["organisation"] = organisation
     projected["monitoring_message"] = (
-        "CareSignal continues to monitor public planning, recruitment and regulatory "
+        "CareProspect continues to monitor public planning, recruitment and regulatory "
         "evidence for meaningful updates."
     )
     return projected
@@ -669,7 +669,7 @@ def digest_preview(
             why=html.escape(item["why"]),
             link=(
                 f'<br><a href="{html.escape(portal_url)}/#/care/opportunities/'
-                f'{html.escape(item["id"])}">View in CareSignal</a>'
+                f'{html.escape(item["id"])}">View in CareProspect</a>'
                 if portal_url
                 else ""
             ),
@@ -679,19 +679,19 @@ def digest_preview(
     preferences_url = f"{portal_url}/#/care/alerts" if portal_url else ""
     body = (
         "<div style=\"font-family:Arial,sans-serif;max-width:680px;margin:auto\">"
-        "<h1 style=\"color:#193d35\">CareSignal weekly update</h1>"
+        "<h1 style=\"color:#193d35\">CareProspect weekly update</h1>"
         f"<p>{len(items)} opportunities were added or meaningfully updated in the "
         f"last seven days.</p><ul>{rows}</ul>"
         + (
             f'<p style="color:#5d6b66;font-size:13px">Manage or turn off alerts in '
-            f'<a href="{html.escape(preferences_url)}">CareSignal preferences</a>.</p>'
+            f'<a href="{html.escape(preferences_url)}">CareProspect preferences</a>.</p>'
             if preferences_url
             else ""
         )
         + "</div>"
     )
     return {
-        "subject": f"CareSignal weekly update — {len(items)} opportunities",
+        "subject": f"CareProspect weekly update — {len(items)} opportunities",
         "html": body,
         "opportunities": items,
         "delivery_status": "PREVIEW_ONLY" if not settings.caresignal_email_from else "READY",
@@ -879,7 +879,7 @@ def set_opportunity_publication(
             (opportunity_id,),
         ).fetchone()
         if not row or row[0] != "CHILDRENS_HOME":
-            raise ValueError("CareSignal opportunity not found")
+            raise ValueError("CareProspect opportunity not found")
         if status == "PUBLISHED" and not row[1]:
             raise ValueError("opportunity requires approved non-procurement evidence")
         conn.execute(

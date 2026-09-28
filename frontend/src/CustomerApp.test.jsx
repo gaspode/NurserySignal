@@ -24,7 +24,7 @@ const opportunity = {
   saved: false,
 };
 
-describe("CareSignal customer portal", () => {
+describe("CareProspect customer portal", () => {
   afterEach(() => cleanup());
 
   it("renders a customer-safe opportunity feed with commercial filters", async () => {
@@ -41,7 +41,7 @@ describe("CareSignal customer portal", () => {
       if (path === "/customer/opportunities/opportunity-1") {
         return Promise.resolve({
           ...opportunity,
-          monitoring_message: "CareSignal continues to monitor public evidence.",
+          monitoring_message: "CareProspect continues to monitor public evidence.",
           organisation: null,
           evidence_timeline: [{
             date: "2026-01-01T00:00:00Z",
@@ -72,7 +72,7 @@ describe("CareSignal customer portal", () => {
         return Promise.resolve({ frequency: "WEEKLY", regions: [], local_authorities: [] });
       }
       if (path === "/customer/digest/preview") {
-        return Promise.resolve({ subject: "CareSignal weekly update — 1 opportunity", opportunities: [opportunity], delivery_status: "PREVIEW_ONLY" });
+        return Promise.resolve({ subject: "CareProspect weekly update — 1 opportunity", opportunities: [opportunity], delivery_status: "PREVIEW_ONLY" });
       }
       return Promise.resolve({});
     });
@@ -80,7 +80,7 @@ describe("CareSignal customer portal", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Save preferences" }));
     await waitFor(() => expect(api).toHaveBeenCalledWith("/customer/preferences", expect.objectContaining({ method: "PUT" })));
     await userEvent.click(screen.getByRole("button", { name: "Generate preview" }));
-    expect(await screen.findByText("CareSignal weekly update — 1 opportunity")).toBeInTheDocument();
+    expect(await screen.findByText("CareProspect weekly update — 1 opportunity")).toBeInTheDocument();
     expect(screen.getByText(/verified sender/i)).toBeInTheDocument();
   });
 });

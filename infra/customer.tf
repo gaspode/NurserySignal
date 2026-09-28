@@ -50,7 +50,7 @@ resource "aws_iam_role_policy" "customer_digest_sender" {
       {
         Effect   = "Allow"
         Action   = ["ses:SendEmail"]
-        Resource = "arn:aws:ses:${var.aws_region}:${data.aws_caller_identity.current.account_id}:identity/${var.caresignal_email_from != "" ? var.caresignal_email_from : "disabled.invalid"}"
+        Resource = "arn:aws:ses:${var.aws_region}:${data.aws_caller_identity.current.account_id}:identity/${aws_ses_domain_identity.careprospect.domain}"
       },
       {
         Effect   = "Allow"
@@ -93,7 +93,7 @@ resource "aws_lambda_event_source_mapping" "customer_digest" {
 
 resource "aws_cloudwatch_event_rule" "customer_weekly_digest" {
   name                = "${local.name_prefix}-customer-weekly-digest"
-  description         = "Prepare bounded CareSignal customer weekly digests"
+  description         = "Prepare bounded CareProspect customer weekly digests"
   schedule_expression = "cron(0 8 ? * MON *)"
   state               = var.caresignal_email_from != "" ? "ENABLED" : "DISABLED"
   tags                = local.common_tags

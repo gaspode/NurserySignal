@@ -1,21 +1,21 @@
-# CareSignal paid-pilot operations
+# CareProspect paid-pilot operations
 
 This checklist is for the manually operated first 5–10 supplier accounts. SignalHub remains the
-administrative system; customers use the separate CareSignal role-routed portal.
+administrative system; customers use the separate CareProspect role-routed portal.
 
 ## Publish an opportunity
 
-1. In SignalHub, select **CareSignal** and open **Opportunities**.
+1. In SignalHub, select **CareProspect** and open **Opportunities**.
 2. Confirm the opportunity is current, non-duplicate and supported by approved Planning,
    Recruitment or Ofsted evidence. Procurement shadow evidence is not publication evidence.
 3. Check the operator is genuinely known, geography is useful without reconstructing an
    Ofsted-redacted address, and every customer-visible source link is public.
 4. Preview the generated customer title and summary. Use a concise override only when the generic
    wording is unclear; never invent an operator, site or opening date.
-5. Select **Publish to CareSignal**. Use **Withdraw** if later evidence makes it unsuitable.
+5. Select **Publish to CareProspect**. Use **Withdraw** if later evidence makes it unsuitable.
 
 For bounded launch curation, an operator with production Lambda invoke permission may run the
-IAM-only `customer_pilot_inventory` operation (maximum 100 current CareSignal opportunities) and
+IAM-only `customer_pilot_inventory` operation (maximum 100 current CHILDRENS_HOME opportunities) and
 then `customer_pilot_publish` with an explicit list of at most 30 reviewed IDs. The operation is not
 an HTTP route and each publication uses the normal audit event.
 
@@ -49,7 +49,7 @@ an HTTP route and each publication uses the normal audit event.
 3. Set the authorised test user's preference to `WEEKLY` and invoke the bounded
    `customer_weekly_digest` backend operation once.
 4. Confirm one digest run progresses `QUEUED → SENT`, the email is delivered, links open the
-   CareSignal portal, and the same period cannot send twice.
+   CareProspect portal, and the same period cannot send twice.
 5. Confirm the email contains only customer-safe opportunity projection data.
 
 ## Troubleshooting and health

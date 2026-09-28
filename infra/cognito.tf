@@ -57,6 +57,6 @@ resource "aws_cognito_user_group" "administrators" {
 resource "aws_cognito_user_group" "caresignal_customers" {
   name         = "CareSignalCustomers"
   user_pool_id = aws_cognito_user_pool.main.id
-  description  = "Invited customer users restricted to the CareSignal portal"
+  description  = "Invited customer users restricted to the CareProspect portal"
   precedence   = 2
 }

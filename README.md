@@ -37,13 +37,13 @@ an explicitly chosen endpoint strategy or remain outside the database VPC.
 ### SignalHub verticals
 
 SignalHub is the shared internal administration and opportunity engine. NurserySignal
-(`NURSERY`) and CareSignal (`CHILDRENS_HOME`) are active verticals; DentalSignal is
+(`NURSERY`) and CareProspect (`CHILDRENS_HOME`) are active verticals; DentalSignal is
 registered but inactive. Planning and Recruitment are collected once and each provider
 record is evaluated independently by every supported vertical policy. Canonical signal
 identity includes the vertical, and database/service guards prohibit cross-vertical
 opportunity links, merges and Match Review candidates.
 
-CareSignal detects material changes to children's residential care homes. Its policy
+CareProspect detects material changes to children's residential care homes. Its policy
 requires explicit children/young-people and residential-home context, rejects adult,
 elderly and nursing care, and treats routine recruitment as supporting evidence only.
 Exact publicly sourced residential addresses are retained only in authenticated
@@ -53,7 +53,7 @@ most 50 preserved Planning records and Care-targeted Recruitment records from no
 than the last 90 days and does not call either provider. Recruitment rows are selected
 by stored discovery provenance rather than by their position in the NurserySignal queue.
 
-CareSignal also supports bounded manual Ofsted regulatory ingestion. The official annual
+CareProspect also supports bounded manual Ofsted regulatory ingestion. The official annual
 register exposes URN, registration/provider and broad geographic fields while deliberately
 redacting children's-home names and exact addresses; SignalHub retains that redaction and
 does not attempt to reconstruct withheld location data. Provider and published-area
@@ -70,7 +70,7 @@ details.
 ### Historical backtesting
 
 SignalHub includes an administrator-only, non-destructive historical replay framework. The first
-version uses bounded CareSignal Ofsted registrations as outcome truth while excluding Ofsted from
+version uses bounded CareProspect Ofsted registrations as outcome truth while excluding Ofsted from
 all pre-registration inputs. It reuses the deployed vertical classification and opportunity
 policies against only point-in-time planning/recruitment evidence, and admits Companies House
 identity only when its recorded retrieval/incorporation dates make it historically safe. Results
@@ -85,7 +85,7 @@ The first recruitment provider is the documented GOV.UK Find an Apprenticeship
 Display Advert API v2. It is accessed through its JSON API with an
 `Ocp-Apim-Subscription-Key`, bounded recent-vacancy/page parameters, official course
 route filters and stable vacancy references. The shared collector uses `Education and
-early years` for NurserySignal and `Care services` for CareSignal, deduplicates vacancy
+early years` for NurserySignal and `Care services` for CareProspect, deduplicates vacancy
 references across queries, and retains the query/vertical discovery provenance. The API
 does not offer free-text vacancy searching, so role phrases are classifier evidence,
 not provider query parameters. Store the key only in the Secrets Manager secret
@@ -228,9 +228,9 @@ entry point. Run `npm --prefix frontend test` for frontend tests.
 The initial invited admin account is managed with Cognito's admin API. Do not
 commit passwords or add self-registration to the frontend.
 
-## CareSignal customer pilot
+## CareProspect customer pilot
 
-CareSignal is a customer-facing, role-routed view over explicitly published
+CareProspect is a customer-facing, role-routed view over explicitly published
 `CHILDRENS_HOME` opportunities. SignalHub remains the internal administration
 surface. Customer users belong to the separate `CareSignalCustomers` Cognito
 group and an active `customer_accounts` tenant; server-side projection and
@@ -239,7 +239,7 @@ evidence payloads, procurement shadow records and another account's saved
 data.
 
 An admin publishes suitable opportunities individually from Opportunity
-detail. Publication requires approved non-procurement evidence. Exact CareSignal
+detail. Publication requires approved non-procurement evidence. Exact CHILDRENS_HOME
 locations marked `INTERNAL_EXACT` are reduced to area-level geography, and
 customer timelines contain concise descriptions plus public source links—not
 private S3 evidence links or classifier diagnostics.
