@@ -48,7 +48,7 @@ variable "ai_shadow_enabled" {
 
 variable "caresignal_email_from" {
   type        = string
-  default     = ""
+  default     = "alerts@careprospect.co.uk"
   description = "Verified SES sender for CareProspect digests. Empty keeps delivery in preview mode."
 }
 
