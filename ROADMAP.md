@@ -479,3 +479,8 @@ Paid-pilot activation check (2026-09-28):
   in SES while sandboxed, provision it as a Starter account, and complete the documented end-to-end
   gate. Commercial outreach starts only after that succeeds; benchmarking continues prospectively
   and larger architecture work remains deferred.
+- The subsequently supplied controlled address was submitted for SES sandbox-recipient verification,
+  but it resolves to that existing SignalHub administrator account. It was therefore not added to the
+  customer group or tenant tables: doing so would make the isolation test meaningless. SES recipient
+  verification remains pending; use a distinct non-admin mailbox (or a confirmed mailbox alias that
+  Cognito can treat as a separate email username) for the pilot account.
