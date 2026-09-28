@@ -618,3 +618,8 @@ Paid-pilot activation check (2026-09-28):
   plan is clean, daily planning/recruitment and weekly digest schedules remain enabled, and all primary
   queues and DLQs are empty. Commercial pilot recruitment is now the primary milestone while
   procurement and larger matching architecture remain deferred.
+- The CareProspect desktop hero now uses bounded, content-driven spacing instead of reserving the
+  browser viewport. Wide-screen copy and opportunity preview remain balanced, the timing section
+  follows the actual content, and the layout stacks at 900px to avoid a cramped tablet composition.
+  Frontend regression coverage prevents viewport-height sizing from returning; production deployment
+  and desktop/mobile verification are the completion gate for this focused correction.

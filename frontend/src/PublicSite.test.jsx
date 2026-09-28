@@ -1,7 +1,10 @@
+import { readFileSync } from "node:fs";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import PublicSite, { PublicLegalPage } from "./PublicSite.jsx";
+
+const styles = readFileSync("src/styles.css", "utf8");
 
 describe("CareProspect public website", () => {
   afterEach(() => {
@@ -18,6 +21,14 @@ describe("CareProspect public website", () => {
     expect(screen.getByRole("heading", { name: "How we handle evidence" })).toBeInTheDocument();
     expect(screen.getByText("£149")).toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: "Sign in" }).length).toBeGreaterThan(0);
+  });
+
+  it("keeps the hero content-driven rather than viewport-height-driven", () => {
+    const desktopHeroRule = styles.match(/\.cp-hero\s*\{([^}]*)\}/)?.[1] || "";
+    expect(desktopHeroRule).not.toMatch(/(?:min-)?height\s*:[^;]*vh/);
+    expect(desktopHeroRule).not.toMatch(/padding\s*:[^;]*vh/);
+    expect(desktopHeroRule).toContain("padding: 80px 2rem");
+    expect(styles).toContain("@media (max-width: 900px)");
   });
 
   it("submits a bounded access request and shows an in-page result", async () => {
