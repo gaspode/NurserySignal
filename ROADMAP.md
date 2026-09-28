@@ -544,3 +544,7 @@ Paid-pilot activation check (2026-09-28):
 - Customer-safe CareProspect projections remain unchanged and cannot expose Ofsted provider-office
   street addresses or internal match reasoning. Production deployment and a real pending-review
   verification are the remaining gates for this focused organisation-resolution improvement.
+- The first deployment safely stopped after updating application packages when the GitHub OIDC role
+  lacked permission to create the required private Lambda endpoint. The scoped deploy policy now
+  permits VPC-endpoint create/modify/delete and their resource tags in addition to its existing EC2
+  reads, and Terraform explicitly updates that self-managed policy before creating the endpoint.

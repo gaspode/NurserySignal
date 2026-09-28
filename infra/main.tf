@@ -144,6 +144,7 @@ resource "aws_vpc_endpoint" "lambda" {
   subnet_ids          = [local.lambda_subnet_ids[0]]
   security_group_ids  = [aws_security_group.secrets_endpoint.id]
   tags                = local.common_tags
+  depends_on          = [aws_iam_policy.github_actions]
 }
 
 resource "aws_vpc_endpoint" "s3" {

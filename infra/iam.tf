@@ -166,7 +166,8 @@ resource "aws_iam_policy" "github_actions" {
         Effect = "Allow"
         Action = [
           "apigateway:*", "cloudformation:DescribeStacks", "cloudfront:*", "cognito-idp:*",
-          "ec2:Describe*", "events:*",
+          "ec2:CreateTags", "ec2:CreateVpcEndpoint", "ec2:DeleteTags",
+          "ec2:DeleteVpcEndpoints", "ec2:Describe*", "ec2:ModifyVpcEndpoint", "events:*",
           "iam:CreateRole", "iam:DeleteRole", "iam:Get*",
           "iam:List*", "iam:PassRole", "iam:PutRolePolicy", "iam:DeleteRolePolicy",
           "iam:AttachRolePolicy", "iam:DetachRolePolicy", "lambda:*", "logs:*", "rds:*",
