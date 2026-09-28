@@ -3,11 +3,12 @@ from pathlib import Path
 API_TERRAFORM = Path(__file__).parents[1] / "infra" / "api.tf"
 
 
-def test_cors_configuration_is_restricted_to_admin_frontend_and_required_headers() -> None:
+def test_cors_configuration_is_restricted_to_deployed_frontends_and_required_headers() -> None:
     source = API_TERRAFORM.read_text()
 
     assert (
-        'allow_origins = ["https://${aws_cloudfront_distribution.frontend.domain_name}"]' in source
+        'allow_origins = ["https://${aws_cloudfront_distribution.frontend.domain_name}", '
+        '"https://careprospect.co.uk"]' in source
     )
     assert 'allow_headers = ["content-type", "authorization"]' in source
     assert 'allow_methods = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]' in source
