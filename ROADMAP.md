@@ -714,7 +714,21 @@ Paid-pilot activation check (2026-09-28):
   classifications with zero collector errors. A repeatable SQS event-source stall was contained by
   disabling the consumer, purging only the explicitly authorised Planning manual queue, and serially
   pumping chunks 33–79; chunks 1–32 were not re-queried and all other queues/DLQs were left untouched.
-  The existing post-backfill recalculation then exposed a genuine 15-second backend timeout, so the
-  backend's bounded-admin-operation timeout is being raised to 60 seconds without changing matching
-  policy. Recruitment correlation, bounded organisation enrichment and final curation impact remain the
-  last operational gates for this backfill.
+  The existing post-backfill recalculation then exposed a genuine 15-second backend timeout; commit
+  `5661953` raises only the backend bounded-admin-operation timeout to 60 seconds, with no matching-policy
+  change, and is deployed through the normal OIDC workflow. The retry completed: 100 current Recruitment
+  signals were reprocessed (96 relevant, four excluded), 200 vertical-scoped calculations reused 119
+  existing opportunities, and no new relationship, merge or Match Review item was produced. Unmatched
+  Recruitment therefore remains 104; the backfill added historical context and inventory, but did not
+  produce a defensible new Recruitment-to-Planning correlation under current rules.
+- Production now contains 864 NurserySignal and 1,321 CareProspect Planning signals in the backfill
+  window, with 621 and 1,135 opportunities respectively. The prior all-vertical baseline was 196
+  opportunities, so the run added 1,560 internal opportunities while leaving the six explicitly published
+  CareProspect records unchanged. The newest bounded sample of 100 CareProspect drafts contains no
+  publication-ready record because its evidence is still unreviewed; curation, rather than more source
+  ingestion, is the next data-quality step. One bounded Companies House batch attempted ten organisations,
+  resolving eight exact/strong and sending two to review with no errors. Plota reports 3,269/10,000 monthly
+  records used and 6,731 remaining. API/database health, HTTPS, daily Planning/Recruitment schedules, the
+  restored Planning consumer and the zero-drift Terraform plan all pass. All operational queues are empty;
+  five retained shared collector DLQ messages were deliberately not purged under the operator's explicit
+  safety constraint and require separate scoped triage if cleanup is desired.
