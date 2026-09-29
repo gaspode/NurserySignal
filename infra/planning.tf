@@ -42,8 +42,13 @@ resource "aws_iam_role_policy" "planning_collector_application" {
       },
       {
         Effect   = "Allow"
-        Action   = ["dynamodb:PutItem", "dynamodb:UpdateItem"]
+        Action   = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"]
         Resource = aws_dynamodb_table.source_runs.arn
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["sqs:SendMessage"]
+        Resource = aws_sqs_queue.planning_manual_runs.arn
       },
       {
         Effect = "Allow"
@@ -69,12 +74,13 @@ resource "aws_lambda_function" "planning_collector" {
 
   environment {
     variables = {
-      APP_ENV                      = var.environment
-      SERVICE_NAME                 = "${local.name_prefix}-planning-collector"
-      INGESTION_QUEUE_URL          = aws_sqs_queue.ingestion.url
-      PLANNING_PROVIDER_SECRET_ARN = aws_secretsmanager_secret.planning_provider.arn
-      PLANNING_PROVIDER_BASE_URL   = "https://api.plota.co.uk/v1"
-      SOURCE_RUNS_TABLE_NAME       = aws_dynamodb_table.source_runs.name
+      APP_ENV                       = var.environment
+      SERVICE_NAME                  = "${local.name_prefix}-planning-collector"
+      INGESTION_QUEUE_URL           = aws_sqs_queue.ingestion.url
+      PLANNING_PROVIDER_SECRET_ARN  = aws_secretsmanager_secret.planning_provider.arn
+      PLANNING_PROVIDER_BASE_URL    = "https://api.plota.co.uk/v1"
+      SOURCE_RUNS_TABLE_NAME        = aws_dynamodb_table.source_runs.name
+      PLANNING_MANUAL_RUN_QUEUE_URL = aws_sqs_queue.planning_manual_runs.url
     }
   }
 
@@ -107,8 +113,11 @@ resource "aws_lambda_event_source_mapping" "planning_manual_runs" {
   event_source_arn = aws_sqs_queue.planning_manual_runs.arn
   function_name    = aws_lambda_function.planning_collector.arn
   batch_size       = 1
-  enabled          = true
-  depends_on       = [aws_iam_role_policy.planning_collector_application]
+  scaling_config {
+    maximum_concurrency = 2
+  }
+  enabled    = true
+  depends_on = [aws_iam_role_policy.planning_collector_application]
 }
 
 resource "aws_cloudwatch_log_group" "ingestion_worker" {

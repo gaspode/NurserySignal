@@ -4,6 +4,8 @@ import json
 from dataclasses import replace
 from typing import Any
 
+import boto3
+
 from app.care import care_planning_signal, classify_care_planning
 from app.collector_events import collector_payload
 from app.config import Settings
@@ -16,9 +18,16 @@ from app.planning import (
     candidate_decision,
     planning_signal,
 )
+from app.planning_backfill import add_counts, bounds_from_chunk, chunk_payload
 from app.queueing import SignalIngestionMessage, send_ingestion_message
 from app.secrets import provider_api_key_from_secret
-from app.source_runs import finish_run, safe_failure, start_run
+from app.source_runs import (
+    finish_run,
+    get_run,
+    safe_failure,
+    start_run,
+    update_run_progress,
+)
 from app.verticals import CHILDRENS_HOME, NURSERY, VERTICAL_REGISTRY, validate_vertical
 
 logger = configure_logging()
@@ -39,21 +48,50 @@ def collect_planning(
     provider: PlanningProvider | None = None,
 ) -> dict[str, int]:
     event = event or {}
-    query = PlanningQuery.from_event(event)
+    historical_backfill = event.get("invocation_source") == "historical_backfill"
+    query = (
+        PlanningQuery.from_historical_event(event)
+        if historical_backfill
+        else PlanningQuery.from_event(event)
+    )
     requested_verticals = _requested_verticals(event)
     source = str(event.get("source", "manual"))[:32]
-    lookback_days = min(max(int(event.get("lookback_days", 2)), 1), 31)
+    lookback_days = (
+        (query.to_date - query.from_date).days + 1
+        if historical_backfill
+        else min(max(int(event.get("lookback_days", 2)), 1), 31)
+    )
     care_max_records = min(max(int(event.get("care_max_records", 50)), 1), 100)
     run_id, started_at = start_run(
         settings,
         source_key="planning",
         provider="Plota",
-        invocation_source="scheduled" if source == "scheduled" else "manual",
+        invocation_source=(
+            "historical_backfill"
+            if historical_backfill
+            else "scheduled"
+            if source == "scheduled"
+            else "manual"
+        ),
         parameters={
             "lookback_days": lookback_days,
+            "from_date": query.from_date.isoformat(),
+            "to_date": query.to_date.isoformat(),
             "max_records": query.max_records,
             "page_size": query.page_size,
             "care_max_records": care_max_records,
+            **(
+                {
+                    "backfill_version": event.get("backfill_version"),
+                    "backfill_id": event.get("backfill_id"),
+                    "chunk_index": event.get("chunk_index"),
+                    "chunks_total": event.get("chunks_total"),
+                    "requested_from_date": event.get("requested_from_date"),
+                    "requested_to_date": event.get("requested_to_date"),
+                }
+                if historical_backfill
+                else {}
+            ),
         },
         run_id=str(event.get("run_id")) if event.get("run_id") else None,
         started_at=str(event.get("run_started_at")) if event.get("run_started_at") else None,
@@ -100,6 +138,8 @@ def collect_planning(
             for record in provider.applications(provider_query):
                 record_key = (record.application_id, record.description)
                 if record_key in seen_records:
+                    if historical_backfill:
+                        counts["duplicates"] += 1
                     continue
                 seen_records.add(record_key)
                 counts["records_fetched"] += 1
@@ -107,10 +147,22 @@ def collect_planning(
                 care_decision = classify_care_planning(record)
                 signals = []
                 if NURSERY in requested_verticals and nursery_decision.matched:
-                    signals.append(planning_signal(record, nursery_decision))
+                    signals.append(
+                        planning_signal(
+                            record,
+                            nursery_decision,
+                            historical_source_date=historical_backfill,
+                        )
+                    )
                     counts["nursery_matched"] += 1
                 if CHILDRENS_HOME in requested_verticals and care_decision.matched:
-                    signals.append(care_planning_signal(record, care_decision))
+                    signals.append(
+                        care_planning_signal(
+                            record,
+                            care_decision,
+                            historical_source_date=historical_backfill,
+                        )
+                    )
                     counts["care_matched"] += 1
                 if not signals:
                     counts["excluded"] += 1
@@ -176,4 +228,81 @@ def collect_planning(
 
 
 def handler(event: dict[str, Any], context: Any) -> dict[str, int]:
-    return collect_planning(Settings.from_env(), collector_payload(event))
+    settings = Settings.from_env()
+    payload = collector_payload(event)
+    if payload.get("invocation_source") != "historical_backfill":
+        return collect_planning(settings, payload)
+
+    bounds = bounds_from_chunk(payload)
+    backfill_id = str(payload["backfill_id"])
+    parent_started_at = str(payload["parent_started_at"])
+    chunk_index = int(payload["chunk_index"])
+    if (
+        payload.get("from_date") != bounds.chunks[chunk_index][0].isoformat()
+        or payload.get("to_date") != bounds.chunks[chunk_index][1].isoformat()
+    ):
+        raise ValueError("historical Planning chunk boundaries are invalid")
+
+    run_id = str(payload["run_id"])
+    existing = get_run(
+        settings, "planning", run_id=run_id, started_at=str(payload["run_started_at"])
+    )
+    try:
+        counts = (
+            existing.get("counts", {})
+            if existing and existing.get("status") == "SUCCESS"
+            else collect_planning(settings, payload)
+        )
+        cumulative = add_counts(payload.get("cumulative_counts") or {}, counts)
+        cumulative["chunks_completed"] = chunk_index + 1
+        cumulative["chunks_total"] = len(bounds.chunks)
+        update_run_progress(
+            settings,
+            source_key="planning_backfill",
+            run_id=backfill_id,
+            started_at=parent_started_at,
+            counts=cumulative,
+        )
+        next_index = chunk_index + 1
+        if next_index < len(bounds.chunks):
+            if not settings.planning_manual_run_queue_url:
+                raise RuntimeError("PLANNING_MANUAL_RUN_QUEUE_URL is not configured")
+            response = boto3.client("sqs").send_message(
+                QueueUrl=settings.planning_manual_run_queue_url,
+                MessageBody=json.dumps(
+                    chunk_payload(
+                        bounds,
+                        backfill_id=backfill_id,
+                        parent_started_at=parent_started_at,
+                        chunk_index=next_index,
+                        cumulative_counts=cumulative,
+                    ),
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ),
+            )
+            if not response.get("MessageId"):
+                raise RuntimeError("next historical Planning chunk was not accepted")
+        else:
+            finish_run(
+                settings,
+                source_key="planning_backfill",
+                run_id=backfill_id,
+                started_at=parent_started_at,
+                status="SUCCESS",
+                counts=cumulative,
+            )
+        return cumulative
+    except Exception as exc:
+        category, message = safe_failure(exc)
+        finish_run(
+            settings,
+            source_key="planning_backfill",
+            run_id=backfill_id,
+            started_at=parent_started_at,
+            status="FAILED",
+            counts=payload.get("cumulative_counts") or {},
+            failure_category=category,
+            failure_message=message,
+        )
+        raise

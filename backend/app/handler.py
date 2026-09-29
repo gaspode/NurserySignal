@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 from uuid import UUID
@@ -51,6 +51,7 @@ from app.historical_research_repository import import_bundled_historical_corpus
 from app.ingestion import NormalizedSignal
 from app.logging import configure_logging
 from app.organisation_lookup import ManualCompanyLookupError, lookup_manual_company_candidate
+from app.planning_backfill import PlanningBackfillBounds, chunk_payload
 from app.repository import (
     create_opportunity_from_signal,
     link_signal_to_opportunity,
@@ -80,7 +81,7 @@ from app.repository import (
 )
 from app.service import EnrichmentQueueError, SignalConflictError, ingest_signal, parse_json_payload
 from app.shadow_review import UnsupportedShadowSourceError, reevaluate_ai_shadow
-from app.source_runs import finish_run, list_runs, start_run
+from app.source_runs import finish_run, get_run, list_runs, start_run
 from app.storage import EvidencePersistenceError, presigned_evidence_url
 from app.verticals import ALL_VERTICALS, registry_payload, validate_vertical_filter
 
@@ -277,6 +278,15 @@ def _admin_path(path: str) -> tuple[str, str | None]:
         return "organisation-detail", path[len("/admin/organisations/") :]
     if path == "/admin/sources":
         return "source-list", None
+    if path == "/admin/sources/planning/backfill":
+        return "planning-backfill-start", None
+    if path.startswith("/admin/sources/planning/backfills/"):
+        remainder = path[len("/admin/sources/planning/backfills/") :]
+        parts = remainder.split("/")
+        if len(parts) == 2 and parts[1] == "recalculate":
+            return "planning-backfill-recalculate", parts[0]
+        if len(parts) == 1:
+            return "planning-backfill-status", parts[0]
     if path == "/admin/procurement-evaluation":
         return "procurement-evaluation", None
     if path.startswith("/admin/sources/") and path.endswith("/run"):
@@ -900,7 +910,205 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                             "recent_runs": runs,
                         }
                     )
-                return _response(200, {"items": sources})
+                backfills = list_runs(settings, "planning_backfill", limit=5)
+                return _response(
+                    200,
+                    {
+                        "items": sources,
+                        "planning_backfill": backfills[0] if backfills else None,
+                    },
+                )
+            if action == "planning-backfill-start" and method == "POST":
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                if not settings.planning_manual_run_queue_url:
+                    return _response(503, {"error": "collector_not_configured"})
+                payload_body = parse_json_payload(_raw_body(event))
+                today = datetime.now(UTC).date()
+                bounds = PlanningBackfillBounds.from_values(
+                    from_date=str(payload_body.get("from_date") or today - timedelta(days=547)),
+                    to_date=str(payload_body.get("to_date") or today),
+                    vertical=str(payload_body.get("vertical") or ALL_VERTICALS),
+                    total_record_cap=int(payload_body.get("max_records") or 60_000),
+                    chunk_days=int(payload_body.get("chunk_days") or 7),
+                )
+                run_id, started_at = start_run(
+                    settings,
+                    source_key="planning_backfill",
+                    provider="Plota",
+                    invocation_source="historical_backfill",
+                    parameters=bounds.parameters(),
+                )
+                command = chunk_payload(
+                    bounds,
+                    backfill_id=run_id,
+                    parent_started_at=started_at,
+                    chunk_index=0,
+                )
+                try:
+                    response = boto3.client("sqs").send_message(
+                        QueueUrl=settings.planning_manual_run_queue_url,
+                        MessageBody=json.dumps(command, separators=(",", ":"), sort_keys=True),
+                    )
+                    if not response.get("MessageId"):
+                        raise RuntimeError("historical Planning command was not accepted")
+                except Exception as exc:
+                    finish_run(
+                        settings,
+                        source_key="planning_backfill",
+                        run_id=run_id,
+                        started_at=started_at,
+                        status="FAILED",
+                        counts={},
+                        failure_category=type(exc).__name__,
+                        failure_message=str(exc)[:240].replace("\n", " "),
+                    )
+                    return _response(503, {"error": "collector_invocation_failed"})
+                actor = str(claims.get("sub") or claims.get("username") or "unknown")
+                try:
+                    record_admin_audit(
+                        settings,
+                        action="planning_historical_backfill_started",
+                        actor=actor,
+                        target_type="collector",
+                        details={"run_id": run_id, **bounds.parameters(), "bounded": True},
+                    )
+                except Exception:
+                    logger.exception(
+                        "planning_historical_backfill_audit_failed run_id=%s", run_id
+                    )
+                return _response(
+                    202,
+                    {
+                        "run_id": run_id,
+                        "status": "RUNNING",
+                        "parameters": bounds.parameters(),
+                    },
+                )
+            if action == "planning-backfill-status" and method == "GET" and signal_id:
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                parent = next(
+                    (
+                        item
+                        for item in list_runs(settings, "planning_backfill", limit=25)
+                        if item["id"] == signal_id
+                    ),
+                    None,
+                )
+                if not parent:
+                    return _response(404, {"error": "not_found"})
+                chunks = [
+                    item
+                    for item in list_runs(settings, "planning", limit=100)
+                    if item.get("parameters", {}).get("backfill_id") == signal_id
+                ]
+                return _response(
+                    200,
+                    {
+                        **parent,
+                        "chunks": sorted(
+                            chunks,
+                            key=lambda item: item.get("parameters", {}).get("chunk_index", 0),
+                        ),
+                    },
+                )
+            if action == "planning-backfill-recalculate" and method == "POST" and signal_id:
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                parent = next(
+                    (
+                        item
+                        for item in list_runs(settings, "planning_backfill", limit=25)
+                        if item["id"] == signal_id
+                    ),
+                    None,
+                )
+                if not parent:
+                    return _response(404, {"error": "not_found"})
+                if parent.get("status") != "SUCCESS":
+                    raise ValueError(
+                        "historical Planning backfill must complete before recalculation"
+                    )
+                existing = get_run(
+                    settings,
+                    "planning_backfill_finalization",
+                    run_id=signal_id,
+                    started_at=str(parent["started_at"]),
+                )
+                if existing and existing.get("status") == "SUCCESS":
+                    return _response(200, existing.get("counts") or {})
+                start_run(
+                    settings,
+                    source_key="planning_backfill_finalization",
+                    provider="SignalHub",
+                    invocation_source="historical_backfill",
+                    parameters={"backfill_id": signal_id, "bounded": True},
+                    run_id=signal_id,
+                    started_at=str(parent["started_at"]),
+                )
+                actor = str(claims.get("sub") or claims.get("username") or "unknown")
+                try:
+                    recruitment = reprocess_recruitment_signals(
+                        settings, actor=actor, limit=100
+                    )
+                    totals: dict[str, int] = {}
+                    for vertical in parent.get("parameters", {}).get(
+                        "verticals", ["NURSERY", "CHILDRENS_HOME"]
+                    ):
+                        for offset in (0, 25, 50, 75):
+                            result = recalculate_opportunity_creation(
+                                settings,
+                                actor=actor,
+                                limit=25,
+                                offset=offset,
+                                vertical=vertical,
+                            )
+                            for key in (
+                                "selected",
+                                "created",
+                                "linked",
+                                "reused",
+                                "relationships_created",
+                                "merged",
+                                "review_required",
+                            ):
+                                totals[key] = totals.get(key, 0) + int(result.get(key) or 0)
+                    final_counts = {
+                        "recruitment_reprocessed": recruitment,
+                        "recalculation": totals,
+                    }
+                    finish_run(
+                        settings,
+                        source_key="planning_backfill_finalization",
+                        run_id=signal_id,
+                        started_at=str(parent["started_at"]),
+                        status="SUCCESS",
+                        counts=final_counts,
+                    )
+                except Exception as exc:
+                    finish_run(
+                        settings,
+                        source_key="planning_backfill_finalization",
+                        run_id=signal_id,
+                        started_at=str(parent["started_at"]),
+                        status="FAILED",
+                        counts={},
+                        failure_category=type(exc).__name__,
+                        failure_message=str(exc)[:240].replace("\n", " "),
+                    )
+                    raise
+                record_admin_audit(
+                    settings,
+                    action="planning_historical_backfill_recalculated",
+                    actor=actor,
+                    target_type="collector",
+                    details={"run_id": signal_id, **totals, "bounded": True},
+                )
+                return _response(200, final_counts)
             if action == "procurement-evaluation" and method == "GET":
                 admin_error = _require_admin(claims, settings)
                 if admin_error:

@@ -336,6 +336,29 @@ describe("admin frontend", () => {
     expect(screen.getByText(/3 relevant and 3 newly accepted/)).toBeInTheDocument();
   });
 
+  it("starts a bounded weekly historical Planning backfill", async () => {
+    const apiClient = vi.fn()
+      .mockResolvedValueOnce({ items: [] })
+      .mockResolvedValueOnce({
+        run_id: "backfill-1",
+        status: "RUNNING",
+        parameters: { chunks_total: 79 },
+      });
+    render(<SourcesPage apiClient={apiClient} selectedVertical="ALL" />);
+    await screen.findByRole("heading", { name: "Planning historical backfill" });
+    expect(screen.getByText(/does not auto-publish customer opportunities/i)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Start bounded backfill" }));
+    expect(apiClient).toHaveBeenCalledWith(
+      "/admin/sources/planning/backfill",
+      expect.objectContaining({ method: "POST" }),
+    );
+    const request = JSON.parse(apiClient.mock.calls[1][1].body);
+    expect(request.vertical).toBe("ALL");
+    expect(request.chunk_days).toBe(7);
+    expect(request.max_records).toBe(60000);
+    expect(await screen.findByText(/started in 79 weekly chunks/i)).toBeInTheDocument();
+  });
+
   it("shows Companies House enrichment and keeps ambiguous matches reviewable", async () => {
     const apiClient = vi.fn()
       .mockResolvedValueOnce({ items: [{ id: "operator-1", name: "Acme Care", legal_name: "ACME CARE LIMITED", vertical: "CHILDRENS_HOME", companies_house_number: "12345678", company_status: "active", signal_count: 2, opportunity_count: 1 }] })

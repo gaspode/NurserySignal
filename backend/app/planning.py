@@ -121,6 +121,24 @@ class PlanningQuery:
             page_size=page_size,
         )
 
+    @classmethod
+    def from_historical_event(cls, event: dict[str, Any]) -> PlanningQuery:
+        """Build one explicit bounded backfill query without relaxing live-run bounds."""
+        from_date = date.fromisoformat(str(event["from_date"]))
+        to_date = date.fromisoformat(str(event["to_date"]))
+        if to_date < from_date:
+            raise ValueError("to_date must not be before from_date")
+        if (to_date - from_date).days >= 7:
+            raise ValueError("historical Planning chunks cannot exceed 7 days")
+        return cls(
+            from_date=from_date,
+            to_date=to_date,
+            search_term=str(event.get("search_term", "nursery")),
+            council=str(event["council"]) if event.get("council") else None,
+            max_records=min(max(int(event.get("max_records", 500)), 1), 500),
+            page_size=min(max(int(event.get("page_size", 100)), 1), 250),
+        )
+
 
 @dataclass(frozen=True)
 class PlanningRecord:
@@ -392,7 +410,12 @@ def candidate_decision(record: PlanningRecord) -> CandidateDecision:
     )
 
 
-def planning_signal(record: PlanningRecord, decision: CandidateDecision) -> dict[str, Any]:
+def planning_signal(
+    record: PlanningRecord,
+    decision: CandidateDecision,
+    *,
+    historical_source_date: bool = False,
+) -> dict[str, Any]:
     status = record.status or record.decision or "pending"
     title = record.description or f"Planning application {record.application_id}"
     raw_text = "\n".join(
@@ -426,12 +449,15 @@ def planning_signal(record: PlanningRecord, decision: CandidateDecision) -> dict
         "candidate_horticultural_terms": list(decision.horticultural_terms),
         "provider_record": record.raw,
     }
+    discovered_at = datetime.now(UTC)
+    if historical_source_date and record.application_date:
+        discovered_at = datetime.combine(record.application_date, datetime.min.time(), UTC)
     return {
         "schema_version": "1.0",
         "source_type": "planning",
         "source_url": record.application_url,
         "external_id": f"plota:{record.application_id}",
-        "discovered_at": datetime.now(UTC).isoformat(),
+        "discovered_at": discovered_at.isoformat(),
         "title": title[:500],
         "raw_text": raw_text[:100_000],
         "location_hint": record.address,

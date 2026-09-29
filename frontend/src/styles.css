@@ -79,6 +79,10 @@ h2 { color: #102a43; font-size: 1rem; margin-bottom: 1rem; }
 .source-history { border-top: 1px solid #f0f4f8; margin-top: 1rem; padding-top: 0.8rem; }
 .source-history summary { color: #1967a3; cursor: pointer; font-size: 0.8rem; font-weight: 700; }
 .source-history-row { align-items: center; color: #627d98; display: flex; font-size: 0.75rem; justify-content: space-between; padding: 0.45rem 0; }
+.historical-backfill-card { margin-top: 1.25rem; }
+.historical-backfill-form { align-items: end; display: flex; flex-wrap: wrap; gap: 0.8rem; margin-top: 1rem; }
+.historical-backfill-form label { min-width: 170px; }
+.historical-backfill-status { background: #f8fafc; border: 1px solid #d9e2ec; border-radius: 8px; margin-top: 1rem; padding: 1rem; }
 .organisation-review-panel { display: grid; gap: 1rem; margin-bottom: 1.5rem; }
 .organisation-review { border-top: 1px solid #d9e2ec; padding: 1.4rem 0 0; }
 .organisation-review-heading, .company-candidate-heading, .source-context-item, .candidate-actions { align-items: flex-start; display: flex; gap: 1rem; justify-content: space-between; }

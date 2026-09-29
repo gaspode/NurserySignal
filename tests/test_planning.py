@@ -8,6 +8,7 @@ from urllib.error import HTTPError
 
 import pytest
 from app.collector import collect_planning
+from app.collector import handler as planning_handler
 from app.config import Settings
 from app.planning import (
     PlanningQuery,
@@ -18,6 +19,7 @@ from app.planning import (
     normalize_plota_record,
     planning_signal,
 )
+from app.planning_backfill import PlanningBackfillBounds, chunk_payload
 
 
 def record(description: str, *, address: str = "12 High Street, Bristol BS1 1AA") -> PlanningRecord:
@@ -56,6 +58,92 @@ def test_query_lookback_is_clamped() -> None:
 
     assert (short_query.to_date - short_query.from_date).days == 1
     assert (long_query.to_date - long_query.from_date).days == 31
+
+
+def test_historical_query_requires_an_explicit_weekly_range() -> None:
+    query = PlanningQuery.from_historical_event(
+        {"from_date": "2025-03-29", "to_date": "2025-04-04", "max_records": 9999}
+    )
+    assert query.from_date == date(2025, 3, 29)
+    assert query.to_date == date(2025, 4, 4)
+    assert query.max_records == 500
+    with pytest.raises(ValueError, match="cannot exceed 7 days"):
+        PlanningQuery.from_historical_event({"from_date": "2025-03-29", "to_date": "2025-04-05"})
+
+
+def test_historical_backfill_is_bounded_and_chunked_without_changing_live_clamp() -> None:
+    bounds = PlanningBackfillBounds.from_values(
+        from_date="2025-03-29",
+        to_date="2026-09-29",
+        vertical="ALL",
+        total_record_cap=60_000,
+    )
+    assert len(bounds.chunks) == 79
+    assert bounds.chunks[0] == (date(2025, 3, 29), date(2025, 4, 4))
+    assert bounds.chunks[-1][1] == date(2026, 9, 29)
+    payload = chunk_payload(
+        bounds,
+        backfill_id="backfill-1",
+        parent_started_at="2026-09-29T12:00:00+00:00",
+        chunk_index=0,
+    )
+    assert payload["invocation_source"] == "historical_backfill"
+    assert payload["verticals"] == ["NURSERY", "CHILDRENS_HOME"]
+    assert payload["from_date"] == "2025-03-29"
+    assert payload["to_date"] == "2025-04-04"
+    with pytest.raises(ValueError, match="cannot exceed 550 days"):
+        PlanningBackfillBounds.from_values(from_date="2025-01-01", to_date="2026-09-29")
+
+
+def test_historical_planning_signal_preserves_source_date() -> None:
+    item = record("Change of use to a day nursery")
+    signal = planning_signal(item, candidate_decision(item), historical_source_date=True)
+    assert signal["discovered_at"] == "2026-09-23T00:00:00+00:00"
+
+
+def test_completed_backfill_chunk_is_reused_and_next_chunk_is_queued_once(
+    monkeypatch,
+) -> None:
+    bounds = PlanningBackfillBounds.from_values(
+        from_date="2026-09-01",
+        to_date="2026-09-14",
+        vertical="ALL",
+        total_record_cap=1000,
+    )
+    payload = chunk_payload(
+        bounds,
+        backfill_id="backfill-1",
+        parent_started_at="2026-09-29T12:00:00+00:00",
+        chunk_index=0,
+    )
+    settings = Settings(
+        source_runs_table_name="runs",
+        planning_manual_run_queue_url="https://sqs.example/planning",
+    )
+    monkeypatch.setattr("app.collector.Settings.from_env", lambda: settings)
+    monkeypatch.setattr(
+        "app.collector.get_run",
+        lambda *args, **kwargs: {"status": "SUCCESS", "counts": {"records_fetched": 12}},
+    )
+    monkeypatch.setattr(
+        "app.collector.collect_planning",
+        lambda *args, **kwargs: pytest.fail("completed chunk should not be collected twice"),
+    )
+    monkeypatch.setattr("app.collector.update_run_progress", lambda *args, **kwargs: None)
+    sent = []
+
+    class FakeSqs:
+        def send_message(self, **kwargs):
+            sent.append(json.loads(kwargs["MessageBody"]))
+            return {"MessageId": "next-1"}
+
+    monkeypatch.setattr("app.collector.boto3.client", lambda name: FakeSqs())
+    result = planning_handler(payload, None)
+    assert result["records_fetched"] == 12
+    assert result["chunks_completed"] == 1
+    assert len(sent) == 1
+    assert sent[0]["chunk_index"] == 1
+    assert sent[0]["cumulative_counts"]["records_fetched"] == 12
 
 
 def test_positive_and_exclusion_matching() -> None:
@@ -292,10 +380,10 @@ def test_collector_queues_only_candidates_and_reports_counts(monkeypatch) -> Non
     }
     assert queued[0].signal["external_id"] == "plota:abc123"
     assert logged == [
-            "planning_collection_summary fetched=2 matched=1 queued=1 duplicates=0 "
-            "excluded=1 errors=0 nursery_matched=1 care_matched=0 "
-            "lookback_days=2 max_records=100 care_max_records=50 page_size=50 source=manual"
-        ]
+        "planning_collection_summary fetched=2 matched=1 queued=1 duplicates=0 "
+        "excluded=1 errors=0 nursery_matched=1 care_matched=0 "
+        "lookback_days=2 max_records=100 care_max_records=50 page_size=50 source=manual"
+    ]
 
 
 def test_shared_planning_collector_honours_requested_vertical(monkeypatch) -> None:

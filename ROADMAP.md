@@ -679,3 +679,12 @@ Paid-pilot activation check (2026-09-28):
   median flag and a quieter middle-50% band label; Recruitment uses a ring, stem and labelled point
   without implying a range. Summary cards now separate planning range, planning median and the
   recruitment example, and the public qualification uses concise reconstructed-history wording.
+- A separate, admin-only Planning historical-backfill path now accepts an explicit date range of at
+  most 550 days and processes it as a serial chain of weekly Plota chunks. It reuses the live NurserySignal
+  and CareProspect classifiers, ingestion, matching and revision semantics while leaving the scheduled
+  two-day run and its normal 31-day query guard unchanged. Source application dates are retained as
+  historical discovery dates, retrieval remains separately timestamped by ingestion, run/chunk provenance
+  is durable, customer publication remains explicitly gated, and a bounded idempotent finalisation action
+  reprocesses current Recruitment before opportunity recalculation. Production dry-run quality, the full
+  18-month counts, Recruitment correlation impact and customer-curation candidates remain the operational
+  gates before deciding whether any further data work is justified.

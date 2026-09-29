@@ -210,7 +210,12 @@ def classify_care_recruitment(record: RecruitmentRecord) -> dict[str, Any]:
     }
 
 
-def care_planning_signal(record: PlanningRecord, decision: CarePlanningDecision) -> dict[str, Any]:
+def care_planning_signal(
+    record: PlanningRecord,
+    decision: CarePlanningDecision,
+    *,
+    historical_source_date: bool = False,
+) -> dict[str, Any]:
     from app.planning import planning_signal
 
     class CompatibleDecision:
@@ -220,7 +225,9 @@ def care_planning_signal(record: PlanningRecord, decision: CarePlanningDecision)
         childcare_terms: tuple[str, ...] = ()
         horticultural_terms: tuple[str, ...] = ()
 
-    signal = planning_signal(record, CompatibleDecision())  # type: ignore[arg-type]
+    signal = planning_signal(  # type: ignore[arg-type]
+        record, CompatibleDecision(), historical_source_date=historical_source_date
+    )
     signal["vertical"] = "CHILDRENS_HOME"
     signal["metadata"]["care_classification"] = {
         "matched": decision.matched,

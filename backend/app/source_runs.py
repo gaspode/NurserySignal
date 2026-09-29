@@ -95,6 +95,76 @@ def finish_run(
         return
 
 
+def update_run_progress(
+    settings: Settings,
+    *,
+    source_key: str,
+    run_id: str,
+    started_at: str,
+    counts: dict[str, Any],
+) -> None:
+    """Persist absolute progress for a multi-invocation bounded source run."""
+    if not settings.source_runs_table_name:
+        return
+    try:
+        boto3.client("dynamodb").update_item(
+            TableName=settings.source_runs_table_name,
+            Key={
+                "source_key": {"S": source_key},
+                "run_key": {"S": f"{started_at}#{run_id}"},
+            },
+            UpdateExpression="SET counts = :counts, #status = :status",
+            ExpressionAttributeNames={"#status": "status"},
+            ExpressionAttributeValues={
+                ":counts": {"S": json.dumps(counts, separators=(",", ":"), sort_keys=True)},
+                ":status": {"S": "RUNNING"},
+            },
+        )
+    except Exception:
+        return
+
+
+def get_run(
+    settings: Settings, source_key: str, *, run_id: str, started_at: str
+) -> dict[str, Any] | None:
+    if not settings.source_runs_table_name:
+        return None
+    response = boto3.client("dynamodb").get_item(
+        TableName=settings.source_runs_table_name,
+        Key={
+            "source_key": {"S": source_key},
+            "run_key": {"S": f"{started_at}#{run_id}"},
+        },
+        ConsistentRead=True,
+    )
+    item = response.get("Item")
+    if not item:
+        return None
+
+    def value(name: str, default: Any = None) -> Any:
+        entry = item.get(name)
+        return entry.get("S", default) if entry else default
+
+    try:
+        counts = json.loads(value("counts", "{}"))
+        parameters = json.loads(value("parameters", "{}"))
+    except (TypeError, ValueError):
+        counts, parameters = {}, {}
+    return {
+        "id": value("run_id"),
+        "source_key": source_key,
+        "provider": value("provider"),
+        "invocation_source": value("invocation_source"),
+        "started_at": value("started_at"),
+        "completed_at": value("completed_at"),
+        "status": value("status"),
+        "counts": counts,
+        "parameters": parameters,
+        "failure_category": value("failure_category"),
+        "failure_message": value("failure_message"),
+    }
+
+
 def list_runs(settings: Settings, source_key: str, *, limit: int = 10) -> list[dict[str, Any]]:
     if not settings.source_runs_table_name:
         return []
@@ -103,7 +173,7 @@ def list_runs(settings: Settings, source_key: str, *, limit: int = 10) -> list[d
         KeyConditionExpression="source_key = :source",
         ExpressionAttributeValues={":source": {"S": source_key}},
         ScanIndexForward=False,
-        Limit=min(max(limit, 1), 25),
+        Limit=min(max(limit, 1), 100),
     )
     results = []
     for item in response.get("Items", []):

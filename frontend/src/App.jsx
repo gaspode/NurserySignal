@@ -274,10 +274,19 @@ export function SourcesPage({ apiClient, selectedVertical = "NURSERY" }) {
   const [error, setError] = useState(null);
   const [notice, setNotice] = useState("");
   const [backfillBusy, setBackfillBusy] = useState(false);
+  const today = new Date().toISOString().slice(0, 10);
+  const historicalStart = new Date(Date.now() - (547 * 86400000)).toISOString().slice(0, 10);
+  const [historicalForm, setHistoricalForm] = useState({ from_date: historicalStart, to_date: today, max_records: 60000 });
+  const [historicalRun, setHistoricalRun] = useState(null);
+  const [historicalBusy, setHistoricalBusy] = useState(false);
   const load = async ({ initial = false } = {}) => {
     if (initial) setLoading(true); else setRefreshing(true);
     setError(null);
-    try { setSources((await apiClient("/admin/sources")).items || []); }
+    try {
+      const result = await apiClient("/admin/sources");
+      setSources(result.items || []);
+      if (result.planning_backfill) setHistoricalRun({ ...result.planning_backfill, run_id: result.planning_backfill.id });
+    }
     catch (loadError) { setError({ title: "Sources unavailable", message: loadError.message || "The source status could not be loaded." }); }
     finally { setLoading(false); setRefreshing(false); }
   };
@@ -327,6 +336,42 @@ export function SourcesPage({ apiClient, selectedVertical = "NURSERY" }) {
       setError({ title: "CareProspect backfill could not be completed", message: backfillError.message || "Please try again later." });
     } finally { setBackfillBusy(false); }
   }
+  useEffect(() => {
+    if (!historicalRun?.run_id || historicalRun.status !== "RUNNING") return undefined;
+    const timer = window.setInterval(async () => {
+      try {
+        const status = await apiClient(`/admin/sources/planning/backfills/${historicalRun.run_id}`);
+        setHistoricalRun({ ...status, run_id: status.id });
+        if (status.status !== "RUNNING") setNotice(`Historical Planning backfill ${status.status.toLowerCase()}.`);
+      } catch (pollError) {
+        setError({ title: "Backfill status unavailable", message: pollError.message || "The historical run status could not be loaded." });
+      }
+    }, 4000);
+    return () => window.clearInterval(timer);
+  }, [historicalRun?.run_id, historicalRun?.status, apiClient]);
+  async function runHistoricalBackfill(event) {
+    event.preventDefault();
+    setHistoricalBusy(true); setError(null); setNotice("");
+    try {
+      const result = await apiClient("/admin/sources/planning/backfill", {
+        method: "POST",
+        body: JSON.stringify({ ...historicalForm, vertical: selectedVertical, chunk_days: 7 }),
+      });
+      setHistoricalRun(result);
+      setNotice(`Historical Planning backfill started in ${result.parameters.chunks_total} weekly chunks.`);
+    } catch (backfillError) {
+      setError({ title: "Historical backfill could not be started", message: backfillError.message || "Please check the bounded date range and try again." });
+    } finally { setHistoricalBusy(false); }
+  }
+  async function recalculateHistoricalBackfill() {
+    setHistoricalBusy(true); setError(null);
+    try {
+      const result = await apiClient(`/admin/sources/planning/backfills/${historicalRun.run_id}/recalculate`, { method: "POST", body: "{}" });
+      setNotice(`Recruitment correlation reconsidered ${result.recruitment_reprocessed?.selected || 0} signals; ${result.recalculation?.relationships_created || 0} new relationships formed.`);
+    } catch (recalculateError) {
+      setError({ title: "Backfill recalculation failed", message: recalculateError.message || "The bounded recruitment recalculation could not be completed." });
+    } finally { setHistoricalBusy(false); }
+  }
   if (loading) return <LoadingState label="Loading sources" />;
   return <section>
     <div className="page-heading"><div><p className="eyebrow">Collection operations</p><h1>Sources</h1><p className="muted">Monitor configured collectors and start bounded manual runs.</p></div><RefreshButton busy={refreshing} onClick={load} /></div>
@@ -346,6 +391,17 @@ export function SourcesPage({ apiClient, selectedVertical = "NURSERY" }) {
     <article className="panel source-card">
       <div className="source-card-heading"><div><p className="eyebrow">CareProspect activation</p><h2>Stored-evidence backfill</h2><p className="muted">Re-evaluate up to 25 preserved Planning records and Care-targeted Recruitment records from the last 60 days. Providers are not called.</p></div><Badge>Bounded</Badge></div>
       <button className="button secondary" onClick={runCareBackfill} disabled={backfillBusy || Boolean(running)}>{backfillBusy ? "Evaluating…" : "Run CareProspect backfill"}</button>
+    </article>
+    <article className="panel source-card historical-backfill-card">
+      <div className="source-card-heading"><div><p className="eyebrow">One-off historical context</p><h2>Planning historical backfill</h2><p className="muted">Collect explicit weekly Plota ranges with current production classification. Historical opportunities remain unpublished unless separately curated.</p></div><Badge>Admin only</Badge></div>
+      <div className="notice">Historical backfill uses production classification but does not auto-publish customer opportunities.</div>
+      <form className="historical-backfill-form" onSubmit={runHistoricalBackfill}>
+        <label>From date<input type="date" value={historicalForm.from_date} max={historicalForm.to_date} onChange={(event) => setHistoricalForm({ ...historicalForm, from_date: event.target.value })} required /></label>
+        <label>To date<input type="date" value={historicalForm.to_date} min={historicalForm.from_date} max={today} onChange={(event) => setHistoricalForm({ ...historicalForm, to_date: event.target.value })} required /></label>
+        <label>Total record cap<input type="number" min="100" max="60000" step="100" value={historicalForm.max_records} onChange={(event) => setHistoricalForm({ ...historicalForm, max_records: Number(event.target.value) })} required /></label>
+        <button className="button secondary" type="submit" disabled={historicalBusy || historicalRun?.status === "RUNNING"}>{historicalBusy ? "Starting…" : "Start bounded backfill"}</button>
+      </form>
+      {historicalRun && <div className="historical-backfill-status" role="status"><div className="source-card-heading"><strong>{historicalRun.status}</strong><span>{historicalRun.counts?.chunks_completed || 0} / {historicalRun.parameters?.chunks_total || historicalRun.counts?.chunks_total || 0} chunks</span></div><div className="source-counts"><span>Fetched <strong>{historicalRun.counts?.records_fetched || 0}</strong></span><span>NurserySignal <strong>{historicalRun.counts?.nursery_matched || 0}</strong></span><span>CareProspect <strong>{historicalRun.counts?.care_matched || 0}</strong></span><span>Queued <strong>{historicalRun.counts?.signals_queued || 0}</strong></span><span>Excluded <strong>{historicalRun.counts?.excluded || 0}</strong></span><span>Errors <strong>{historicalRun.counts?.errors || 0}</strong></span></div>{historicalRun.failure_message && <p className="inline-alert">{historicalRun.failure_message}</p>}{historicalRun.status === "SUCCESS" && <button className="button secondary" onClick={recalculateHistoricalBackfill} disabled={historicalBusy}>{historicalBusy ? "Recalculating…" : "Recalculate current recruitment"}</button>}</div>}
     </article>
     {error && <AlertModal title={error.title} message={error.message} onClose={() => setError(null)} />}
   </section>;

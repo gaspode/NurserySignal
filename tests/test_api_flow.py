@@ -638,6 +638,51 @@ def test_source_manual_run_uses_fixed_bounds_and_exact_lambda(monkeypatch) -> No
     }
 
 
+def test_historical_planning_backfill_queues_only_first_bounded_chunk(monkeypatch) -> None:
+    settings = SimpleNamespace(
+        environment="test",
+        admin_group="NurserySignalAdmins",
+        source_runs_table_name=None,
+        planning_manual_run_queue_url="https://sqs.example/planning-manual-runs",
+    )
+    monkeypatch.setattr("app.handler.Settings.from_env", lambda: settings)
+    monkeypatch.setattr(
+        "app.handler.start_run",
+        lambda *args, **kwargs: ("backfill-1", "2026-09-29T12:00:00+00:00"),
+    )
+    monkeypatch.setattr("app.handler.record_admin_audit", lambda *args, **kwargs: "audit-1")
+    sent = []
+
+    class FakeSqs:
+        def send_message(self, **kwargs):
+            sent.append(json.loads(kwargs["MessageBody"]))
+            return {"MessageId": "message-1"}
+
+    monkeypatch.setattr("app.handler.boto3.client", lambda name: FakeSqs())
+    response = handler(
+        event(
+            "/admin/sources/planning/backfill",
+            "POST",
+            body=json.dumps(
+                {
+                    "from_date": "2025-03-29",
+                    "to_date": "2026-09-29",
+                    "vertical": "ALL",
+                    "max_records": 60000,
+                }
+            ),
+        ),
+        None,
+    )
+    assert response["statusCode"] == 202
+    assert len(sent) == 1
+    assert sent[0]["chunk_index"] == 0
+    assert sent[0]["chunks_total"] == 79
+    assert sent[0]["from_date"] == "2025-03-29"
+    assert sent[0]["to_date"] == "2025-04-04"
+    assert sent[0]["verticals"] == ["NURSERY", "CHILDRENS_HOME"]
+
+
 def test_companies_house_manual_run_uses_server_selected_bounded_candidates(
     monkeypatch,
 ) -> None:
