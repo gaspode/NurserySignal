@@ -10,8 +10,15 @@ from uuid import UUID
 from psycopg.types.json import Jsonb
 
 from app.care_planning_review import (
+    CARE_PLANNING_AI_APPROVAL_MIN_CONFIDENCE,
+    CARE_PLANNING_AI_APPROVAL_POLICY_VERSION,
+    CARE_PLANNING_AI_APPROVAL_PROMPT_VERSION,
+    CARE_PLANNING_AI_APPROVAL_SUBTYPES,
     CARE_PLANNING_FASTPATH_POLICY_VERSION,
     WITHDRAWAL_POLICY_VERSION,
+    care_planning_ai_approval_exclusion,
+    care_planning_ai_approval_outcome,
+    care_planning_ai_approval_qa_bucket,
     care_planning_fastpath_eligible,
     care_planning_fastpath_qa_bucket,
     care_planning_fastpath_qa_holdout,
@@ -1895,7 +1902,12 @@ def reclassify_pending_care_planning(
                 candidate = policy_for("CHILDRENS_HOME").classify_signal(raw)
                 facts = candidate["extracted_facts"]
                 existing = raw.get("existing_facts") or {}
-                for marker_name in ("automatic_review", "safe_approval", "care_planning_fastpath"):
+                for marker_name in (
+                    "automatic_review",
+                    "safe_approval",
+                    "care_planning_fastpath",
+                    "care_planning_ai_approval",
+                ):
                     if marker_name in existing:
                         facts[marker_name] = existing[marker_name]
                 subtype = str(facts.get("planning_subtype") or "AMBIGUOUS")
@@ -2204,6 +2216,335 @@ def apply_care_planning_fastpath_policy(
             )
             conn.commit()
         return {"signal_id": signal_id, "outcome": outcome, "updated": bool(updated)}
+
+
+def _care_planning_ai_approval_rows(settings: Settings) -> list[dict[str, Any]]:
+    with connection(settings) as conn:
+        rows = conn.execute(
+            """
+            SELECT rs.id, rs.vertical, rs.source_type, rs.metadata, se.review_status,
+                   se.reviewed_by, se.extracted_facts, ai.status, ai.recommendation,
+                   ai.confidence, ai.prompt_version
+            FROM raw_signals rs
+            JOIN signal_enrichments se ON se.raw_signal_id = rs.id
+            LEFT JOIN LATERAL (
+                SELECT status, recommendation, confidence, prompt_version
+                FROM signal_ai_reviews
+                WHERE raw_signal_id = rs.id
+                ORDER BY created_at DESC, id DESC LIMIT 1
+            ) ai ON TRUE
+            WHERE rs.vertical = 'CHILDRENS_HOME' AND rs.source_type = 'planning'
+              AND se.review_status = 'PENDING'
+            ORDER BY rs.discovered_at DESC, rs.id DESC
+            LIMIT 5000
+            """
+        ).fetchall()
+    fields = (
+        "id",
+        "vertical",
+        "source_type",
+        "metadata",
+        "review_status",
+        "reviewed_by",
+        "extracted_facts",
+        "ai_status",
+        "ai_recommendation",
+        "ai_confidence",
+        "ai_prompt_version",
+    )
+    return [dict(zip(fields, row)) for row in rows]
+
+
+def _care_planning_ai_approval_evaluation(
+    items: list[dict[str, Any]],
+) -> tuple[list[tuple[dict[str, Any], str]], dict[str, int], dict[str, int]]:
+    eligible: list[tuple[dict[str, Any], str]] = []
+    exclusions: dict[str, int] = {}
+    excluded_subtypes: dict[str, int] = {}
+    for item in items:
+        confidence = (
+            float(item["ai_confidence"]) if item.get("ai_confidence") is not None else None
+        )
+        reason = care_planning_ai_approval_exclusion(
+            vertical=item["vertical"],
+            source_type=item["source_type"],
+            review_status=item["review_status"],
+            reviewed_by=item.get("reviewed_by"),
+            metadata=item.get("metadata"),
+            extracted_facts=item.get("extracted_facts"),
+            ai_status=item.get("ai_status"),
+            ai_prompt_version=item.get("ai_prompt_version"),
+            ai_recommendation=item.get("ai_recommendation"),
+            ai_confidence=confidence,
+        )
+        if reason:
+            exclusions[reason] = exclusions.get(reason, 0) + 1
+            if reason == "SUBTYPE":
+                subtype = str(
+                    (item.get("extracted_facts") or {}).get("planning_subtype") or "AMBIGUOUS"
+                )
+                excluded_subtypes[subtype] = excluded_subtypes.get(subtype, 0) + 1
+            continue
+        outcome = care_planning_ai_approval_outcome(
+            signal_id=str(item["id"]),
+            vertical=item["vertical"],
+            source_type=item["source_type"],
+            review_status=item["review_status"],
+            reviewed_by=item.get("reviewed_by"),
+            metadata=item.get("metadata"),
+            extracted_facts=item.get("extracted_facts"),
+            ai_status=item.get("ai_status"),
+            ai_prompt_version=item.get("ai_prompt_version"),
+            ai_recommendation=item.get("ai_recommendation"),
+            ai_confidence=confidence,
+        )
+        eligible.append((item, outcome))
+    return eligible, exclusions, excluded_subtypes
+
+
+def care_planning_ai_approval_preview(settings: Settings, *, limit: int = 100) -> dict[str, Any]:
+    """Preview the exact v1 CareProspect AI approval cohort without mutation."""
+    bounded_limit = min(max(int(limit), 1), 100)
+    items = _care_planning_ai_approval_rows(settings)
+    eligible, exclusions, excluded_subtypes = _care_planning_ai_approval_evaluation(items)
+    subtype_counts = {subtype: 0 for subtype in sorted(CARE_PLANNING_AI_APPROVAL_SUBTYPES)}
+    for item, _ in eligible:
+        subtype = str((item.get("extracted_facts") or {}).get("planning_subtype"))
+        subtype_counts[subtype] += 1
+    return {
+        "preview": True,
+        "policy_version": CARE_PLANNING_AI_APPROVAL_POLICY_VERSION,
+        "prompt_version": CARE_PLANNING_AI_APPROVAL_PROMPT_VERSION,
+        "confidence_threshold": CARE_PLANNING_AI_APPROVAL_MIN_CONFIDENCE,
+        "total_pending": len(items),
+        "eligible_before_holdout": len(eligible),
+        "would_auto_approve": sum(outcome == "AUTO_APPROVE" for _, outcome in eligible),
+        "qa_holdouts": sum(outcome == "QA_HOLDOUT" for _, outcome in eligible),
+        "eligible_subtypes": subtype_counts,
+        "excluded": {
+            "by_subtype": exclusions.get("SUBTYPE", 0),
+            "by_subtype_distribution": excluded_subtypes,
+            "by_ai_recommendation": exclusions.get("AI_RECOMMENDATION", 0),
+            "by_confidence": exclusions.get("AI_CONFIDENCE", 0),
+            "by_ai_version_or_status": exclusions.get("AI_VERSION_OR_STATUS", 0),
+            "by_planning_outcome": exclusions.get("PLANNING_OUTCOME", 0),
+            "by_ambiguity_or_false_positive": exclusions.get(
+                "AMBIGUITY_OR_FALSE_POSITIVE", 0
+            ),
+            "by_existing_review_or_policy_state": exclusions.get(
+                "EXISTING_REVIEW_OR_POLICY_STATE", 0
+            ),
+            "out_of_scope": exclusions.get("OUT_OF_SCOPE", 0),
+        },
+        "batch_limit": bounded_limit,
+        "batch_count": min(len(eligible), bounded_limit),
+        "customer_publication_unchanged": True,
+    }
+
+
+def apply_care_planning_ai_approval_policy(
+    settings: Settings, signal_id: str, *, trigger_actor: str | None = None
+) -> dict[str, Any]:
+    """Apply care-planning-ai-approval-v1 once, after a successful current v2 assessment."""
+    with connection(settings) as conn:
+        row = conn.execute(
+            """
+            SELECT rs.id, rs.vertical, rs.source_type, rs.metadata, se.review_status,
+                   se.reviewed_by, se.extracted_facts, ai.status, ai.recommendation,
+                   ai.confidence, ai.prompt_version
+            FROM raw_signals rs
+            JOIN signal_enrichments se ON se.raw_signal_id = rs.id
+            LEFT JOIN LATERAL (
+                SELECT status, recommendation, confidence, prompt_version
+                FROM signal_ai_reviews
+                WHERE raw_signal_id = rs.id
+                ORDER BY created_at DESC, id DESC LIMIT 1
+            ) ai ON TRUE
+            WHERE rs.id = %s
+            FOR UPDATE OF se
+            """,
+            (signal_id,),
+        ).fetchone()
+        if row is None:
+            return {"signal_id": signal_id, "outcome": "NOT_ELIGIBLE", "updated": False}
+        fields = (
+            "id",
+            "vertical",
+            "source_type",
+            "metadata",
+            "review_status",
+            "reviewed_by",
+            "extracted_facts",
+            "ai_status",
+            "ai_recommendation",
+            "ai_confidence",
+            "ai_prompt_version",
+        )
+        item = dict(zip(fields, row))
+        confidence = (
+            float(item["ai_confidence"]) if item.get("ai_confidence") is not None else None
+        )
+        outcome = care_planning_ai_approval_outcome(
+            signal_id=str(item["id"]),
+            vertical=item["vertical"],
+            source_type=item["source_type"],
+            review_status=item["review_status"],
+            reviewed_by=item.get("reviewed_by"),
+            metadata=item.get("metadata"),
+            extracted_facts=item.get("extracted_facts"),
+            ai_status=item.get("ai_status"),
+            ai_prompt_version=item.get("ai_prompt_version"),
+            ai_recommendation=item.get("ai_recommendation"),
+            ai_confidence=confidence,
+        )
+        if outcome == "NOT_ELIGIBLE":
+            return {"signal_id": signal_id, "outcome": outcome, "updated": False}
+        facts = item.get("extracted_facts") or {}
+        canonical_outcome = canonical_planning_outcome(item.get("metadata"))
+        qa_bucket = care_planning_ai_approval_qa_bucket(str(item["id"]))
+        marker = {
+            "policy_version": CARE_PLANNING_AI_APPROVAL_POLICY_VERSION,
+            "outcome": outcome,
+            "qa_bucket": qa_bucket,
+            "ai_prompt_version": item.get("ai_prompt_version"),
+            "ai_recommendation": item.get("ai_recommendation"),
+            "ai_confidence": confidence,
+            "planning_subtype": facts.get("planning_subtype"),
+            "planning_outcome": canonical_outcome.outcome.value,
+            "planning_outcome_policy_version": PLANNING_OUTCOME_POLICY_VERSION,
+            "source_type": item["source_type"],
+            "vertical": item["vertical"],
+            "trigger": "admin_backlog" if trigger_actor else "live_enrichment",
+        }
+        if outcome == "QA_HOLDOUT":
+            updated = conn.execute(
+                """
+                UPDATE signal_enrichments
+                SET extracted_facts = extracted_facts || %s, updated_at = now()
+                WHERE raw_signal_id = %s AND review_status = 'PENDING'
+                  AND COALESCE(
+                        extracted_facts->'care_planning_ai_approval'->>'policy_version', ''
+                      ) <> %s
+                RETURNING raw_signal_id
+                """,
+                (
+                    Jsonb({"care_planning_ai_approval": marker}),
+                    signal_id,
+                    CARE_PLANNING_AI_APPROVAL_POLICY_VERSION,
+                ),
+            ).fetchone()
+            action = "CARE_PLANNING_AI_APPROVAL_QA_HOLDOUT"
+        else:
+            updated = conn.execute(
+                """
+                UPDATE signal_enrichments
+                SET review_status = 'APPROVED', reviewed_by = %s, reviewed_at = now(),
+                    extracted_facts = extracted_facts || %s, updated_at = now()
+                WHERE raw_signal_id = %s AND review_status = 'PENDING'
+                RETURNING raw_signal_id
+                """,
+                (
+                    f"system:{CARE_PLANNING_AI_APPROVAL_POLICY_VERSION}",
+                    Jsonb({"care_planning_ai_approval": marker}),
+                    signal_id,
+                ),
+            ).fetchone()
+            action = "CARE_PLANNING_AI_APPROVAL_AUTO_APPROVE"
+        if updated:
+            conn.execute(
+                """
+                INSERT INTO admin_audit_events
+                    (action, actor, target_type, target_count, details, vertical)
+                VALUES (%s, %s, 'signal', 1, %s, 'CHILDRENS_HOME')
+                """,
+                (
+                    action,
+                    trigger_actor or f"system:{CARE_PLANNING_AI_APPROVAL_POLICY_VERSION}",
+                    Jsonb(
+                        {
+                            "signal_id": signal_id,
+                            "reason": (
+                                "Auto-approved — explicit new-home Planning evidence and "
+                                "high-confidence current AI assessment agreed."
+                                if outcome == "AUTO_APPROVE"
+                                else "QA holdout — otherwise qualifies for Care AI approval."
+                            ),
+                            **marker,
+                        }
+                    ),
+                ),
+            )
+            conn.commit()
+        return {"signal_id": signal_id, "outcome": outcome, "updated": bool(updated)}
+
+
+def care_planning_ai_approval_backlog(
+    settings: Settings, *, actor: str, preview: bool, limit: int = 100
+) -> dict[str, Any]:
+    """Preview or process one bounded batch under the exact Care AI approval v1 policy."""
+    bounded_limit = min(max(int(limit), 1), 100)
+    if preview:
+        return care_planning_ai_approval_preview(settings, limit=bounded_limit)
+    items = _care_planning_ai_approval_rows(settings)
+    eligible, _, _ = _care_planning_ai_approval_evaluation(items)
+    batch = eligible[:bounded_limit]
+    with connection(settings) as conn:
+        published_before = conn.execute(
+            """SELECT count(*) FROM opportunities
+               WHERE vertical = 'CHILDRENS_HOME' AND publication_status = 'PUBLISHED'"""
+        ).fetchone()[0]
+    results: list[dict[str, Any]] = []
+    failures = 0
+    for item, _ in batch:
+        try:
+            results.append(
+                apply_care_planning_ai_approval_policy(
+                    settings, str(item["id"]), trigger_actor=actor
+                )
+            )
+        except Exception:
+            failures += 1
+    approved_ids = [
+        result["signal_id"]
+        for result in results
+        if result.get("updated") and result.get("outcome") == "AUTO_APPROVE"
+    ]
+    opportunities_reused = 0
+    relationships_reused = 0
+    published_after = 0
+    with connection(settings) as conn:
+        if approved_ids:
+            opportunities_reused, relationships_reused = conn.execute(
+                """
+                SELECT count(DISTINCT os.opportunity_id), count(*)
+                FROM opportunity_signals os
+                WHERE os.raw_signal_id = ANY(%s::uuid[]) AND os.status = 'ACTIVE'
+                """,
+                (approved_ids,),
+            ).fetchone()
+        published_after = conn.execute(
+            """SELECT count(*) FROM opportunities
+               WHERE vertical = 'CHILDRENS_HOME' AND publication_status = 'PUBLISHED'"""
+        ).fetchone()[0]
+    return {
+        "preview": False,
+        "policy_version": CARE_PLANNING_AI_APPROVAL_POLICY_VERSION,
+        "requested": len(batch),
+        "updated": sum(bool(item.get("updated")) for item in results),
+        "auto_approved": len(approved_ids),
+        "qa_holdouts": sum(
+            item.get("updated") and item.get("outcome") == "QA_HOLDOUT" for item in results
+        ),
+        "idempotent_skips": sum(not item.get("updated") for item in results),
+        "failures": failures,
+        "opportunities_created": 0,
+        "opportunities_reused": int(opportunities_reused),
+        "relationships_created": 0,
+        "relationships_reused": int(relationships_reused),
+        "published_before": int(published_before),
+        "published_after": int(published_after),
+        "customer_publication_unchanged": True,
+    }
 
 
 def cleanup_refused_planning_signals(
@@ -2566,6 +2907,23 @@ def review_triage_summary(settings: Settings, *, vertical: str = "ALL") -> dict[
         if marker.get("outcome") == "QA_HOLDOUT"
     ]
     care_holdout_rejected = sum(item["review_status"] == "REJECTED" for item, _ in care_holdouts)
+    care_ai_policy_records = []
+    for item in reviewed_all + pending:
+        facts = item.get("extracted_facts") or {}
+        marker = facts.get("care_planning_ai_approval") if isinstance(facts, dict) else None
+        if (
+            isinstance(marker, dict)
+            and marker.get("policy_version") == CARE_PLANNING_AI_APPROVAL_POLICY_VERSION
+        ):
+            care_ai_policy_records.append((item, marker))
+    care_ai_holdouts = [
+        (item, marker)
+        for item, marker in care_ai_policy_records
+        if marker.get("outcome") == "QA_HOLDOUT"
+    ]
+    care_ai_holdout_rejected = sum(
+        item["review_status"] == "REJECTED" for item, _ in care_ai_holdouts
+    )
     care_pending = [
         item
         for item in pending
@@ -2656,6 +3014,33 @@ def review_triage_summary(settings: Settings, *, vertical: str = "ALL") -> dict[
                 "CareProspect explicit-new-home QA rejection detected; suspend and review "
                 "care-planning-fastpath-v1."
                 if care_holdout_rejected
+                else None
+            ),
+        },
+        "care_planning_ai_approval_monitoring": {
+            "policy_version": CARE_PLANNING_AI_APPROVAL_POLICY_VERSION,
+            "total_policy_records": len(care_ai_policy_records),
+            "auto_approved": sum(
+                marker.get("outcome") == "AUTO_APPROVE"
+                for _, marker in care_ai_policy_records
+            ),
+            "qa_holdouts": len(care_ai_holdouts),
+            "qa_holdouts_pending": sum(
+                item["review_status"] == "PENDING" for item, _ in care_ai_holdouts
+            ),
+            "qa_holdouts_approved": sum(
+                item["review_status"] == "APPROVED" for item, _ in care_ai_holdouts
+            ),
+            "qa_holdouts_rejected": care_ai_holdout_rejected,
+            "observed_error_rate": (
+                care_ai_holdout_rejected / len(care_ai_holdouts)
+                if care_ai_holdouts
+                else None
+            ),
+            "warning": (
+                "CareProspect AI approval QA rejection detected; review "
+                "care-planning-ai-approval-v1 before continuing or widening automation."
+                if care_ai_holdout_rejected
                 else None
             ),
         },

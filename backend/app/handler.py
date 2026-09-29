@@ -61,6 +61,7 @@ from app.logging import configure_logging
 from app.organisation_lookup import ManualCompanyLookupError, lookup_manual_company_candidate
 from app.planning_backfill import PlanningBackfillBounds, chunk_payload
 from app.repository import (
+    care_planning_ai_approval_backlog,
     care_planning_fastpath_backlog,
     cleanup_refused_planning_signals,
     cleanup_withdrawn_care_planning_signals,
@@ -330,6 +331,8 @@ def _admin_path(path: str) -> tuple[str, str | None]:
         return "care-planning-fastpath", None
     if path == "/admin/review-triage/care-planning/ai-validation":
         return "care-planning-ai-validation", None
+    if path == "/admin/review-triage/care-planning/ai-approval":
+        return "care-planning-ai-approval", None
     if path == "/admin/review-triage/safe-approve":
         return "review-triage-safe-approve", None
     if path == "/admin/verticals/CHILDRENS_HOME/backfill":
@@ -1428,6 +1431,21 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                             actor=actor,
                         ),
                     )
+            if action == "care-planning-ai-approval" and method == "POST":
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                payload = parse_json_payload(_raw_body(event))
+                actor = str(claims.get("sub") or claims.get("username") or "unknown")
+                return _response(
+                    200,
+                    care_planning_ai_approval_backlog(
+                        settings,
+                        actor=actor,
+                        preview=bool(payload.get("preview", True)),
+                        limit=min(max(int(payload.get("limit", 100)), 1), 100),
+                    ),
+                )
             if action == "review-triage-safe-approve" and method == "POST":
                 admin_error = _require_admin(claims, settings)
                 if admin_error:

@@ -57,6 +57,7 @@ const triageResult = {
   pending_buckets: {
     EXPLICIT_PLANNING_REFUSAL: 2,
     SAFE_APPROVE_AGREEMENT: 7,
+    QA_HOLDOUT_CARE_AI_APPROVAL: 9,
     DETERMINISTIC_AI_DISAGREE: 3,
     AI_UNCERTAIN: 4,
     MANUAL_REVIEW_REQUIRED: 5,
@@ -244,6 +245,7 @@ describe("admin frontend", () => {
     expect(await screen.findByRole("heading", { name: "Review triage" })).toBeInTheDocument();
     expect(screen.getByText(/AI rejection remains advisory/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Rule\/AI disagree 3/ })).toHaveTextContent("3");
+    expect(screen.getByRole("button", { name: /Care AI approval QA 9/ })).toHaveTextContent("9");
     expect(screen.queryByRole("button", { name: "Approve safe agreement set" })).not.toBeInTheDocument();
   });
 

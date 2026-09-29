@@ -1076,6 +1076,7 @@ def test_care_planning_backlog_actions_are_admin_only_and_bounded(monkeypatch) -
     reclassify_args = {}
     withdrawn_args = {}
     fastpath_args = {}
+    ai_approval_args = {}
     monkeypatch.setattr(
         "app.handler.reclassify_pending_care_planning",
         lambda settings, **kwargs: reclassify_args.update(kwargs) or {"updated": 1},
@@ -1087,6 +1088,10 @@ def test_care_planning_backlog_actions_are_admin_only_and_bounded(monkeypatch) -
     monkeypatch.setattr(
         "app.handler.care_planning_fastpath_backlog",
         lambda settings, **kwargs: fastpath_args.update(kwargs) or {"preview": True},
+    )
+    monkeypatch.setattr(
+        "app.handler.care_planning_ai_approval_backlog",
+        lambda settings, **kwargs: ai_approval_args.update(kwargs) or {"preview": True},
     )
     reclassified = handler(
         event(
@@ -1112,11 +1117,21 @@ def test_care_planning_backlog_actions_are_admin_only_and_bounded(monkeypatch) -
         ),
         None,
     )
+    ai_preview = handler(
+        event(
+            "/admin/review-triage/care-planning/ai-approval",
+            "POST",
+            body=json.dumps({"preview": True, "limit": 999}),
+        ),
+        None,
+    )
     assert reclassified["statusCode"] == 200 and reclassify_args["limit"] == 2500
     assert len(reclassify_args["signal_ids"]) == 1
     assert withdrawn["statusCode"] == 200 and withdrawn_args["limit"] == 2500
     assert preview["statusCode"] == 200
     assert fastpath_args["preview"] is True and fastpath_args["limit"] == 100
+    assert ai_preview["statusCode"] == 200
+    assert ai_approval_args["preview"] is True and ai_approval_args["limit"] == 100
     denied = handler(
         event(
             "/admin/review-triage/care-planning/fastpath",

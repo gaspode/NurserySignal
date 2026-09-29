@@ -120,6 +120,26 @@ def test_ai_reject_never_enters_safe_approval_bucket() -> None:
     assert bucket == "MANUAL_REVIEW_REQUIRED"
 
 
+def test_care_ai_approval_qa_marker_has_dedicated_triage_bucket() -> None:
+    bucket = review_triage_bucket(
+        signal_id=str(uuid4()),
+        vertical="CHILDRENS_HOME",
+        source_type="planning",
+        review_status="PENDING",
+        metadata={"planning_status": "Pending"},
+        extracted_facts={
+            "care_planning_ai_approval": {
+                "policy_version": "care-planning-ai-approval-v1",
+                "outcome": "QA_HOLDOUT",
+            }
+        },
+        ai_status="SUCCEEDED",
+        ai_recommendation="APPROVE",
+        ai_confidence=0.95,
+    )
+    assert bucket == "QA_HOLDOUT_CARE_AI_APPROVAL"
+
+
 def test_pending_triage_filter_uses_shared_bucket_logic(monkeypatch) -> None:
     safe_id = uuid4()
     while safe_approval_qa_holdout(str(safe_id)):

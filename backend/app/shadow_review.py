@@ -5,6 +5,7 @@ from typing import Any
 from app.ai_shadow import SUPPORTED_SHADOW_SOURCE_TYPES, evaluate_shadow, prompt_version_for
 from app.config import Settings
 from app.repository import (
+    apply_care_planning_ai_approval_policy,
     apply_safe_approval_policy,
     get_ai_review,
     get_raw_signal,
@@ -15,6 +16,13 @@ from app.repository import (
 
 class UnsupportedShadowSourceError(ValueError):
     pass
+
+
+def _apply_review_policy(settings: Settings, signal_id: str, raw: dict[str, Any]) -> None:
+    if raw.get("vertical") == "CHILDRENS_HOME" and raw.get("source_type") == "planning":
+        apply_care_planning_ai_approval_policy(settings, signal_id)
+    else:
+        apply_safe_approval_policy(settings, signal_id)
 
 
 def _result(
@@ -51,7 +59,7 @@ def reevaluate_ai_shadow(settings: Settings, signal_id: str) -> dict[str, Any] |
     existing = get_ai_review(settings, signal_id, settings.ai_model_id, prompt_version)
     if existing is not None:
         if existing.get("status") == "SUCCEEDED":
-            apply_safe_approval_policy(settings, signal_id)
+            _apply_review_policy(settings, signal_id, raw)
         return _result(
             existing,
             idempotent=True,
@@ -64,14 +72,14 @@ def reevaluate_ai_shadow(settings: Settings, signal_id: str) -> dict[str, Any] |
         existing = get_ai_review(settings, signal_id, settings.ai_model_id, prompt_version)
         if existing is not None:
             if existing.get("status") == "SUCCEEDED":
-                apply_safe_approval_policy(settings, signal_id)
+                _apply_review_policy(settings, signal_id, raw)
             return _result(
                 existing,
                 idempotent=True,
                 review_status=get_signal_review_status(settings, signal_id),
             )
     if review.get("status") == "SUCCEEDED":
-        apply_safe_approval_policy(settings, signal_id)
+        _apply_review_policy(settings, signal_id, raw)
     return _result(
         review,
         idempotent=not saved,

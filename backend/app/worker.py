@@ -10,7 +10,7 @@ from app.logging import configure_logging
 from app.queueing import EnrichmentMessage
 from app.repository import (
     ai_review_exists,
-    apply_care_planning_fastpath_policy,
+    apply_care_planning_ai_approval_policy,
     apply_safe_approval_policy,
     auto_reject_refused_planning,
     auto_reject_withdrawn_planning,
@@ -59,8 +59,6 @@ def process_message(settings: Settings, body: str) -> None:
                 message.signal_id,
                 raw.get("metadata"),
             )
-        elif raw.get("vertical") == "CHILDRENS_HOME":
-            apply_care_planning_fastpath_policy(settings, message.signal_id)
     if not refused and not withdrawn and (
         getattr(settings, "database_url", None) or getattr(settings, "db_secret_arn", None)
     ):
@@ -81,11 +79,18 @@ def process_message(settings: Settings, body: str) -> None:
         model_id = getattr(settings, "ai_model_id", "eu.amazon.nova-lite-v1:0")
         source_type = str(raw.get("source_type") or "").lower()
         prompt_version = prompt_version_for(source_type, settings, raw.get("vertical"))
+        saved = False
+        review: dict[str, Any] = {}
         if not ai_review_exists(settings, message.signal_id, model_id, prompt_version):
             review = evaluate_shadow(raw, settings)
             saved = save_ai_review(settings, message.signal_id, review)
-            if saved and review.get("status") == "SUCCEEDED":
-                apply_safe_approval_policy(settings, message.signal_id)
+        if raw.get("vertical") == "CHILDRENS_HOME" and source_type == "planning":
+            # The Care policy reads the latest immutable assessment and remains
+            # ineligible on failed/stale/missing AI. Calling after an idempotent
+            # retry is safe even when the v2 assessment already existed.
+            apply_care_planning_ai_approval_policy(settings, message.signal_id)
+        elif saved and review.get("status") == "SUCCEEDED":
+            apply_safe_approval_policy(settings, message.signal_id)
 
 
 def handler(event: dict[str, Any], context: Any) -> dict[str, list[dict[str, str]]]:

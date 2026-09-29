@@ -12,7 +12,22 @@ from app.planning_outcomes import (
 
 CARE_PLANNING_FASTPATH_POLICY_VERSION = "care-planning-fastpath-v1"
 CARE_PLANNING_QA_MODULUS = 10
+CARE_PLANNING_AI_APPROVAL_POLICY_VERSION = "care-planning-ai-approval-v1"
+CARE_PLANNING_AI_APPROVAL_PROMPT_VERSION = "care-planning-shadow-v2"
+CARE_PLANNING_AI_APPROVAL_MIN_CONFIDENCE = 0.95
 WITHDRAWAL_POLICY_VERSION = "planning-withdrawal-v2"
+
+CARE_PLANNING_AI_APPROVAL_SUBTYPES = frozenset(
+    {"NEW_HOME_CHANGE_OF_USE", "NEW_HOME_OTHER_EXPLICIT"}
+)
+CARE_PLANNING_AI_APPROVAL_BLOCKED_OUTCOMES = frozenset(
+    {
+        PlanningOutcome.REFUSED,
+        PlanningOutcome.WITHDRAWN,
+        PlanningOutcome.REFUSED_UNDER_APPEAL,
+        PlanningOutcome.APPEAL_DISMISSED,
+    }
+)
 
 CARE_PLANNING_SUBTYPES = frozenset(
     {
@@ -267,6 +282,94 @@ def care_planning_fastpath_qa_bucket(signal_id: str) -> int:
 
 def care_planning_fastpath_qa_holdout(signal_id: str) -> bool:
     return care_planning_fastpath_qa_bucket(signal_id) == 0
+
+
+def care_planning_ai_approval_qa_bucket(signal_id: str) -> int:
+    """Return the stable 0-9 QA bucket for the immutable signal UUID."""
+    return UUID(str(signal_id)).int % CARE_PLANNING_QA_MODULUS
+
+
+def care_planning_ai_approval_qa_holdout(signal_id: str) -> bool:
+    return care_planning_ai_approval_qa_bucket(signal_id) == 0
+
+
+def care_planning_ai_approval_exclusion(
+    *,
+    vertical: str,
+    source_type: str,
+    review_status: str,
+    reviewed_by: str | None,
+    metadata: Any,
+    extracted_facts: Any,
+    ai_status: str | None,
+    ai_prompt_version: str | None,
+    ai_recommendation: str | None,
+    ai_confidence: float | None,
+) -> str | None:
+    """Return one mutually exclusive reason why Care AI approval v1 cannot apply."""
+    facts = extracted_facts if isinstance(extracted_facts, dict) else {}
+    if vertical != "CHILDRENS_HOME" or source_type != "planning":
+        return "OUT_OF_SCOPE"
+    if review_status != "PENDING" or reviewed_by:
+        return "EXISTING_REVIEW_OR_POLICY_STATE"
+    if any(
+        isinstance(facts.get(marker), dict)
+        for marker in (
+            "automatic_review",
+            "safe_approval",
+            "care_planning_fastpath",
+            "care_planning_ai_approval",
+        )
+    ):
+        return "EXISTING_REVIEW_OR_POLICY_STATE"
+    outcome = canonical_planning_outcome(metadata).outcome
+    if outcome in CARE_PLANNING_AI_APPROVAL_BLOCKED_OUTCOMES:
+        return "PLANNING_OUTCOME"
+    subtype = str(facts.get("planning_subtype") or "AMBIGUOUS")
+    if subtype not in CARE_PLANNING_AI_APPROVAL_SUBTYPES:
+        return "SUBTYPE"
+    if facts.get("likely_false_positive") is True or facts.get("planning_ambiguity_markers"):
+        return "AMBIGUITY_OR_FALSE_POSITIVE"
+    if ai_status != "SUCCEEDED" or (
+        ai_prompt_version != CARE_PLANNING_AI_APPROVAL_PROMPT_VERSION
+    ):
+        return "AI_VERSION_OR_STATUS"
+    if ai_recommendation != "APPROVE":
+        return "AI_RECOMMENDATION"
+    if ai_confidence is None or ai_confidence < CARE_PLANNING_AI_APPROVAL_MIN_CONFIDENCE:
+        return "AI_CONFIDENCE"
+    return None
+
+
+def care_planning_ai_approval_outcome(
+    *,
+    signal_id: str,
+    vertical: str,
+    source_type: str,
+    review_status: str,
+    reviewed_by: str | None,
+    metadata: Any,
+    extracted_facts: Any,
+    ai_status: str | None,
+    ai_prompt_version: str | None,
+    ai_recommendation: str | None,
+    ai_confidence: float | None,
+) -> str:
+    exclusion = care_planning_ai_approval_exclusion(
+        vertical=vertical,
+        source_type=source_type,
+        review_status=review_status,
+        reviewed_by=reviewed_by,
+        metadata=metadata,
+        extracted_facts=extracted_facts,
+        ai_status=ai_status,
+        ai_prompt_version=ai_prompt_version,
+        ai_recommendation=ai_recommendation,
+        ai_confidence=ai_confidence,
+    )
+    if exclusion:
+        return "NOT_ELIGIBLE"
+    return "QA_HOLDOUT" if care_planning_ai_approval_qa_holdout(signal_id) else "AUTO_APPROVE"
 
 
 def care_planning_fastpath_eligible(

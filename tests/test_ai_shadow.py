@@ -434,6 +434,59 @@ def test_worker_evaluates_safe_policy_after_successful_ai_save(monkeypatch):
     assert applied == [str(signal["id"])]
 
 
+def test_worker_applies_care_ai_policy_only_after_v2_assessment_exists(monkeypatch):
+    signal = raw()
+    signal.update(
+        {
+            "vertical": "CHILDRENS_HOME",
+            "title": "Change of use to a children's home",
+            "raw_text": "Change of use from C3 dwelling to C2 children's home.",
+            "metadata": {"planning_status": "Pending"},
+        }
+    )
+    message = {
+        "message_version": "1.0",
+        "signal_id": str(signal["id"]),
+        "schema_version": "1.0",
+        "evidence_bucket": "b",
+        "evidence_key": "k",
+        "queued_at": "2026-09-25T00:00:00Z",
+    }
+    care_applied = []
+    nursery_applied = []
+    monkeypatch.setattr("app.worker.Settings.from_env", lambda: settings())
+    monkeypatch.setattr("app.worker.get_raw_signal", lambda *_: signal)
+    monkeypatch.setattr("app.worker.save_enrichment", lambda *_: True)
+    monkeypatch.setattr("app.worker.ai_review_exists", lambda *args: False)
+    monkeypatch.setattr(
+        "app.worker.evaluate_shadow",
+        lambda *args: {
+            "provider": "BEDROCK",
+            "model_id": "m",
+            "prompt_version": "care-planning-shadow-v2",
+            "status": "SUCCEEDED",
+            "recommendation": "APPROVE",
+            "confidence": 0.95,
+            "attempted_at": 1,
+        },
+    )
+    monkeypatch.setattr("app.worker.save_ai_review", lambda *args: True)
+    monkeypatch.setattr(
+        "app.worker.apply_care_planning_ai_approval_policy",
+        lambda _, signal_id: care_applied.append(signal_id),
+    )
+    monkeypatch.setattr(
+        "app.worker.apply_safe_approval_policy",
+        lambda _, signal_id: nursery_applied.append(signal_id),
+    )
+
+    result = handler({"Records": [{"messageId": "care-1", "body": json.dumps(message)}]}, None)
+
+    assert result == {"batchItemFailures": []}
+    assert care_applied == [str(signal["id"])]
+    assert nursery_applied == []
+
+
 def test_worker_does_not_repeat_same_model_prompt(monkeypatch):
     signal = raw()
     message = {
