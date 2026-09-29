@@ -355,7 +355,7 @@ describe("admin frontend", () => {
     const request = JSON.parse(apiClient.mock.calls[1][1].body);
     expect(request.vertical).toBe("ALL");
     expect(request.chunk_days).toBe(7);
-    expect(request.max_records).toBe(60000);
+    expect(request.max_records).toBe(4000);
     expect(await screen.findByText(/started in 79 weekly chunks/i)).toBeInTheDocument();
   });
 

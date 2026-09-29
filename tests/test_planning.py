@@ -76,9 +76,10 @@ def test_historical_backfill_is_bounded_and_chunked_without_changing_live_clamp(
         from_date="2025-03-29",
         to_date="2026-09-29",
         vertical="ALL",
-        total_record_cap=60_000,
+        total_record_cap=4_000,
     )
     assert len(bounds.chunks) == 79
+    assert bounds.total_record_cap == 4_000
     assert bounds.chunks[0] == (date(2025, 3, 29), date(2025, 4, 4))
     assert bounds.chunks[-1][1] == date(2026, 9, 29)
     payload = chunk_payload(
@@ -91,7 +92,7 @@ def test_historical_backfill_is_bounded_and_chunked_without_changing_live_clamp(
     assert payload["verticals"] == ["NURSERY", "CHILDRENS_HOME"]
     assert payload["from_date"] == "2025-03-29"
     assert payload["to_date"] == "2025-04-04"
-    assert payload["page_size"] == 250
+    assert payload["page_size"] == 25
     with pytest.raises(ValueError, match="cannot exceed 550 days"):
         PlanningBackfillBounds.from_values(from_date="2025-01-01", to_date="2026-09-29")
 

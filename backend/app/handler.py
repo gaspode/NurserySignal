@@ -930,7 +930,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                     from_date=str(payload_body.get("from_date") or today - timedelta(days=547)),
                     to_date=str(payload_body.get("to_date") or today),
                     vertical=str(payload_body.get("vertical") or ALL_VERTICALS),
-                    total_record_cap=int(payload_body.get("max_records") or 60_000),
+                    total_record_cap=int(payload_body.get("max_records") or 4_000),
                     chunk_days=int(payload_body.get("chunk_days") or 7),
                 )
                 run_id, started_at = start_run(

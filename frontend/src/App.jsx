@@ -276,7 +276,7 @@ export function SourcesPage({ apiClient, selectedVertical = "NURSERY" }) {
   const [backfillBusy, setBackfillBusy] = useState(false);
   const today = new Date().toISOString().slice(0, 10);
   const historicalStart = new Date(Date.now() - (547 * 86400000)).toISOString().slice(0, 10);
-  const [historicalForm, setHistoricalForm] = useState({ from_date: historicalStart, to_date: today, max_records: 60000 });
+  const [historicalForm, setHistoricalForm] = useState({ from_date: historicalStart, to_date: today, max_records: 4000 });
   const [historicalRun, setHistoricalRun] = useState(null);
   const [historicalBusy, setHistoricalBusy] = useState(false);
   const load = async ({ initial = false } = {}) => {
@@ -398,7 +398,7 @@ export function SourcesPage({ apiClient, selectedVertical = "NURSERY" }) {
       <form className="historical-backfill-form" onSubmit={runHistoricalBackfill}>
         <label>From date<input type="date" value={historicalForm.from_date} max={historicalForm.to_date} onChange={(event) => setHistoricalForm({ ...historicalForm, from_date: event.target.value })} required /></label>
         <label>To date<input type="date" value={historicalForm.to_date} min={historicalForm.from_date} max={today} onChange={(event) => setHistoricalForm({ ...historicalForm, to_date: event.target.value })} required /></label>
-        <label>Total record cap<input type="number" min="100" max="60000" step="100" value={historicalForm.max_records} onChange={(event) => setHistoricalForm({ ...historicalForm, max_records: Number(event.target.value) })} required /></label>
+        <label>Total record cap<input type="number" min="100" max="4000" step="100" value={historicalForm.max_records} onChange={(event) => setHistoricalForm({ ...historicalForm, max_records: Number(event.target.value) })} required /></label>
         <button className="button secondary" type="submit" disabled={historicalBusy || historicalRun?.status === "RUNNING"}>{historicalBusy ? "Starting…" : "Start bounded backfill"}</button>
       </form>
       {historicalRun && <div className="historical-backfill-status" role="status"><div className="source-card-heading"><strong>{historicalRun.status}</strong><span>{historicalRun.counts?.chunks_completed || 0} / {historicalRun.parameters?.chunks_total || historicalRun.counts?.chunks_total || 0} chunks</span></div><div className="source-counts"><span>Fetched <strong>{historicalRun.counts?.records_fetched || 0}</strong></span><span>NurserySignal <strong>{historicalRun.counts?.nursery_matched || 0}</strong></span><span>CareProspect <strong>{historicalRun.counts?.care_matched || 0}</strong></span><span>Queued <strong>{historicalRun.counts?.signals_queued || 0}</strong></span><span>Excluded <strong>{historicalRun.counts?.excluded || 0}</strong></span><span>Errors <strong>{historicalRun.counts?.errors || 0}</strong></span></div>{historicalRun.failure_message && <p className="inline-alert">{historicalRun.failure_message}</p>}{historicalRun.status === "SUCCESS" && <button className="button secondary" onClick={recalculateHistoricalBackfill} disabled={historicalBusy}>{historicalBusy ? "Recalculating…" : "Recalculate current recruitment"}</button>}</div>}

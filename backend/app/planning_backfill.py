@@ -11,7 +11,7 @@ BACKFILL_VERSION = "planning-history-v1"
 MAX_HISTORICAL_DAYS = 550
 MAX_CHUNK_DAYS = 7
 MAX_CHUNKS = 80
-MAX_TOTAL_RECORDS = 60_000
+MAX_TOTAL_RECORDS = 4_000
 MIN_TOTAL_RECORDS = 100
 
 
@@ -67,9 +67,9 @@ class PlanningBackfillBounds:
         # Plota is queried once for nursery terms and twice for children's-home
         # variants. Allocate the aggregate cap evenly across chunks, then 2:1
         # between those query families. PlanningQuery applies its own hard caps.
-        per_chunk = min(max(math.ceil(self.total_record_cap / len(self.chunks)), 3), 750)
-        nursery = min(max(math.ceil(per_chunk * 2 / 3), 1), 500)
-        care = min(max(per_chunk - nursery, 2), 250)
+        per_chunk = min(max(math.ceil(self.total_record_cap / len(self.chunks)), 3), 50)
+        nursery = min(max(math.ceil(per_chunk / 2), 1), 25)
+        care = min(max(per_chunk - nursery, 2), 25)
         return nursery, care
 
     def parameters(self) -> dict[str, Any]:
@@ -112,7 +112,7 @@ def chunk_payload(
         "total_record_cap": bounds.total_record_cap,
         "max_records": nursery_limit,
         "care_max_records": care_limit,
-        "page_size": min(nursery_limit, 250),
+        "page_size": min(nursery_limit, 25),
         "verticals": list(bounds.verticals),
         "cumulative_counts": cumulative_counts or {},
         "run_id": f"{backfill_id}-chunk-{chunk_index + 1:03d}",
