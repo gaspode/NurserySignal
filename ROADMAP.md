@@ -793,6 +793,13 @@ Paid-pilot activation check (2026-09-28):
   action is create/support, and no refusal or false-positive condition applies. A stable UUID-derived
   one-in-ten QA holdout remains pending; each automatic approval/holdout is versioned and audited, AI
   rejection remains advisory, and customer publication is unchanged. CHILDRENS_HOME/CareProspect stays
-  fully manual until it has its own qualifying labelled cohort. Deployment validation and the bounded
-  production backlog preview are the remaining gates; backlog execution still requires separate explicit
-  approval.
+  fully manual until it has its own qualifying labelled cohort. Commit `de892db` deployed successfully
+  through the normal OIDC workflow. Production recomputation confirms the 69/69 NurserySignal cohort at
+  the fixed 0.95 threshold and zero qualifying CareProspect records. The bounded NurserySignal backlog
+  preview found zero currently eligible pending records (zero auto-approvals, zero QA holdouts; 608 remain
+  manual), so no backlog mutation was needed or performed. Future eligible NurserySignal Planning signals
+  now evaluate automatically after successful AI enrichment. Post-deployment Terraform reports zero
+  drift; API/database and Lambda health pass, daily Planning/Recruitment schedules remain enabled, primary
+  queues and all non-collector DLQs are empty, and the five previously classified obsolete collector-DLQ
+  messages remain deliberately untouched. The next automation gate is prospective QA-holdout monitoring;
+  CareProspect remains manual.
