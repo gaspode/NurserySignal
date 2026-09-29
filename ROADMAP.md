@@ -968,3 +968,25 @@ Paid-pilot activation check (2026-09-28):
   warning. The prior deterministic fast-path history remains immutable; future Care auto-approval now
   waits for complete current-v2 AI evidence. Keep the holdout at 10% and review it prospectively before
   considering any policy expansion; do not broaden into lawfulness/follow-up subtypes.
+- Prospective QA for `care-planning-ai-approval-v1` is complete: all 18 deterministic holdouts were
+  manually approved and none rejected (18/18 agreement; observed QA error 0/18). Historical v1 markers,
+  assignments and audit history remain immutable. Future explicit-new-home records now use
+  `care-planning-ai-approval-v1.1`, retaining the same subtypes, v2/0.95 eligibility, canonical-outcome
+  precedence and publication gate while moving to a stable UUID modulo-20 holdout (5%). Monitoring
+  aggregates both versions and retains the original 142 auto-approved / 18 held-out validation cohort.
+- The post-QA CareProspect Planning queue contains 161 manual records: 12 change-of-use, seven other
+  explicit homes, seven proposed-lawfulness, 14 existing-lawfulness, eight condition variations, 17
+  condition discharges, two non-material amendments, 41 other follow-ups and 53 ambiguous. Triage is 93
+  deterministic/AI disagreements, five AI-uncertain and 63 manual-review; 159 have successful current v2
+  assessments and the two known failed existing-lawfulness assessments remain manual. Published
+  opportunities remain six. A broad current unsupported-draft query reports 96, but no draft was mutated
+  and this is not treated as a like-for-like replacement for the earlier 20-record cleanup-specific set.
+- `care-planning-lawfulness-proposed-v1` remains preview-only. All seven current proposed-lawfulness
+  records are v2 APPROVE at 0.95, explicitly describe a new children’s home, are canonically approved,
+  CREATE_OPPORTUNITY, and have no false-positive, ambiguity, prior-reference, appeal or malformed-AI
+  marker. A hypothetical stable 10% holdout yields six approvals and one holdout. This is the cleanest
+  remaining subtype cohort, but seven unlabelled records are insufficient to enable it; obtain manual
+  decisions first. Follow-up, ambiguous and condition subtypes have materially mixed recommendation or
+  deterministic semantics and are not cleaner automation candidates. No new subtype automation was
+  enabled. Exact next step: manually validate the seven proposed-lawfulness records, then make a separate
+  policy decision using those labels.
