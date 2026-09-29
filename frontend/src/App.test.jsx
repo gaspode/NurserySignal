@@ -247,6 +247,46 @@ describe("admin frontend", () => {
     expect(screen.queryByRole("button", { name: "Approve safe agreement set" })).not.toBeInTheDocument();
   });
 
+  it("shows CareProspect AI currency and runs only a bounded stale refresh", async () => {
+    let refreshed = false;
+    const careTriage = {
+      ...triageResult,
+      care_planning_ai_currency: {
+        prompt_version: "care-planning-shadow-v2",
+        counts: { CURRENT_V2: refreshed ? 2 : 1, STALE_V1: refreshed ? 0 : 1, NO_AI_ASSESSMENT: 0, AI_FAILED: 0 },
+      },
+    };
+    const apiClient = vi.fn(async (path, options = {}) => {
+      if (path === "/admin/review-triage") {
+        return {
+          ...careTriage,
+          care_planning_ai_currency: {
+            ...careTriage.care_planning_ai_currency,
+            counts: { CURRENT_V2: refreshed ? 2 : 1, STALE_V1: refreshed ? 0 : 1, NO_AI_ASSESSMENT: 0, AI_FAILED: 0 },
+          },
+        };
+      }
+      if (path === "/admin/review-triage/care-planning/ai-validation" && options.method === "POST") {
+        refreshed = true;
+        return { succeeded: 1, failed: 0, idempotent_skips: 0 };
+      }
+      return listResult([{ ...pendingItem, vertical: "CHILDRENS_HOME", ai_currency: refreshed ? "CURRENT_V2" : "STALE_V1" }]);
+    });
+    render(<ReviewInboxPage apiClient={apiClient} onNavigate={vi.fn()} />);
+    expect(await screen.findByText(/CareProspect AI: 1 current · 1 stale/)).toBeInTheDocument();
+    expect(screen.getByText("AI stale")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Refresh stale CareProspect AI" }));
+    await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Refresh 10" }));
+    await waitFor(() => expect(apiClient).toHaveBeenCalledWith(
+      "/admin/review-triage/care-planning/ai-validation",
+      {
+        method: "POST",
+        body: JSON.stringify({ operation: "refresh_stale", limit: 10, include_missing: true }),
+      }
+    ));
+    expect(await screen.findByText(/CareProspect AI refresh: 1 updated/)).toBeInTheDocument();
+  });
+
   it("filters CareProspect planning by the server-side subtype", async () => {
     const careItem = {
       ...pendingItem,

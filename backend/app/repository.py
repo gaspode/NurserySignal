@@ -635,9 +635,7 @@ def list_signals(
             clauses.append("se.extracted_facts->>'planning_subtype' = %s")
             params.append(planning_subtype)
     if triage_bucket:
-        triage_ids = pending_review_triage_ids(
-            settings, vertical=vertical, bucket=triage_bucket
-        )
+        triage_ids = pending_review_triage_ids(settings, vertical=vertical, bucket=triage_bucket)
         if triage_ids:
             clauses.append("rs.id = ANY(%s::uuid[])")
             params.append(triage_ids)
@@ -662,14 +660,14 @@ def list_signals(
                    se.review_status,
                    se.event_type, se.nursery_name, se.operator_name, se.lifecycle_stage,
                    se.confidence, se.extracted_facts, ai.recommendation,
-                   ai.confidence, ai.status
+                   ai.confidence, ai.status, ai.prompt_version
             FROM raw_signals rs
             LEFT JOIN signal_enrichments se ON se.raw_signal_id = rs.id
             LEFT JOIN LATERAL (
-                SELECT recommendation, confidence, status
+                SELECT recommendation, confidence, status, prompt_version
                 FROM signal_ai_reviews
                 WHERE raw_signal_id = rs.id
-                ORDER BY created_at DESC
+                ORDER BY created_at DESC, id DESC
                 LIMIT 1
             ) ai ON TRUE
             WHERE {where}
@@ -703,9 +701,22 @@ def list_signals(
         "ai_recommendation",
         "ai_confidence",
         "ai_status",
+        "ai_prompt_version",
     )
+    items = [dict(zip(fields, row)) for row in rows]
+    for item in items:
+        if item["vertical"] != "CHILDRENS_HOME" or item["source_type"] != "planning":
+            continue
+        if not item.get("ai_prompt_version"):
+            item["ai_currency"] = "NO_AI_ASSESSMENT"
+        elif item.get("ai_status") == "FAILED":
+            item["ai_currency"] = "AI_FAILED"
+        elif item["ai_prompt_version"] == settings.ai_care_planning_prompt_version:
+            item["ai_currency"] = "CURRENT_V2"
+        else:
+            item["ai_currency"] = "STALE_V1"
     return {
-        "items": [dict(zip(fields, row)) for row in rows],
+        "items": items,
         "total": total,
         "limit": limit,
         "offset": offset,
@@ -1346,13 +1357,18 @@ def apply_safe_approval_policy(
         if row is None:
             return {"signal_id": signal_id, "outcome": "INELIGIBLE", "updated": False}
         fields = (
-            "id", "vertical", "source_type", "metadata", "review_status",
-            "extracted_facts", "ai_status", "ai_recommendation", "ai_confidence",
+            "id",
+            "vertical",
+            "source_type",
+            "metadata",
+            "review_status",
+            "extracted_facts",
+            "ai_status",
+            "ai_recommendation",
+            "ai_confidence",
         )
         item = dict(zip(fields, row))
-        confidence = (
-            float(item["ai_confidence"]) if item["ai_confidence"] is not None else None
-        )
+        confidence = float(item["ai_confidence"]) if item["ai_confidence"] is not None else None
         outcome = safe_approval_policy_outcome(
             signal_id=str(item["id"]),
             vertical=item["vertical"],
@@ -2174,14 +2190,14 @@ def _review_triage_rows(
         f"""
         SELECT rs.id, rs.vertical, rs.source_type, rs.metadata, se.review_status,
                se.extracted_facts, ai.status, ai.recommendation, ai.confidence,
-               se.reviewed_by, se.reviewed_at
+               ai.prompt_version, se.reviewed_by, se.reviewed_at
         FROM raw_signals rs
         JOIN signal_enrichments se ON se.raw_signal_id = rs.id
         LEFT JOIN LATERAL (
-            SELECT status, recommendation, confidence
+            SELECT status, recommendation, confidence, prompt_version
             FROM signal_ai_reviews
             WHERE raw_signal_id = rs.id
-            ORDER BY created_at DESC LIMIT 1
+            ORDER BY created_at DESC, id DESC LIMIT 1
         ) ai ON TRUE
         WHERE rs.source_type = 'planning'
           AND se.review_status = %s
@@ -2201,6 +2217,7 @@ def _review_triage_rows(
         "ai_status",
         "ai_recommendation",
         "ai_confidence",
+        "ai_prompt_version",
         "reviewed_by",
         "reviewed_at",
     )
@@ -2356,9 +2373,7 @@ def review_triage_summary(settings: Settings, *, vertical: str = "ALL") -> dict[
         ):
             policy_records.append((item, marker))
     holdouts = [
-        (item, marker)
-        for item, marker in policy_records
-        if marker.get("outcome") == "QA_HOLDOUT"
+        (item, marker) for item, marker in policy_records if marker.get("outcome") == "QA_HOLDOUT"
     ]
     holdout_rejected = sum(item["review_status"] == "REJECTED" for item, _ in holdouts)
     care_policy_records = []
@@ -2376,6 +2391,24 @@ def review_triage_summary(settings: Settings, *, vertical: str = "ALL") -> dict[
         if marker.get("outcome") == "QA_HOLDOUT"
     ]
     care_holdout_rejected = sum(item["review_status"] == "REJECTED" for item, _ in care_holdouts)
+    care_pending = [
+        item
+        for item in pending
+        if item["vertical"] == "CHILDRENS_HOME" and item["source_type"] == "planning"
+    ]
+    care_ai_currency = {
+        key: 0 for key in ("CURRENT_V2", "STALE_V1", "NO_AI_ASSESSMENT", "AI_FAILED")
+    }
+    for item in care_pending:
+        if not item.get("ai_prompt_version"):
+            key = "NO_AI_ASSESSMENT"
+        elif item.get("ai_status") == "FAILED":
+            key = "AI_FAILED"
+        elif item["ai_prompt_version"] == settings.ai_care_planning_prompt_version:
+            key = "CURRENT_V2"
+        else:
+            key = "STALE_V1"
+        care_ai_currency[key] += 1
     return {
         "policy_version": "review-triage-v2",
         "safe_approval_policy_version": SAFE_APPROVAL_POLICY_VERSION,
@@ -2403,6 +2436,10 @@ def review_triage_summary(settings: Settings, *, vertical: str = "ALL") -> dict[
         "safe_bulk_approval_recommended": safe_threshold is not None,
         "pending_planning_evaluated": len(pending),
         "pending_buckets": buckets,
+        "care_planning_ai_currency": {
+            "prompt_version": settings.ai_care_planning_prompt_version,
+            "counts": care_ai_currency,
+        },
         "safe_pending_count": len(safe_ids),
         "qa_monitoring": {
             "total_policy_records": len(policy_records),
@@ -2410,9 +2447,7 @@ def review_triage_summary(settings: Settings, *, vertical: str = "ALL") -> dict[
                 marker.get("outcome") == "AUTO_APPROVE" for _, marker in policy_records
             ),
             "qa_holdouts": len(holdouts),
-            "qa_holdouts_pending": sum(
-                item["review_status"] == "PENDING" for item, _ in holdouts
-            ),
+            "qa_holdouts_pending": sum(item["review_status"] == "PENDING" for item, _ in holdouts),
             "qa_holdouts_approved": sum(
                 item["review_status"] == "APPROVED" for item, _ in holdouts
             ),
@@ -2452,18 +2487,14 @@ def review_triage_summary(settings: Settings, *, vertical: str = "ALL") -> dict[
     }
 
 
-def pending_review_triage_ids(
-    settings: Settings, *, vertical: str, bucket: str
-) -> list[str]:
+def pending_review_triage_ids(settings: Settings, *, vertical: str, bucket: str) -> list[str]:
     """Return pending Planning IDs in one validated server-side triage bucket."""
     vertical = validate_vertical_filter(vertical)
     bucket = validate_triage_bucket(bucket)
     if bucket is None:
         return []
     summary = review_triage_summary(settings, vertical=vertical)
-    threshold = float(
-        summary.get("recommended_safe_threshold") or SAFE_APPROVAL_MIN_CONFIDENCE
-    )
+    threshold = float(summary.get("recommended_safe_threshold") or SAFE_APPROVAL_MIN_CONFIDENCE)
     with connection(settings) as conn:
         pending = _review_triage_rows(conn, "PENDING", vertical)
     return [
@@ -2479,9 +2510,7 @@ def pending_review_triage_ids(
             ai_status=item["ai_status"],
             ai_recommendation=item["ai_recommendation"],
             ai_confidence=(
-                float(item["ai_confidence"])
-                if item["ai_confidence"] is not None
-                else None
+                float(item["ai_confidence"]) if item["ai_confidence"] is not None else None
             ),
             threshold=threshold,
         )
@@ -2566,9 +2595,7 @@ def safe_agreement_bulk_approve(
         "auto_approved": sum(
             item["updated"] and item["outcome"] == "AUTO_APPROVE" for item in results
         ),
-        "qa_holdouts": sum(
-            item["updated"] and item["outcome"] == "QA_HOLDOUT" for item in results
-        ),
+        "qa_holdouts": sum(item["updated"] and item["outcome"] == "QA_HOLDOUT" for item in results),
         "signal_ids": updated_ids,
         "vertical": policy_vertical,
         "actor": actor,

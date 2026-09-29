@@ -1146,8 +1146,7 @@ def test_care_planning_ai_validation_is_admin_only_bounded_and_non_mutating(monk
     evaluated = {}
     monkeypatch.setattr(
         "app.handler.run_care_planning_ai_validation",
-        lambda settings, **kwargs: evaluated.update(kwargs)
-        or {"review_decisions_mutated": False},
+        lambda settings, **kwargs: evaluated.update(kwargs) or {"review_decisions_mutated": False},
     )
     response = handler(
         event(
@@ -1159,6 +1158,24 @@ def test_care_planning_ai_validation_is_admin_only_bounded_and_non_mutating(monk
     )
     assert response["statusCode"] == 200
     assert evaluated["actor"] == CLAIMS["sub"]
+
+    refreshed = {}
+    monkeypatch.setattr(
+        "app.handler.refresh_stale_care_planning_ai",
+        lambda settings, **kwargs: refreshed.update(kwargs) or {"review_decisions_mutated": False},
+    )
+    response = handler(
+        event(
+            "/admin/review-triage/care-planning/ai-validation",
+            "POST",
+            body=json.dumps({"operation": "refresh_stale", "limit": 999, "include_missing": True}),
+        ),
+        None,
+    )
+    assert response["statusCode"] == 200
+    assert refreshed["limit"] == 10
+    assert refreshed["include_missing"] is True
+    assert refreshed["actor"] == CLAIMS["sub"]
 
     denied = handler(
         event(

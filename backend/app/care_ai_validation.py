@@ -25,6 +25,8 @@ from app.review_triage import (
 CARE_PLANNING_PREVIOUS_PROMPT_VERSION = "care-planning-shadow-v1"
 CARE_AI_POLICY_PREVIEW_VERSION = "care-planning-ai-policy-preview-v1"
 CARE_AI_MIN_CONFIDENCE = 0.95
+CARE_AI_REFRESH_MAX_BATCH = 10
+CARE_AI_REFRESH_FAILURE_STOP = 3
 _POLICY_EXCLUDED_SUBTYPES = {
     "LAWFULNESS_EXISTING",
     "CONDITION_DISCHARGE",
@@ -107,6 +109,149 @@ def _structured_negative(item: dict[str, Any]) -> bool:
     )
 
 
+def care_planning_ai_currency(item: dict[str, Any]) -> str:
+    """Classify the latest immutable assessment used by the Review Inbox."""
+    if not item.get("latest_prompt_version"):
+        return "NO_AI_ASSESSMENT"
+    if item.get("latest_status") == "FAILED":
+        return "AI_FAILED"
+    if item.get("latest_prompt_version") == CARE_PLANNING_PROMPT_VERSION:
+        return "CURRENT_V2"
+    return "STALE_V1"
+
+
+def _pending_snapshot(items: list[dict[str, Any]]) -> dict[str, Any]:
+    pending = [item for item in items if item["review_status"] == "PENDING"]
+    currency = {
+        key: sum(care_planning_ai_currency(item) == key for item in pending)
+        for key in ("CURRENT_V2", "STALE_V1", "NO_AI_ASSESSMENT", "AI_FAILED")
+    }
+    subtypes: dict[str, int] = {}
+    recommendations: dict[str, int] = {}
+    confidence: dict[str, int] = {}
+    recommendation_subtypes: dict[str, dict[str, int]] = {}
+    for item in pending:
+        subtype = str((item.get("extracted_facts") or {}).get("planning_subtype") or "AMBIGUOUS")
+        subtypes[subtype] = subtypes.get(subtype, 0) + 1
+        if care_planning_ai_currency(item) != "CURRENT_V2":
+            continue
+        recommendation = str(item.get("latest_recommendation") or "NEEDS_HUMAN")
+        recommendations[recommendation] = recommendations.get(recommendation, 0) + 1
+        confidence_key = (
+            f"{float(item['latest_confidence']):.2f}"
+            if item.get("latest_confidence") is not None
+            else "NONE"
+        )
+        confidence[confidence_key] = confidence.get(confidence_key, 0) + 1
+        by_subtype = recommendation_subtypes.setdefault(recommendation, {})
+        by_subtype[subtype] = by_subtype.get(subtype, 0) + 1
+    return {
+        "prompt_version": CARE_PLANNING_PROMPT_VERSION,
+        "pending_total": len(pending),
+        "currency": currency,
+        "subtypes": subtypes,
+        "v2_recommendations": recommendations,
+        "v2_confidence_distribution": confidence,
+        "v2_recommendations_by_subtype": recommendation_subtypes,
+    }
+
+
+def care_planning_ai_refresh_preview(settings: Settings) -> dict[str, Any]:
+    """Return current pending AI currency and review distributions without mutation."""
+    return _pending_snapshot(_rows(settings))
+
+
+def refresh_stale_care_planning_ai(
+    settings: Settings,
+    *,
+    actor: str,
+    limit: int = CARE_AI_REFRESH_MAX_BATCH,
+    include_missing: bool = True,
+) -> dict[str, Any]:
+    """Append v2 assessments for a bounded stale/missing pending CareProspect cohort."""
+    bounded_limit = min(max(int(limit), 1), CARE_AI_REFRESH_MAX_BATCH)
+    allowed = {"STALE_V1"}
+    if include_missing:
+        allowed.add("NO_AI_ASSESSMENT")
+    before = _rows(settings)
+    selected = [
+        item
+        for item in before
+        if item["review_status"] == "PENDING" and care_planning_ai_currency(item) in allowed
+    ][:bounded_limit]
+    results: list[dict[str, Any]] = []
+    consecutive_failures = 0
+    stopped_early = False
+    for item in selected:
+        signal_id = str(item["id"])
+        raw = get_raw_signal(settings, signal_id)
+        if raw is None:
+            results.append({"signal_id": signal_id, "status": "NOT_FOUND"})
+            consecutive_failures += 1
+        else:
+            # A concurrent refresh may have completed after cohort selection.
+            existing = get_ai_review(
+                settings, signal_id, settings.ai_model_id, CARE_PLANNING_PROMPT_VERSION
+            )
+            if existing is not None:
+                results.append(
+                    {"signal_id": signal_id, "status": "SKIPPED_CURRENT", "idempotent": True}
+                )
+                consecutive_failures = 0
+                continue
+            review = evaluate_shadow(raw, settings)
+            saved = save_ai_review(settings, signal_id, review)
+            status = str(review.get("status") or "FAILED")
+            structured_correction = (
+                item.get("latest_recommendation") == "APPROVE"
+                and review.get("recommendation") == "REJECT"
+                and _structured_negative(item)
+            )
+            results.append(
+                {
+                    "signal_id": signal_id,
+                    "status": status,
+                    "saved": saved,
+                    "previous_prompt_version": item.get("latest_prompt_version"),
+                    "previous_recommendation": item.get("latest_recommendation"),
+                    "v2_recommendation": review.get("recommendation"),
+                    "v2_confidence": review.get("confidence"),
+                    "failure_category": review.get("failure_category"),
+                    "structured_negative_correction": structured_correction,
+                }
+            )
+            consecutive_failures = 0 if status == "SUCCEEDED" else consecutive_failures + 1
+        if consecutive_failures >= CARE_AI_REFRESH_FAILURE_STOP:
+            stopped_early = True
+            break
+    summary = {
+        "prompt_version": CARE_PLANNING_PROMPT_VERSION,
+        "batch_limit": bounded_limit,
+        "selected": len(selected),
+        "attempted": len(results),
+        "succeeded": sum(item.get("status") == "SUCCEEDED" for item in results),
+        "failed": sum(
+            item.get("status") not in {"SUCCEEDED", "SKIPPED_CURRENT"} for item in results
+        ),
+        "idempotent_skips": sum(item.get("status") == "SKIPPED_CURRENT" for item in results),
+        "structured_negative_corrections": sum(
+            bool(item.get("structured_negative_correction")) for item in results
+        ),
+        "stopped_early": stopped_early,
+        "review_decisions_mutated": False,
+        "customer_publication_unchanged": True,
+        "items": results,
+    }
+    record_admin_audit(
+        settings,
+        action="CARE_PLANNING_AI_V2_STALE_REFRESH",
+        actor=actor,
+        target_type="signal",
+        details={key: value for key, value in summary.items() if key != "items"},
+    )
+    return summary
+
+
 def _v1_disagreement(item: dict[str, Any]) -> bool:
     deterministic = deterministic_review_recommendation(item.get("extracted_facts"))
     return (
@@ -128,23 +273,20 @@ def care_ai_policy_preview_candidate(item: dict[str, Any]) -> bool:
         and not _structured_negative(item)
         and facts.get("likely_false_positive") is not True
         and not (facts.get("planning_ambiguity_markers") or [])
-        and str(facts.get("planning_subtype") or "AMBIGUOUS")
-        not in _POLICY_EXCLUDED_SUBTYPES
+        and str(facts.get("planning_subtype") or "AMBIGUOUS") not in _POLICY_EXCLUDED_SUBTYPES
     )
 
 
 def _human_metrics(items: list[dict[str, Any]]) -> dict[str, Any]:
     cohort = [item for item in items if _human_reviewed(item) and _v1_disagreement(item)]
     agree = sum(
-        (item["v1_recommendation"] == "APPROVE")
-        == (item["review_status"] == "APPROVED")
+        (item["v1_recommendation"] == "APPROVE") == (item["review_status"] == "APPROVED")
         for item in cohort
     )
     negatives = [item for item in cohort if _structured_negative(item)]
     adjusted = [item for item in cohort if not _structured_negative(item)]
     adjusted_agree = sum(
-        (item["v1_recommendation"] == "APPROVE")
-        == (item["review_status"] == "APPROVED")
+        (item["v1_recommendation"] == "APPROVE") == (item["review_status"] == "APPROVED")
         for item in adjusted
     )
     return {
@@ -152,13 +294,11 @@ def _human_metrics(items: list[dict[str, Any]]) -> dict[str, Any]:
         "ai_human_agreement": agree,
         "ai_human_agreement_rate": agree / len(cohort) if cohort else None,
         "false_approves": sum(
-            item["v1_recommendation"] == "APPROVE"
-            and item["review_status"] == "REJECTED"
+            item["v1_recommendation"] == "APPROVE" and item["review_status"] == "REJECTED"
             for item in cohort
         ),
         "false_rejects": sum(
-            item["v1_recommendation"] == "REJECT"
-            and item["review_status"] == "APPROVED"
+            item["v1_recommendation"] == "REJECT" and item["review_status"] == "APPROVED"
             for item in cohort
         ),
         "explicit_negative_errors": sum(
@@ -223,6 +363,7 @@ def care_planning_ai_validation_preview(
             for item in disagreement
         ],
         "human_validation": _human_metrics(items),
+        "refresh": _pending_snapshot(items),
         "policy_preview": {
             "policy_version": CARE_AI_POLICY_PREVIEW_VERSION,
             "pending_evaluated": len(pending),
@@ -261,9 +402,7 @@ def run_care_planning_ai_validation(
             settings.ai_model_id,
             CARE_PLANNING_PREVIOUS_PROMPT_VERSION,
         )
-        v2 = get_ai_review(
-            settings, signal_id, settings.ai_model_id, CARE_PLANNING_PROMPT_VERSION
-        )
+        v2 = get_ai_review(settings, signal_id, settings.ai_model_id, CARE_PLANNING_PROMPT_VERSION)
         idempotent = v2 is not None
         if v2 is None:
             v2 = evaluate_shadow(raw, settings)
@@ -336,14 +475,12 @@ def care_planning_ai_validation_report(
         "v2_labelled": len(v2_labelled),
         "v2_agreement": sum(v2_labelled),
         "v2_false_approves": sum(
-            item.get("v2_recommendation") == "APPROVE"
-            and item["review_status"] == "REJECTED"
+            item.get("v2_recommendation") == "APPROVE" and item["review_status"] == "REJECTED"
             for item in succeeded
             if _human_reviewed(item)
         ),
         "v2_false_rejects": sum(
-            item.get("v2_recommendation") == "REJECT"
-            and item["review_status"] == "APPROVED"
+            item.get("v2_recommendation") == "REJECT" and item["review_status"] == "APPROVED"
             for item in succeeded
             if _human_reviewed(item)
         ),

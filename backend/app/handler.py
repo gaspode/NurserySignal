@@ -24,8 +24,10 @@ from app.backtest_repository import (
 )
 from app.backtesting import BacktestBounds
 from app.care_ai_validation import (
+    CARE_AI_REFRESH_MAX_BATCH,
     care_planning_ai_validation_preview,
     care_planning_ai_validation_report,
+    refresh_stale_care_planning_ai,
     run_care_planning_ai_validation,
 )
 from app.care_backfill import backfill_care_from_stored_evidence
@@ -1363,17 +1365,29 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                         200,
                         care_planning_ai_validation_preview(
                             settings,
-                            sample_limit=min(
-                                max(int(_query(event, "limit") or "80"), 1), 100
-                            ),
+                            sample_limit=min(max(int(_query(event, "limit") or "80"), 1), 100),
                         ),
                     )
                 if method == "POST":
                     payload = parse_json_payload(_raw_body(event))
+                    operation = str(payload.get("operation") or "evaluate").lower()
+                    if operation == "refresh_stale":
+                        actor = str(claims.get("sub") or claims.get("username") or "unknown")
+                        return _response(
+                            200,
+                            refresh_stale_care_planning_ai(
+                                settings,
+                                actor=actor,
+                                limit=min(
+                                    max(int(payload.get("limit", CARE_AI_REFRESH_MAX_BATCH)), 1),
+                                    CARE_AI_REFRESH_MAX_BATCH,
+                                ),
+                                include_missing=bool(payload.get("include_missing", True)),
+                            ),
+                        )
                     signal_ids = payload.get("signal_ids")
                     if not isinstance(signal_ids, list):
                         raise ValueError("signal_ids_required")
-                    operation = str(payload.get("operation") or "evaluate").lower()
                     if operation == "report":
                         return _response(
                             200,
@@ -1576,9 +1590,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                         include_excluded=_query(event, "include_excluded") == "true",
                         opportunity_decision=_query(event, "opportunity_decision"),
                         vertical=validate_vertical_filter(_query(event, "vertical")),
-                        triage_bucket=validate_triage_bucket(
-                            _query(event, "triage_bucket")
-                        ),
+                        triage_bucket=validate_triage_bucket(_query(event, "triage_bucket")),
                         planning_subtype=validate_care_planning_subtype(
                             _query(event, "planning_subtype")
                         ),
