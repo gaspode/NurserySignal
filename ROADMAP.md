@@ -935,3 +935,17 @@ Paid-pilot activation check (2026-09-28):
   untouched. AI v1/v2 assessments and customer publication were unchanged. Exact next step: manually
   assess the 20 unsupported draft opportunities before any lifecycle cleanup; do not broaden outcome
   automation or CareProspect AI authority.
+- The post-cleanup CareProspect AI freshness follow-up confirms that all 321 pending Planning signals
+  have a latest `care-planning-shadow-v2` attempt: 319 succeeded, zero remain on v1, zero are missing,
+  and two v2 attempts remain explicitly failed with `MALFORMED_RESPONSE` for manual review. No Bedrock
+  refresh calls or review/publication mutations were required. The current successful-v2 distribution
+  is 271 APPROVE, 43 REJECT and five NEEDS_HUMAN; confidence is 304 at 0.95, ten at 0.90, two at 0.80
+  and three at 0.70. Triage contains 93 rule/AI disagreements, five AI-uncertain and 223 manual-review
+  records. The inbox list and detail projections both select the newest immutable assessment, so a newer
+  v2 result supersedes v1 for display while retaining v1 history. Historical refresh evidence records
+  47 v1 APPROVE to v2 REJECT changes; stored validation reasons attribute 25 of those directly to
+  structured outcomes (three refusals and 22 withdrawals), while the remaining 22 are not assigned a
+  cause without stronger stored evidence. Canonical outcomes remain authoritative: no final refusal or
+  withdrawal is pending, and the one active appeal remains support-only. The 20 unsupported draft
+  opportunities remain untouched. Exact next step: manually review the pending cohort and the two failed
+  v2 assessments; do not broaden CareProspect AI automation.
