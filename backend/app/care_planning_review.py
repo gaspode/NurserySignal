@@ -186,6 +186,11 @@ def extract_prior_planning_references(text: str) -> tuple[str, ...]:
     references: list[str] = []
     for match in _REFERENCE.finditer(text):
         reference = match.group(1).strip(".,;:()[]{}").upper()
+        # UK planning references contain a numeric component. This prevents
+        # prose such as "application submitted under Section 73" from
+        # producing a malformed SUBMITTED alias/reference.
+        if not any(character.isdigit() for character in reference):
+            continue
         if reference not in references:
             references.append(reference)
     return tuple(references[:10])

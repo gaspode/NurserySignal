@@ -120,6 +120,16 @@ def test_follow_ups_do_not_create_duplicate_openings_and_retain_reference() -> N
         assert facts["planning_prior_references"] == references
 
 
+def test_prior_reference_extraction_rejects_prose_after_application() -> None:
+    candidate = enrich_care_signal(
+        raw_planning(
+            "Application submitted under Section 73 for a minor amendment to planning "
+            "permission 25/2371/F for a children's home"
+        )
+    )
+    assert candidate["extracted_facts"]["planning_prior_references"] == ["25/2371/F"]
+
+
 def test_material_capacity_variation_is_relevant_but_support_only() -> None:
     candidate = enrich_care_signal(
         raw_planning(
