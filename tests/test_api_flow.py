@@ -1029,6 +1029,27 @@ def test_review_triage_is_admin_only_and_vertical_scoped(monkeypatch) -> None:
     assert captured["vertical"] == "CHILDRENS_HOME"
 
 
+def test_care_planning_manual_analysis_is_admin_only_and_read_only(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "app.handler.care_planning_manual_cohort_analysis",
+        lambda settings: {"pending_total": 12, "no_new_subtype_automation_enabled": True},
+    )
+    denied = handler(
+        event(
+            "/admin/review-triage/care-planning/manual-analysis",
+            claims={"sub": "staff", "cognito:groups": ["Other"]},
+        ),
+        None,
+    )
+    assert denied["statusCode"] == 403
+    response = handler(
+        event("/admin/review-triage/care-planning/manual-analysis"),
+        None,
+    )
+    assert response["statusCode"] == 200
+    assert json.loads(response["body"])["no_new_subtype_automation_enabled"] is True
+
+
 def test_refusal_cleanup_and_safe_approve_are_bounded_admin_actions(monkeypatch) -> None:
     cleanup_args = {}
     approve_args = {}
@@ -1150,8 +1171,9 @@ def test_care_planning_outcome_dry_run_is_admin_only_bounded_and_read_only(
     captured = {}
     monkeypatch.setattr(
         "app.handler.planning_outcome_dry_run",
-        lambda settings, **kwargs: captured.update(kwargs)
-        or {"read_only": True, "pending_inspected": 12},
+        lambda settings, **kwargs: (
+            captured.update(kwargs) or {"read_only": True, "pending_inspected": 12}
+        ),
     )
     response = handler(
         event(

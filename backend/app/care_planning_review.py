@@ -12,9 +12,13 @@ from app.planning_outcomes import (
 
 CARE_PLANNING_FASTPATH_POLICY_VERSION = "care-planning-fastpath-v1"
 CARE_PLANNING_QA_MODULUS = 10
-CARE_PLANNING_AI_APPROVAL_POLICY_VERSION = "care-planning-ai-approval-v1"
+CARE_PLANNING_AI_APPROVAL_POLICY_VERSION = "care-planning-ai-approval-v1.1"
+CARE_PLANNING_AI_APPROVAL_POLICY_VERSIONS = frozenset(
+    {"care-planning-ai-approval-v1", CARE_PLANNING_AI_APPROVAL_POLICY_VERSION}
+)
 CARE_PLANNING_AI_APPROVAL_PROMPT_VERSION = "care-planning-shadow-v2"
 CARE_PLANNING_AI_APPROVAL_MIN_CONFIDENCE = 0.95
+CARE_PLANNING_AI_APPROVAL_QA_MODULUS = 20
 WITHDRAWAL_POLICY_VERSION = "planning-withdrawal-v2"
 
 CARE_PLANNING_AI_APPROVAL_SUBTYPES = frozenset(
@@ -285,8 +289,8 @@ def care_planning_fastpath_qa_holdout(signal_id: str) -> bool:
 
 
 def care_planning_ai_approval_qa_bucket(signal_id: str) -> int:
-    """Return the stable 0-9 QA bucket for the immutable signal UUID."""
-    return UUID(str(signal_id)).int % CARE_PLANNING_QA_MODULUS
+    """Return the stable v1.1 0-19 QA bucket for the immutable signal UUID."""
+    return UUID(str(signal_id)).int % CARE_PLANNING_AI_APPROVAL_QA_MODULUS
 
 
 def care_planning_ai_approval_qa_holdout(signal_id: str) -> bool:
@@ -330,9 +334,7 @@ def care_planning_ai_approval_exclusion(
         return "SUBTYPE"
     if facts.get("likely_false_positive") is True or facts.get("planning_ambiguity_markers"):
         return "AMBIGUITY_OR_FALSE_POSITIVE"
-    if ai_status != "SUCCEEDED" or (
-        ai_prompt_version != CARE_PLANNING_AI_APPROVAL_PROMPT_VERSION
-    ):
+    if ai_status != "SUCCEEDED" or (ai_prompt_version != CARE_PLANNING_AI_APPROVAL_PROMPT_VERSION):
         return "AI_VERSION_OR_STATUS"
     if ai_recommendation != "APPROVE":
         return "AI_RECOMMENDATION"

@@ -10,8 +10,10 @@ from uuid import UUID
 from psycopg.types.json import Jsonb
 
 from app.care_planning_review import (
+    CARE_PLANNING_AI_APPROVAL_BLOCKED_OUTCOMES,
     CARE_PLANNING_AI_APPROVAL_MIN_CONFIDENCE,
     CARE_PLANNING_AI_APPROVAL_POLICY_VERSION,
+    CARE_PLANNING_AI_APPROVAL_POLICY_VERSIONS,
     CARE_PLANNING_AI_APPROVAL_PROMPT_VERSION,
     CARE_PLANNING_AI_APPROVAL_SUBTYPES,
     CARE_PLANNING_FASTPATH_POLICY_VERSION,
@@ -1643,9 +1645,7 @@ def auto_reject_withdrawn_planning(
     return updated
 
 
-def planning_outcome_dry_run(
-    settings: Settings, *, limit: int = 2500
-) -> dict[str, Any]:
+def planning_outcome_dry_run(settings: Settings, *, limit: int = 2500) -> dict[str, Any]:
     """Read-only report of canonical outcomes for pending CareProspect Planning.
 
     The report also inventories the real structured provider vocabulary across
@@ -1725,9 +1725,7 @@ def planning_outcome_dry_run(
                     "decision_date": assessment.decision_date,
                     "matched_field": assessment.matched_field,
                     "matched_value": assessment.matched_value,
-                    "current_opportunity_action": facts.get(
-                        "opportunity_creation_decision"
-                    ),
+                    "current_opportunity_action": facts.get("opportunity_creation_decision"),
                     "affects_published": bool(affects_published),
                 }
             )
@@ -2262,9 +2260,7 @@ def _care_planning_ai_approval_evaluation(
     exclusions: dict[str, int] = {}
     excluded_subtypes: dict[str, int] = {}
     for item in items:
-        confidence = (
-            float(item["ai_confidence"]) if item.get("ai_confidence") is not None else None
-        )
+        confidence = float(item["ai_confidence"]) if item.get("ai_confidence") is not None else None
         reason = care_planning_ai_approval_exclusion(
             vertical=item["vertical"],
             source_type=item["source_type"],
@@ -2303,7 +2299,7 @@ def _care_planning_ai_approval_evaluation(
 
 
 def care_planning_ai_approval_preview(settings: Settings, *, limit: int = 100) -> dict[str, Any]:
-    """Preview the exact v1 CareProspect AI approval cohort without mutation."""
+    """Preview the exact current CareProspect AI approval cohort without mutation."""
     bounded_limit = min(max(int(limit), 1), 100)
     items = _care_planning_ai_approval_rows(settings)
     eligible, exclusions, excluded_subtypes = _care_planning_ai_approval_evaluation(items)
@@ -2328,9 +2324,7 @@ def care_planning_ai_approval_preview(settings: Settings, *, limit: int = 100) -
             "by_confidence": exclusions.get("AI_CONFIDENCE", 0),
             "by_ai_version_or_status": exclusions.get("AI_VERSION_OR_STATUS", 0),
             "by_planning_outcome": exclusions.get("PLANNING_OUTCOME", 0),
-            "by_ambiguity_or_false_positive": exclusions.get(
-                "AMBIGUITY_OR_FALSE_POSITIVE", 0
-            ),
+            "by_ambiguity_or_false_positive": exclusions.get("AMBIGUITY_OR_FALSE_POSITIVE", 0),
             "by_existing_review_or_policy_state": exclusions.get(
                 "EXISTING_REVIEW_OR_POLICY_STATE", 0
             ),
@@ -2345,7 +2339,7 @@ def care_planning_ai_approval_preview(settings: Settings, *, limit: int = 100) -
 def apply_care_planning_ai_approval_policy(
     settings: Settings, signal_id: str, *, trigger_actor: str | None = None
 ) -> dict[str, Any]:
-    """Apply care-planning-ai-approval-v1 once, after a successful current v2 assessment."""
+    """Apply the current Care AI approval policy after a successful current v2 assessment."""
     with connection(settings) as conn:
         row = conn.execute(
             """
@@ -2381,9 +2375,7 @@ def apply_care_planning_ai_approval_policy(
             "ai_prompt_version",
         )
         item = dict(zip(fields, row))
-        confidence = (
-            float(item["ai_confidence"]) if item.get("ai_confidence") is not None else None
-        )
+        confidence = float(item["ai_confidence"]) if item.get("ai_confidence") is not None else None
         outcome = care_planning_ai_approval_outcome(
             signal_id=str(item["id"]),
             vertical=item["vertical"],
@@ -2481,7 +2473,7 @@ def apply_care_planning_ai_approval_policy(
 def care_planning_ai_approval_backlog(
     settings: Settings, *, actor: str, preview: bool, limit: int = 100
 ) -> dict[str, Any]:
-    """Preview or process one bounded batch under the exact Care AI approval v1 policy."""
+    """Preview or process one bounded batch under the current Care AI approval policy."""
     bounded_limit = min(max(int(limit), 1), 100)
     if preview:
         return care_planning_ai_approval_preview(settings, limit=bounded_limit)
@@ -2545,6 +2537,213 @@ def care_planning_ai_approval_backlog(
         "published_after": int(published_after),
         "customer_publication_unchanged": True,
     }
+
+
+CARE_PLANNING_MANUAL_ANALYSIS_SUBTYPES = (
+    "NEW_HOME_CHANGE_OF_USE",
+    "NEW_HOME_OTHER_EXPLICIT",
+    "LAWFULNESS_PROPOSED",
+    "LAWFULNESS_EXISTING",
+    "CONDITION_VARIATION",
+    "CONDITION_DISCHARGE",
+    "NON_MATERIAL_AMENDMENT",
+    "FOLLOW_UP_OTHER",
+    "AMBIGUOUS",
+)
+
+
+def _counter_payload(values: list[str]) -> dict[str, int]:
+    return dict(sorted(Counter(values).items()))
+
+
+def care_planning_manual_analysis_from_rows(items: list[dict[str, Any]]) -> dict[str, Any]:
+    """Build the bounded, read-only manual-cohort and lawfulness policy preview."""
+    subtype_rows: dict[str, list[dict[str, Any]]] = {
+        subtype: [] for subtype in CARE_PLANNING_MANUAL_ANALYSIS_SUBTYPES
+    }
+    for item in items:
+        facts = item.get("extracted_facts") or {}
+        subtype = str(facts.get("planning_subtype") or "AMBIGUOUS")
+        subtype_rows.setdefault(subtype, []).append(item)
+
+    subtype_analysis: dict[str, Any] = {}
+    for subtype, rows in subtype_rows.items():
+        recommendations = [str(item.get("ai_recommendation") or "MISSING") for item in rows]
+        confidences = [
+            f"{float(item['ai_confidence']):.2f}"
+            if item.get("ai_confidence") is not None
+            else "MISSING"
+            for item in rows
+        ]
+        triage = [
+            review_triage_bucket(
+                signal_id=str(item["id"]),
+                vertical=item["vertical"],
+                source_type=item["source_type"],
+                review_status=item["review_status"],
+                metadata=item.get("metadata"),
+                extracted_facts=item.get("extracted_facts"),
+                ai_status=item.get("ai_status"),
+                ai_recommendation=item.get("ai_recommendation"),
+                ai_confidence=(
+                    float(item["ai_confidence"]) if item.get("ai_confidence") is not None else None
+                ),
+            )
+            for item in rows
+        ]
+        subtype_analysis[subtype] = {
+            "total_pending": len(rows),
+            "ai_recommendations": _counter_payload(recommendations),
+            "confidence_distribution": _counter_payload(confidences),
+            "rule_ai_disagreement": triage.count("DETERMINISTIC_AI_DISAGREE"),
+            "manual_review": triage.count("MANUAL_REVIEW_REQUIRED"),
+            "triage_distribution": _counter_payload(triage),
+            "canonical_outcomes": _counter_payload(
+                [canonical_planning_outcome(item.get("metadata")).outcome.value for item in rows]
+            ),
+            "opportunity_creation_decisions": _counter_payload(
+                [
+                    str(
+                        (item.get("extracted_facts") or {}).get("opportunity_creation_decision")
+                        or "MISSING"
+                    )
+                    for item in rows
+                ]
+            ),
+            "opportunity_change_types": _counter_payload(
+                [
+                    str(
+                        (item.get("extracted_facts") or {}).get("opportunity_change_type")
+                        or "MISSING"
+                    )
+                    for item in rows
+                ]
+            ),
+        }
+
+    lawfulness = subtype_rows.get("LAWFULNESS_PROPOSED", [])
+    lawfulness_exclusions: Counter[str] = Counter()
+    lawfulness_eligible: list[dict[str, Any]] = []
+    for item in lawfulness:
+        facts = item.get("extracted_facts") or {}
+        outcome = canonical_planning_outcome(item.get("metadata")).outcome
+        marker_present = any(
+            isinstance(facts.get(marker), dict)
+            for marker in (
+                "automatic_review",
+                "safe_approval",
+                "care_planning_fastpath",
+                "care_planning_ai_approval",
+            )
+        )
+        if item.get("reviewed_by") or marker_present:
+            reason = "EXISTING_REVIEW_OR_POLICY_STATE"
+        elif item.get("ai_status") != "SUCCEEDED" or (
+            item.get("ai_prompt_version") != CARE_PLANNING_AI_APPROVAL_PROMPT_VERSION
+        ):
+            reason = "AI_VERSION_OR_STATUS"
+        elif item.get("ai_recommendation") != "APPROVE":
+            reason = "AI_RECOMMENDATION"
+        elif float(item.get("ai_confidence") or 0) < CARE_PLANNING_AI_APPROVAL_MIN_CONFIDENCE:
+            reason = "AI_CONFIDENCE"
+        elif facts.get("explicit_new_home_proposal") is not True:
+            reason = "NO_EXPLICIT_NEW_HOME_WORDING"
+        elif outcome in CARE_PLANNING_AI_APPROVAL_BLOCKED_OUTCOMES:
+            reason = "PLANNING_OUTCOME"
+        elif facts.get("likely_false_positive") is True:
+            reason = "LIKELY_FALSE_POSITIVE"
+        elif facts.get("planning_ambiguity_markers"):
+            reason = "AMBIGUITY"
+        else:
+            reason = None
+        if reason:
+            lawfulness_exclusions[reason] += 1
+        else:
+            lawfulness_eligible.append(item)
+
+    lawfulness_holdouts = sum(
+        care_planning_fastpath_qa_holdout(str(item["id"])) for item in lawfulness_eligible
+    )
+    lawfulness_facts = [item.get("extracted_facts") or {} for item in lawfulness]
+    lawfulness_detail = {
+        **subtype_analysis["LAWFULNESS_PROPOSED"],
+        "explicit_new_home_wording": sum(
+            facts.get("explicit_new_home_proposal") is True for facts in lawfulness_facts
+        ),
+        "likely_false_positive": sum(
+            facts.get("likely_false_positive") is True for facts in lawfulness_facts
+        ),
+        "ambiguity_markers": sum(
+            bool(facts.get("planning_ambiguity_markers")) for facts in lawfulness_facts
+        ),
+        "prior_application_references": sum(
+            bool(facts.get("planning_prior_references")) for facts in lawfulness_facts
+        ),
+        "active_appeals": sum(
+            canonical_planning_outcome(item.get("metadata")).outcome
+            is PlanningOutcome.REFUSED_UNDER_APPEAL
+            for item in lawfulness
+        ),
+        "malformed_or_missing_ai": sum(
+            item.get("ai_status") != "SUCCEEDED" or not item.get("ai_prompt_version")
+            for item in lawfulness
+        ),
+    }
+    return {
+        "pending_total": len(items),
+        "subtypes": subtype_analysis,
+        "lawfulness_proposed": lawfulness_detail,
+        "lawfulness_policy_preview": {
+            "policy_name": "care-planning-lawfulness-proposed-v1",
+            "enabled": False,
+            "eligible": len(lawfulness_eligible),
+            "would_auto_approve": len(lawfulness_eligible) - lawfulness_holdouts,
+            "qa_holdouts_at_10_percent": lawfulness_holdouts,
+            "excluded_reasons": dict(sorted(lawfulness_exclusions.items())),
+        },
+        "no_new_subtype_automation_enabled": True,
+        "customer_publication_unchanged": True,
+    }
+
+
+def care_planning_manual_cohort_analysis(settings: Settings) -> dict[str, Any]:
+    """Return a bounded production analysis without mutating reviews or opportunities."""
+    items = _care_planning_ai_approval_rows(settings)
+    report = care_planning_manual_analysis_from_rows(items)
+    with connection(settings) as conn:
+        report["published_opportunities"] = int(
+            conn.execute(
+                """SELECT count(*) FROM opportunities
+                   WHERE vertical = 'CHILDRENS_HOME' AND publication_status = 'PUBLISHED'"""
+            ).fetchone()[0]
+        )
+        report["unsupported_draft_opportunities"] = int(
+            conn.execute(
+                """
+                SELECT count(DISTINCT o.id)
+                FROM opportunities o
+                WHERE o.vertical = 'CHILDRENS_HOME' AND o.publication_status = 'DRAFT'
+                  AND EXISTS (
+                    SELECT 1 FROM opportunity_signals os
+                    JOIN signal_enrichments se ON se.raw_signal_id = os.raw_signal_id
+                    WHERE os.opportunity_id = o.id AND os.status = 'ACTIVE'
+                      AND se.extracted_facts->>'planning_subtype' IN
+                        ('REFUSED', 'WITHDRAWN', 'LAWFULNESS_EXISTING',
+                         'CONDITION_DISCHARGE', 'NON_MATERIAL_AMENDMENT', 'FOLLOW_UP_OTHER')
+                  )
+                  AND NOT EXISTS (
+                    SELECT 1 FROM opportunity_signals os
+                    JOIN signal_enrichments se ON se.raw_signal_id = os.raw_signal_id
+                    WHERE os.opportunity_id = o.id AND os.status = 'ACTIVE'
+                      AND COALESCE(se.extracted_facts->>'planning_subtype', '') NOT IN
+                        ('REFUSED', 'WITHDRAWN', 'LAWFULNESS_EXISTING',
+                         'CONDITION_DISCHARGE', 'NON_MATERIAL_AMENDMENT', 'FOLLOW_UP_OTHER')
+                      AND se.review_status <> 'REJECTED'
+                  )
+                """
+            ).fetchone()[0]
+        )
+    return report
 
 
 def cleanup_refused_planning_signals(
@@ -2913,7 +3112,7 @@ def review_triage_summary(settings: Settings, *, vertical: str = "ALL") -> dict[
         marker = facts.get("care_planning_ai_approval") if isinstance(facts, dict) else None
         if (
             isinstance(marker, dict)
-            and marker.get("policy_version") == CARE_PLANNING_AI_APPROVAL_POLICY_VERSION
+            and marker.get("policy_version") in CARE_PLANNING_AI_APPROVAL_POLICY_VERSIONS
         ):
             care_ai_policy_records.append((item, marker))
     care_ai_holdouts = [
@@ -2924,6 +3123,32 @@ def review_triage_summary(settings: Settings, *, vertical: str = "ALL") -> dict[
     care_ai_holdout_rejected = sum(
         item["review_status"] == "REJECTED" for item, _ in care_ai_holdouts
     )
+    care_ai_versions: dict[str, dict[str, int]] = {}
+    for item, marker in care_ai_policy_records:
+        version = str(marker.get("policy_version"))
+        metrics = care_ai_versions.setdefault(
+            version,
+            {
+                "total": 0,
+                "auto_approved": 0,
+                "qa_holdouts": 0,
+                "qa_approved": 0,
+                "qa_rejected": 0,
+                "qa_pending": 0,
+            },
+        )
+        metrics["total"] += 1
+        if marker.get("outcome") == "AUTO_APPROVE":
+            metrics["auto_approved"] += 1
+        elif marker.get("outcome") == "QA_HOLDOUT":
+            metrics["qa_holdouts"] += 1
+            status_key = {
+                "APPROVED": "qa_approved",
+                "REJECTED": "qa_rejected",
+                "PENDING": "qa_pending",
+            }.get(item["review_status"])
+            if status_key:
+                metrics[status_key] += 1
     care_pending = [
         item
         for item in pending
@@ -3019,10 +3244,12 @@ def review_triage_summary(settings: Settings, *, vertical: str = "ALL") -> dict[
         },
         "care_planning_ai_approval_monitoring": {
             "policy_version": CARE_PLANNING_AI_APPROVAL_POLICY_VERSION,
+            "future_qa_target_percent": 5,
+            "historical_policy_versions": sorted(CARE_PLANNING_AI_APPROVAL_POLICY_VERSIONS),
+            "by_policy_version": care_ai_versions,
             "total_policy_records": len(care_ai_policy_records),
             "auto_approved": sum(
-                marker.get("outcome") == "AUTO_APPROVE"
-                for _, marker in care_ai_policy_records
+                marker.get("outcome") == "AUTO_APPROVE" for _, marker in care_ai_policy_records
             ),
             "qa_holdouts": len(care_ai_holdouts),
             "qa_holdouts_pending": sum(
@@ -3033,9 +3260,7 @@ def review_triage_summary(settings: Settings, *, vertical: str = "ALL") -> dict[
             ),
             "qa_holdouts_rejected": care_ai_holdout_rejected,
             "observed_error_rate": (
-                care_ai_holdout_rejected / len(care_ai_holdouts)
-                if care_ai_holdouts
-                else None
+                care_ai_holdout_rejected / len(care_ai_holdouts) if care_ai_holdouts else None
             ),
             "warning": (
                 "CareProspect AI approval QA rejection detected; review "

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from app.care import enrich_care_signal
 from app.care_planning_review import (
@@ -23,6 +23,7 @@ from app.repository import (
     apply_care_planning_ai_approval_policy,
     apply_care_planning_fastpath_policy,
     auto_reject_withdrawn_planning,
+    care_planning_manual_analysis_from_rows,
 )
 
 
@@ -76,9 +77,7 @@ def test_care_ai_approval_v1_exact_eligibility_and_exclusions() -> None:
             "planning_ambiguity_markers": [],
         }
         assert (
-            care_planning_ai_approval_exclusion(
-                **ai_approval_kwargs(extracted_facts=facts)
-            )
+            care_planning_ai_approval_exclusion(**ai_approval_kwargs(extracted_facts=facts))
             == "SUBTYPE"
         )
     cases = (
@@ -134,6 +133,36 @@ def test_care_ai_approval_v1_outcome_and_false_positive_precedence() -> None:
     )
     facts["planning_ambiguity_markers"] = []
     facts["care_planning_fastpath"] = {"outcome": "QA_HOLDOUT"}
+    assert (
+        care_planning_ai_approval_exclusion(**ai_approval_kwargs(extracted_facts=facts))
+        == "EXISTING_REVIEW_OR_POLICY_STATE"
+    )
+
+
+def test_care_ai_approval_v1_1_uses_stable_five_percent_future_holdout() -> None:
+    signal_ids = [str(UUID(int=value)) for value in range(1, 101)]
+    holdouts = [value for value in signal_ids if care_planning_ai_approval_qa_holdout(value)]
+    assert len(holdouts) == 5
+    assert all(care_planning_ai_approval_qa_bucket(value) == 0 for value in holdouts)
+    assert [care_planning_ai_approval_qa_holdout(value) for value in signal_ids] == [
+        care_planning_ai_approval_qa_holdout(value) for value in signal_ids
+    ]
+    # UUID integer 10 belonged to the historical modulo-10 holdout, but is not
+    # reassigned by the forward-only modulo-20 v1.1 rule.
+    assert UUID(int=10).int % 10 == 0
+    assert not care_planning_ai_approval_qa_holdout(str(UUID(int=10)))
+
+
+def test_historical_care_ai_policy_marker_prevents_reclassification() -> None:
+    facts = {
+        "planning_subtype": "NEW_HOME_CHANGE_OF_USE",
+        "likely_false_positive": False,
+        "planning_ambiguity_markers": [],
+        "care_planning_ai_approval": {
+            "policy_version": "care-planning-ai-approval-v1",
+            "outcome": "QA_HOLDOUT",
+        },
+    }
     assert (
         care_planning_ai_approval_exclusion(**ai_approval_kwargs(extracted_facts=facts))
         == "EXISTING_REVIEW_OR_POLICY_STATE"
@@ -501,3 +530,46 @@ def test_care_ai_qa_holdout_remains_pending(monkeypatch) -> None:
     assert result == {"signal_id": signal_id, "outcome": "QA_HOLDOUT", "updated": True}
     assert fake.status == "PENDING"
     assert fake.marker["qa_bucket"] == 0
+
+
+def test_manual_cohort_analysis_and_lawfulness_preview_are_read_only() -> None:
+    def row(signal_int: int, subtype: str, recommendation: str, confidence: float) -> dict:
+        return {
+            "id": UUID(int=signal_int),
+            "vertical": "CHILDRENS_HOME",
+            "source_type": "planning",
+            "review_status": "PENDING",
+            "reviewed_by": None,
+            "metadata": {"planning_status": "Pending"},
+            "extracted_facts": {
+                "planning_subtype": subtype,
+                "explicit_new_home_proposal": True,
+                "likely_false_positive": False,
+                "planning_ambiguity_markers": [],
+                "planning_candidate_matched": True,
+                "planning_prior_references": [],
+                "opportunity_creation_decision": "CREATE_OPPORTUNITY",
+                "opportunity_change_type": "OPENING",
+            },
+            "ai_status": "SUCCEEDED",
+            "ai_recommendation": recommendation,
+            "ai_confidence": confidence,
+            "ai_prompt_version": "care-planning-shadow-v2",
+        }
+
+    rows = [
+        row(20, "LAWFULNESS_PROPOSED", "APPROVE", 0.95),
+        row(21, "LAWFULNESS_PROPOSED", "REJECT", 0.95),
+        row(22, "CONDITION_DISCHARGE", "REJECT", 0.95),
+    ]
+    report = care_planning_manual_analysis_from_rows(rows)
+    lawfulness = report["lawfulness_proposed"]
+    preview = report["lawfulness_policy_preview"]
+    assert report["pending_total"] == 3
+    assert lawfulness["total_pending"] == 2
+    assert lawfulness["ai_recommendations"] == {"APPROVE": 1, "REJECT": 1}
+    assert preview["eligible"] == 1
+    assert preview["qa_holdouts_at_10_percent"] == 1
+    assert preview["would_auto_approve"] == 0
+    assert preview["excluded_reasons"] == {"AI_RECOMMENDATION": 1}
+    assert report["no_new_subtype_automation_enabled"] is True

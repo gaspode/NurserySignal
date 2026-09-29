@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
-from app.care_planning_review import CARE_PLANNING_AI_APPROVAL_POLICY_VERSION
+from app.care_planning_review import CARE_PLANNING_AI_APPROVAL_POLICY_VERSIONS
 from app.planning_outcomes import canonical_planning_outcome, normalize_structured_planning_value
 
 REFUSAL_POLICY_VERSION = "planning-refusal-v4"
@@ -94,8 +94,7 @@ def review_triage_bucket(
     care_ai_approval = facts.get("care_planning_ai_approval")
     if (
         isinstance(care_ai_approval, dict)
-        and care_ai_approval.get("policy_version")
-        == CARE_PLANNING_AI_APPROVAL_POLICY_VERSION
+        and care_ai_approval.get("policy_version") in CARE_PLANNING_AI_APPROVAL_POLICY_VERSIONS
     ):
         if review_status == "APPROVED" and care_ai_approval.get("outcome") == "AUTO_APPROVE":
             return "AUTO_APPROVED_CARE_AI_APPROVAL"
@@ -145,21 +144,18 @@ def safe_approval_candidate(
     ai_confidence: float | None,
     threshold: float = SAFE_APPROVAL_MIN_CONFIDENCE,
 ) -> bool:
-    return (
-        review_triage_bucket(
-            signal_id=signal_id,
-            vertical=vertical,
-            source_type=source_type,
-            review_status=review_status,
-            metadata=metadata,
-            extracted_facts=extracted_facts,
-            ai_status=ai_status,
-            ai_recommendation=ai_recommendation,
-            ai_confidence=ai_confidence,
-            threshold=threshold,
-        )
-        in {"SAFE_APPROVE_AGREEMENT", "QA_HOLDOUT_SAFE_AGREEMENT"}
-    )
+    return review_triage_bucket(
+        signal_id=signal_id,
+        vertical=vertical,
+        source_type=source_type,
+        review_status=review_status,
+        metadata=metadata,
+        extracted_facts=extracted_facts,
+        ai_status=ai_status,
+        ai_recommendation=ai_recommendation,
+        ai_confidence=ai_confidence,
+        threshold=threshold,
+    ) in {"SAFE_APPROVE_AGREEMENT", "QA_HOLDOUT_SAFE_AGREEMENT"}
 
 
 def safe_approval_qa_bucket(signal_id: str) -> int:

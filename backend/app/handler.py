@@ -63,6 +63,7 @@ from app.planning_backfill import PlanningBackfillBounds, chunk_payload
 from app.repository import (
     care_planning_ai_approval_backlog,
     care_planning_fastpath_backlog,
+    care_planning_manual_cohort_analysis,
     cleanup_refused_planning_signals,
     cleanup_withdrawn_care_planning_signals,
     create_opportunity_from_signal,
@@ -333,6 +334,8 @@ def _admin_path(path: str) -> tuple[str, str | None]:
         return "care-planning-ai-validation", None
     if path == "/admin/review-triage/care-planning/ai-approval":
         return "care-planning-ai-approval", None
+    if path == "/admin/review-triage/care-planning/manual-analysis":
+        return "care-planning-manual-analysis", None
     if path == "/admin/review-triage/safe-approve":
         return "review-triage-safe-approve", None
     if path == "/admin/verticals/CHILDRENS_HOME/backfill":
@@ -1317,9 +1320,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                         settings,
                         actor=actor,
                         limit=min(max(int(payload.get("limit", 2000)), 1), 2500),
-                        vertical=validate_vertical_filter(
-                            str(payload.get("vertical") or "ALL")
-                        ),
+                        vertical=validate_vertical_filter(str(payload.get("vertical") or "ALL")),
                     ),
                 )
             if action == "care-planning-reclassify" and method == "POST":
@@ -1446,6 +1447,11 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                         limit=min(max(int(payload.get("limit", 100)), 1), 100),
                     ),
                 )
+            if action == "care-planning-manual-analysis" and method == "GET":
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                return _response(200, care_planning_manual_cohort_analysis(settings))
             if action == "review-triage-safe-approve" and method == "POST":
                 admin_error = _require_admin(claims, settings)
                 if admin_error:

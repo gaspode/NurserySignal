@@ -140,6 +140,26 @@ def test_care_ai_approval_qa_marker_has_dedicated_triage_bucket() -> None:
     assert bucket == "QA_HOLDOUT_CARE_AI_APPROVAL"
 
 
+def test_current_care_ai_policy_marker_has_same_dedicated_triage_bucket() -> None:
+    bucket = review_triage_bucket(
+        signal_id=str(uuid4()),
+        vertical="CHILDRENS_HOME",
+        source_type="planning",
+        review_status="PENDING",
+        metadata={"planning_status": "Pending"},
+        extracted_facts={
+            "care_planning_ai_approval": {
+                "policy_version": "care-planning-ai-approval-v1.1",
+                "outcome": "QA_HOLDOUT",
+            }
+        },
+        ai_status="SUCCEEDED",
+        ai_recommendation="APPROVE",
+        ai_confidence=0.95,
+    )
+    assert bucket == "QA_HOLDOUT_CARE_AI_APPROVAL"
+
+
 def test_pending_triage_filter_uses_shared_bucket_logic(monkeypatch) -> None:
     safe_id = uuid4()
     while safe_approval_qa_holdout(str(safe_id)):
@@ -244,16 +264,18 @@ def test_safe_approval_v1_is_nursery_only_and_threshold_is_fixed() -> None:
         "ai_status": "SUCCEEDED",
         "ai_recommendation": "APPROVE",
     }
-    assert safe_approval_policy_outcome(
-        **common, vertical="NURSERY", ai_confidence=0.949
-    ) == "INELIGIBLE"
-    assert safe_approval_policy_outcome(
-        **common, vertical="CHILDRENS_HOME", ai_confidence=0.99
-    ) == "INELIGIBLE"
+    assert (
+        safe_approval_policy_outcome(**common, vertical="NURSERY", ai_confidence=0.949)
+        == "INELIGIBLE"
+    )
+    assert (
+        safe_approval_policy_outcome(**common, vertical="CHILDRENS_HOME", ai_confidence=0.99)
+        == "INELIGIBLE"
+    )
     expected = "QA_HOLDOUT" if safe_approval_qa_bucket(signal_id) == 0 else "AUTO_APPROVE"
-    assert safe_approval_policy_outcome(
-        **common, vertical="NURSERY", ai_confidence=0.95
-    ) == expected
+    assert (
+        safe_approval_policy_outcome(**common, vertical="NURSERY", ai_confidence=0.95) == expected
+    )
 
 
 def test_safe_approval_holdout_is_stable_and_refusal_wins() -> None:
@@ -382,9 +404,7 @@ def test_safe_auto_approval_is_authoritative_audited_and_idempotent(monkeypatch)
     audits = [sql for sql, _ in fake.statements if "INSERT INTO admin_audit_events" in sql]
     assert len(audits) == 1
     update = next(
-        (sql, params)
-        for sql, params in fake.statements
-        if "review_status = 'APPROVED'" in sql
+        (sql, params) for sql, params in fake.statements if "review_status = 'APPROVED'" in sql
     )
     assert update[1][0] == "system:safe-approval-v1"
     assert update[1][1].obj["safe_approval"]["policy_version"] == "safe-approval-v1"

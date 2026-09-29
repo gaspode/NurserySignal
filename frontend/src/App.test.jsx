@@ -63,6 +63,15 @@ const triageResult = {
     MANUAL_REVIEW_REQUIRED: 5,
   },
   safe_bulk_approval_recommended: false,
+  care_planning_ai_approval_monitoring: {
+    policy_version: "care-planning-ai-approval-v1.1",
+    future_qa_target_percent: 5,
+    auto_approved: 142,
+    qa_holdouts: 18,
+    by_policy_version: {
+      "care-planning-ai-approval-v1": { qa_approved: 18, qa_rejected: 0 },
+    },
+  },
 };
 
 describe("admin frontend", () => {
@@ -246,6 +255,8 @@ describe("admin frontend", () => {
     expect(screen.getByText(/AI rejection remains advisory/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Rule\/AI disagree 3/ })).toHaveTextContent("3");
     expect(screen.getByRole("button", { name: /Care AI approval QA 9/ })).toHaveTextContent("9");
+    expect(screen.getByText(/5% future QA target/)).toBeInTheDocument();
+    expect(screen.getByText(/Historical v1 validation: 18 approved · 0 rejected/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Approve safe agreement set" })).not.toBeInTheDocument();
   });
 
