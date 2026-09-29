@@ -688,3 +688,12 @@ Paid-pilot activation check (2026-09-28):
   reprocesses current Recruitment before opportunity recalculation. Production dry-run quality, the full
   18-month counts, Recruitment correlation impact and customer-curation candidates remain the operational
   gates before deciding whether any further data work is justified.
+- Production dry-run validation stopped safely at the provider gate. Three 60-day attempts returned
+  Plota `429` responses before fetching or queueing any records: the first exposed the former 60-second
+  collector timeout, and subsequent retries confirmed that the current Plota account quota rejects even
+  the proven 25-Nursery/25-Care request envelope. Historical chunks now use that low-volume envelope,
+  wait 60 seconds between successful chunks, and stop after Plota's own bounded retry budget without
+  repeatedly redriving a quota failure through SQS. The full 550-day run and Recruitment recalculation
+  remain deliberately unstarted. The exact next step is to confirm/reset or raise the Plota historical
+  API quota, then rerun the 60-day gate before authorising the full backfill; matching architecture does
+  not need changing on the available evidence.

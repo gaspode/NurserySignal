@@ -149,6 +149,41 @@ def test_completed_backfill_chunk_is_reused_and_next_chunk_is_queued_once(
     assert sent[0]["body"]["cumulative_counts"]["records_fetched"] == 12
 
 
+def test_backfill_rate_limit_stops_chain_without_sqs_redrive(monkeypatch) -> None:
+    bounds = PlanningBackfillBounds.from_values(
+        from_date="2026-09-01",
+        to_date="2026-09-07",
+        vertical="ALL",
+        total_record_cap=100,
+    )
+    payload = chunk_payload(
+        bounds,
+        backfill_id="backfill-rate-limited",
+        parent_started_at="2026-09-29T12:00:00+00:00",
+        chunk_index=0,
+    )
+    monkeypatch.setattr(
+        "app.collector.Settings.from_env",
+        lambda: Settings(source_runs_table_name="runs"),
+    )
+    monkeypatch.setattr("app.collector.get_run", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        "app.collector.collect_planning",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            PlanningRateLimitError("Plota rate limit exceeded")
+        ),
+    )
+    failures = []
+    monkeypatch.setattr(
+        "app.collector.finish_run",
+        lambda *args, **kwargs: failures.append(kwargs),
+    )
+    result = planning_handler(payload, None)
+    assert result == {"errors": 1}
+    assert failures[0]["status"] == "FAILED"
+    assert failures[0]["failure_category"] == "PlanningRateLimitError"
+
+
 def test_positive_and_exclusion_matching() -> None:
     assert candidate_decision(record("Change of use to a children's day nursery")).matched
     assert candidate_decision(record("Extension to an existing Montessori nursery")).matched

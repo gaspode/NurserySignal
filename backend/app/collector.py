@@ -14,6 +14,7 @@ from app.planning import (
     CandidateDecision,
     PlanningProvider,
     PlanningQuery,
+    PlanningRateLimitError,
     PlotaProvider,
     candidate_decision,
     planning_signal,
@@ -306,4 +307,10 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, int]:
             failure_category=category,
             failure_message=message,
         )
+        # PlotaProvider has already exhausted its bounded retry/backoff budget.
+        # A further SQS redrive would only consume more source quota; retain the
+        # failed run for an explicit later admin retry instead of poisoning the
+        # shared collector DLQ.
+        if isinstance(exc, PlanningRateLimitError):
+            return payload.get("cumulative_counts") or {"errors": 1}
         raise
