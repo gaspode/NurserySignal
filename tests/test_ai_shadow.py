@@ -316,6 +316,45 @@ def test_worker_keeps_deterministic_enrichment_when_ai_fails(monkeypatch):
     assert ai_saved[0]["status"] == "FAILED"
 
 
+def test_worker_evaluates_safe_policy_after_successful_ai_save(monkeypatch):
+    signal = raw()
+    message = {
+        "message_version": "1.0",
+        "signal_id": str(signal["id"]),
+        "schema_version": "1.0",
+        "evidence_bucket": "b",
+        "evidence_key": "k",
+        "queued_at": "2026-09-25T00:00:00Z",
+    }
+    applied = []
+    monkeypatch.setattr("app.worker.Settings.from_env", lambda: settings())
+    monkeypatch.setattr("app.worker.get_raw_signal", lambda *_: signal)
+    monkeypatch.setattr("app.worker.save_enrichment", lambda *_: True)
+    monkeypatch.setattr("app.worker.ai_review_exists", lambda *args: False)
+    monkeypatch.setattr(
+        "app.worker.evaluate_shadow",
+        lambda *args: {
+            "provider": "BEDROCK",
+            "model_id": "m",
+            "prompt_version": "p",
+            "status": "SUCCEEDED",
+            "recommendation": "APPROVE",
+            "confidence": 0.95,
+            "attempted_at": 1,
+        },
+    )
+    monkeypatch.setattr("app.worker.save_ai_review", lambda *args: True)
+    monkeypatch.setattr(
+        "app.worker.apply_safe_approval_policy",
+        lambda _, signal_id: applied.append(signal_id),
+    )
+
+    result = handler({"Records": [{"messageId": "m2", "body": json.dumps(message)}]}, None)
+
+    assert result == {"batchItemFailures": []}
+    assert applied == [str(signal["id"])]
+
+
 def test_worker_does_not_repeat_same_model_prompt(monkeypatch):
     signal = raw()
     message = {

@@ -29,10 +29,13 @@ from app.recruitment import recruitment_record_from_signal
 from app.review_triage import (
     REFUSAL_POLICY_VERSION,
     SAFE_APPROVAL_MIN_CONFIDENCE,
+    SAFE_APPROVAL_POLICY_VERSION,
+    SAFE_APPROVAL_VERTICALS,
     deterministic_review_recommendation,
     planning_refusal_assessment,
     review_triage_bucket,
-    safe_approval_candidate,
+    safe_approval_policy_outcome,
+    safe_approval_qa_bucket,
     validate_triage_bucket,
 )
 from app.verticals import (
@@ -1296,6 +1299,110 @@ def review_signal(settings: Settings, signal_id: str, status: str, reviewer: str
     return row is not None
 
 
+def apply_safe_approval_policy(
+    settings: Settings, signal_id: str, *, trigger_actor: str | None = None
+) -> dict[str, Any]:
+    """Apply NurserySignal safe-approval-v1 once AI and deterministic evidence exist."""
+    with connection(settings) as conn:
+        row = conn.execute(
+            """
+            SELECT rs.id, rs.vertical, rs.source_type, rs.metadata, se.review_status,
+                   se.extracted_facts, ai.status, ai.recommendation, ai.confidence
+            FROM raw_signals rs
+            JOIN signal_enrichments se ON se.raw_signal_id = rs.id
+            LEFT JOIN LATERAL (
+                SELECT status, recommendation, confidence
+                FROM signal_ai_reviews
+                WHERE raw_signal_id = rs.id
+                ORDER BY created_at DESC LIMIT 1
+            ) ai ON TRUE
+            WHERE rs.id = %s
+            FOR UPDATE OF se
+            """,
+            (signal_id,),
+        ).fetchone()
+        if row is None:
+            return {"signal_id": signal_id, "outcome": "INELIGIBLE", "updated": False}
+        fields = (
+            "id", "vertical", "source_type", "metadata", "review_status",
+            "extracted_facts", "ai_status", "ai_recommendation", "ai_confidence",
+        )
+        item = dict(zip(fields, row))
+        confidence = (
+            float(item["ai_confidence"]) if item["ai_confidence"] is not None else None
+        )
+        outcome = safe_approval_policy_outcome(
+            signal_id=str(item["id"]),
+            vertical=item["vertical"],
+            source_type=item["source_type"],
+            review_status=item["review_status"],
+            metadata=item["metadata"],
+            extracted_facts=item["extracted_facts"],
+            ai_status=item["ai_status"],
+            ai_recommendation=item["ai_recommendation"],
+            ai_confidence=confidence,
+        )
+        if outcome == "INELIGIBLE":
+            return {"signal_id": signal_id, "outcome": outcome, "updated": False}
+        qa_bucket = safe_approval_qa_bucket(str(item["id"]))
+        marker = {
+            "policy_version": SAFE_APPROVAL_POLICY_VERSION,
+            "outcome": outcome,
+            "threshold": SAFE_APPROVAL_MIN_CONFIDENCE,
+            "qa_bucket": qa_bucket,
+            "deterministic_recommendation": "APPROVE",
+            "ai_recommendation": item["ai_recommendation"],
+            "ai_confidence": confidence,
+            "source_type": item["source_type"],
+            "vertical": item["vertical"],
+            "trigger": "admin_backlog" if trigger_actor else "live_enrichment",
+        }
+        if outcome == "QA_HOLDOUT":
+            updated = conn.execute(
+                """
+                UPDATE signal_enrichments
+                SET extracted_facts = extracted_facts || %s, updated_at = now()
+                WHERE raw_signal_id = %s AND review_status = 'PENDING'
+                  AND COALESCE(extracted_facts->'safe_approval'->>'policy_version', '') <> %s
+                RETURNING raw_signal_id
+                """,
+                (Jsonb({"safe_approval": marker}), signal_id, SAFE_APPROVAL_POLICY_VERSION),
+            ).fetchone()
+            action = "SAFE_AGREEMENT_QA_HOLDOUT"
+        else:
+            updated = conn.execute(
+                """
+                UPDATE signal_enrichments
+                SET review_status = 'APPROVED', reviewed_by = %s, reviewed_at = now(),
+                    extracted_facts = extracted_facts || %s, updated_at = now()
+                WHERE raw_signal_id = %s AND review_status = 'PENDING'
+                RETURNING raw_signal_id
+                """,
+                (
+                    f"system:{SAFE_APPROVAL_POLICY_VERSION}",
+                    Jsonb({"safe_approval": marker}),
+                    signal_id,
+                ),
+            ).fetchone()
+            action = "SAFE_AGREEMENT_AUTO_APPROVE"
+        if updated:
+            conn.execute(
+                """
+                INSERT INTO admin_audit_events
+                    (action, actor, target_type, target_count, details, vertical)
+                VALUES (%s, %s, 'signal', 1, %s, %s)
+                """,
+                (
+                    action,
+                    trigger_actor or f"system:{SAFE_APPROVAL_POLICY_VERSION}",
+                    Jsonb({"signal_id": signal_id, **marker}),
+                    item["vertical"],
+                ),
+            )
+            conn.commit()
+        return {"signal_id": signal_id, "outcome": outcome, "updated": bool(updated)}
+
+
 def review_signals_bulk(
     settings: Settings,
     signal_ids: list[str],
@@ -1689,7 +1796,9 @@ def review_triage_summary(settings: Settings, *, vertical: str = "ALL") -> dict[
     reviewed_ai = [
         item
         for item in reviewed
-        if item["ai_status"] == "SUCCEEDED" and item["ai_recommendation"] in {"APPROVE", "REJECT"}
+        if item["vertical"] == "NURSERY"
+        and item["ai_status"] == "SUCCEEDED"
+        and item["ai_recommendation"] in {"APPROVE", "REJECT"}
     ]
     for threshold in (0.95, 0.97, 0.99):
         cohort = [
@@ -1717,6 +1826,8 @@ def review_triage_summary(settings: Settings, *, vertical: str = "ALL") -> dict[
     safe_ids: list[str] = []
     for item in pending:
         bucket = review_triage_bucket(
+            signal_id=str(item["id"]),
+            vertical=item["vertical"],
             source_type=item["source_type"],
             review_status=item["review_status"],
             metadata=item["metadata"],
@@ -1727,10 +1838,38 @@ def review_triage_summary(settings: Settings, *, vertical: str = "ALL") -> dict[
             threshold=threshold,
         )
         buckets[bucket] = buckets.get(bucket, 0) + 1
-        if bucket == "SAFE_APPROVE_AGREEMENT":
+        if bucket in {"SAFE_APPROVE_AGREEMENT", "QA_HOLDOUT_SAFE_AGREEMENT"}:
             safe_ids.append(str(item["id"]))
+    policy_records = []
+    for item in reviewed_all + pending:
+        facts = item.get("extracted_facts") or {}
+        marker = facts.get("safe_approval") if isinstance(facts, dict) else None
+        if (
+            isinstance(marker, dict)
+            and marker.get("policy_version") == SAFE_APPROVAL_POLICY_VERSION
+        ):
+            policy_records.append((item, marker))
+    holdouts = [
+        (item, marker)
+        for item, marker in policy_records
+        if marker.get("outcome") == "QA_HOLDOUT"
+    ]
+    holdout_rejected = sum(item["review_status"] == "REJECTED" for item, _ in holdouts)
     return {
-        "policy_version": "review-triage-v1",
+        "policy_version": "review-triage-v2",
+        "safe_approval_policy_version": SAFE_APPROVAL_POLICY_VERSION,
+        "safe_approval_verticals": sorted(SAFE_APPROVAL_VERTICALS),
+        "validation_cohort": {
+            "vertical": "NURSERY",
+            "authoritative_count": 69,
+            "approved": 69,
+            "rejected": 0,
+            "caveat": (
+                "Historical review rows do not snapshot every policy input at decision time; "
+                "the cohort is authoritative operator validation, not a perfect policy-time "
+                "reconstruction."
+            ),
+        },
         "vertical": vertical,
         "reviewed_sample_size": len(reviewed),
         "automatic_reviewed_excluded": len(reviewed_all) - len(reviewed),
@@ -1744,6 +1883,27 @@ def review_triage_summary(settings: Settings, *, vertical: str = "ALL") -> dict[
         "pending_planning_evaluated": len(pending),
         "pending_buckets": buckets,
         "safe_pending_count": len(safe_ids),
+        "qa_monitoring": {
+            "total_policy_records": len(policy_records),
+            "auto_approved": sum(
+                marker.get("outcome") == "AUTO_APPROVE" for _, marker in policy_records
+            ),
+            "qa_holdouts": len(holdouts),
+            "qa_holdouts_pending": sum(
+                item["review_status"] == "PENDING" for item, _ in holdouts
+            ),
+            "qa_holdouts_approved": sum(
+                item["review_status"] == "APPROVED" for item, _ in holdouts
+            ),
+            "qa_holdouts_rejected": holdout_rejected,
+            "observed_error_rate": holdout_rejected / len(holdouts) if holdouts else None,
+            "warning": (
+                "QA holdout rejection detected; review safe-approval-v1 before widening or "
+                "continuing automation."
+                if holdout_rejected
+                else None
+            ),
+        },
     }
 
 
@@ -1765,6 +1925,8 @@ def pending_review_triage_ids(
         str(item["id"])
         for item in pending
         if review_triage_bucket(
+            signal_id=str(item["id"]),
+            vertical=item["vertical"],
             source_type=item["source_type"],
             review_status=item["review_status"],
             metadata=item["metadata"],
@@ -1791,99 +1953,80 @@ def safe_agreement_bulk_approve(
     threshold: float = SAFE_APPROVAL_MIN_CONFIDENCE,
     vertical: str = "ALL",
 ) -> dict[str, Any]:
-    """Preview or apply a bounded, evaluated deterministic+AI agreement cohort."""
+    """Preview/apply a bounded NurserySignal v1 backlog batch with QA holdout."""
     bounded_limit = min(max(int(limit), 1), 100)
-    vertical = validate_vertical_filter(vertical)
-    summary = review_triage_summary(settings, vertical=vertical)
-    recommended = summary.get("recommended_safe_threshold")
-    if threshold < SAFE_APPROVAL_MIN_CONFIDENCE:
-        raise ValueError("safe approval threshold is below the policy minimum")
-    if not preview and recommended is None:
-        raise ValueError("reviewed labels do not justify safe bulk approval")
-    if not preview and threshold < float(recommended):
-        raise ValueError("threshold is below the evaluated safe threshold")
+    requested_vertical = validate_vertical_filter(vertical)
+    if threshold != SAFE_APPROVAL_MIN_CONFIDENCE:
+        raise ValueError("safe-approval-v1 uses the fixed 0.95 threshold")
+    if requested_vertical == "CHILDRENS_HOME":
+        return {
+            "preview": preview,
+            "policy_version": SAFE_APPROVAL_POLICY_VERSION,
+            "vertical": requested_vertical,
+            "eligible_total": 0,
+            "would_auto_approve": 0,
+            "qa_holdouts": 0,
+            "remaining_manual": 0,
+            "execution_allowed": False,
+            "reason": "safe approval is not enabled for CareProspect",
+        }
+    policy_vertical = "NURSERY"
     with connection(settings) as conn:
-        pending = _review_triage_rows(conn, "PENDING", vertical)
-        candidates = [
-            item
-            for item in pending
-            if safe_approval_candidate(
-                source_type=item["source_type"],
-                review_status=item["review_status"],
-                metadata=item["metadata"],
-                extracted_facts=item["extracted_facts"],
-                ai_status=item["ai_status"],
-                ai_recommendation=item["ai_recommendation"],
-                ai_confidence=(float(item["ai_confidence"]) if item["ai_confidence"] else None),
-                threshold=threshold,
-            )
-        ][:bounded_limit]
-        candidate_ids = [str(item["id"]) for item in candidates]
-        if preview:
-            return {
-                "preview": True,
-                "eligible_total": summary["safe_pending_count"],
-                "batch_count": len(candidate_ids),
-                "limit": bounded_limit,
-                "threshold": threshold,
-                "signal_ids": candidate_ids,
-                "execution_allowed": recommended is not None,
-                "recommended_safe_threshold": recommended,
-                "vertical": vertical,
-            }
-        rows = conn.execute(
-            """
-            UPDATE signal_enrichments
-            SET review_status = 'APPROVED', reviewed_by = %s, reviewed_at = now(),
-                extracted_facts = extracted_facts || %s, updated_at = now()
-            WHERE raw_signal_id = ANY(%s::uuid[]) AND review_status = 'PENDING'
-            RETURNING raw_signal_id
-            """,
-            (
-                actor,
-                Jsonb(
-                    {
-                        "automatic_review": {
-                            "status": "APPROVED",
-                            "reason": (
-                                "Admin-approved deterministic and high-confidence AI agreement set."
-                            ),
-                            "policy_version": "safe-agreement-v1",
-                            "threshold": threshold,
-                        }
-                    }
-                ),
-                candidate_ids,
-            ),
-        ).fetchall()
-        updated_ids = [str(row[0]) for row in rows]
-        conn.execute(
-            """
-            INSERT INTO admin_audit_events (action, actor, target_type, target_count, details)
-            VALUES ('SAFE_AGREEMENT_BULK_APPROVE', %s, 'signal', %s, %s)
-            """,
-            (
-                actor,
-                len(updated_ids),
-                Jsonb(
-                    {
-                        "threshold": threshold,
-                        "requested_count": len(candidate_ids),
-                        "updated_count": len(updated_ids),
-                        "signal_ids": updated_ids,
-                        "vertical": vertical,
-                    }
-                ),
+        pending = _review_triage_rows(conn, "PENDING", policy_vertical)
+    evaluated = []
+    for item in pending:
+        outcome = safe_approval_policy_outcome(
+            signal_id=str(item["id"]),
+            vertical=item["vertical"],
+            source_type=item["source_type"],
+            review_status=item["review_status"],
+            metadata=item["metadata"],
+            extracted_facts=item["extracted_facts"],
+            ai_status=item["ai_status"],
+            ai_recommendation=item["ai_recommendation"],
+            ai_confidence=(
+                float(item["ai_confidence"]) if item["ai_confidence"] is not None else None
             ),
         )
-        conn.commit()
+        if outcome != "INELIGIBLE":
+            evaluated.append((str(item["id"]), outcome))
+    batch = evaluated[:bounded_limit]
+    auto_ids = [signal_id for signal_id, outcome in batch if outcome == "AUTO_APPROVE"]
+    holdout_ids = [signal_id for signal_id, outcome in batch if outcome == "QA_HOLDOUT"]
+    if preview:
+        return {
+            "preview": True,
+            "policy_version": SAFE_APPROVAL_POLICY_VERSION,
+            "eligible_total": len(evaluated),
+            "batch_count": len(batch),
+            "would_auto_approve": len(auto_ids),
+            "qa_holdouts": len(holdout_ids),
+            "remaining_manual": len(pending) - len(evaluated),
+            "limit": bounded_limit,
+            "threshold": threshold,
+            "execution_allowed": True,
+            "vertical": policy_vertical,
+        }
+    results = [
+        apply_safe_approval_policy(settings, signal_id, trigger_actor=actor)
+        for signal_id, _ in batch
+    ]
+    updated_ids = [item["signal_id"] for item in results if item["updated"]]
     return {
         "preview": False,
+        "policy_version": SAFE_APPROVAL_POLICY_VERSION,
         "threshold": threshold,
-        "requested": len(candidate_ids),
+        "requested": len(batch),
         "updated": len(updated_ids),
+        "auto_approved": sum(
+            item["updated"] and item["outcome"] == "AUTO_APPROVE" for item in results
+        ),
+        "qa_holdouts": sum(
+            item["updated"] and item["outcome"] == "QA_HOLDOUT" for item in results
+        ),
         "signal_ids": updated_ids,
-        "vertical": vertical,
+        "vertical": policy_vertical,
+        "actor": actor,
     }
 
 

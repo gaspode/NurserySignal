@@ -784,3 +784,15 @@ Paid-pilot activation check (2026-09-28):
   deployment or backlog mutation was performed. The exact next step is to reconcile whether the intended
   validated cohort is the latest 64, the reported 68, or all 69, and explicitly approve the authoritative
   cohort definition before implementing NurserySignal-only automation.
+- NurserySignal `safe-approval-v1` is approved for rollout against the authoritative 69-record
+  Planning validation cohort (69 approved, zero rejected; the earlier five plus the later 64).
+  Historical review rows do not snapshot every policy input at decision time, so this is recorded as
+  authoritative operator validation rather than a perfect policy-time reconstruction. The policy is
+  deliberately limited to pending NurserySignal Planning records where deterministic relevance and a
+  successful AI APPROVE agree at confidence >=0.95, the planning candidate matched, the opportunity
+  action is create/support, and no refusal or false-positive condition applies. A stable UUID-derived
+  one-in-ten QA holdout remains pending; each automatic approval/holdout is versioned and audited, AI
+  rejection remains advisory, and customer publication is unchanged. CHILDRENS_HOME/CareProspect stays
+  fully manual until it has its own qualifying labelled cohort. Deployment validation and the bounded
+  production backlog preview are the remaining gates; backlog execution still requires separate explicit
+  approval.

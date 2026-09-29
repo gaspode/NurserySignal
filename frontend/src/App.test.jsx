@@ -281,7 +281,7 @@ describe("admin frontend", () => {
     );
   });
 
-  it("previews and confirms a bounded safe agreement approval", async () => {
+  it("previews and confirms bounded NurserySignal safe approval with QA holdout", async () => {
     const evaluatedTriage = {
       ...triageResult,
       recommended_safe_threshold: 0.97,
@@ -290,29 +290,29 @@ describe("admin frontend", () => {
     const apiClient = vi.fn()
       .mockResolvedValueOnce(listResult())
       .mockResolvedValueOnce(evaluatedTriage)
-      .mockResolvedValueOnce({ preview: true, batch_count: 12, eligible_total: 19 })
-      .mockResolvedValueOnce({ preview: false, updated: 12 })
+      .mockResolvedValueOnce({ preview: true, batch_count: 12, eligible_total: 19, would_auto_approve: 11, qa_holdouts: 1 })
+      .mockResolvedValueOnce({ preview: false, updated: 12, auto_approved: 11, qa_holdouts: 1 })
       .mockResolvedValueOnce(listResult([], 0))
       .mockResolvedValueOnce(evaluatedTriage);
     render(<ReviewInboxPage apiClient={apiClient} onNavigate={vi.fn()} />);
     await screen.findByRole("heading", { name: "Review triage" });
 
-    await userEvent.click(screen.getByRole("button", { name: "Preview safe agreement set" }));
+    await userEvent.click(screen.getByRole("button", { name: "Preview NurserySignal backlog" }));
     expect(await screen.findByRole("status")).toHaveTextContent(
-      "12 of 19 safe-agreement signals fit the bounded preview."
+      "19 NurserySignal records qualify: 11 would auto-approve and 1 would remain as QA holdouts."
     );
-    await userEvent.click(screen.getByRole("button", { name: "Approve safe agreement set" }));
-    expect(screen.getByRole("dialog")).toHaveTextContent("97% threshold");
+    await userEvent.click(screen.getByRole("button", { name: "Apply NurserySignal policy" }));
+    expect(screen.getByRole("dialog")).toHaveTextContent("Stable 10% QA holdouts remain pending");
     await userEvent.click(
       within(screen.getByRole("dialog")).getByRole("button", {
-        name: "Approve safe agreement set",
+        name: "Apply NurserySignal policy",
       })
     );
     await waitFor(() => expect(apiClient).toHaveBeenCalledWith(
       "/admin/review-triage/safe-approve",
       {
         method: "POST",
-        body: JSON.stringify({ preview: false, limit: 100, threshold: 0.97, vertical: "NURSERY" }),
+        body: JSON.stringify({ preview: false, limit: 100, threshold: 0.95, vertical: "NURSERY" }),
       }
     ));
   });

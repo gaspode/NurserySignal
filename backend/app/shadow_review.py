@@ -5,6 +5,7 @@ from typing import Any
 from app.ai_shadow import SUPPORTED_SHADOW_SOURCE_TYPES, evaluate_shadow, prompt_version_for
 from app.config import Settings
 from app.repository import (
+    apply_safe_approval_policy,
     get_ai_review,
     get_raw_signal,
     get_signal_review_status,
@@ -48,14 +49,31 @@ def reevaluate_ai_shadow(settings: Settings, signal_id: str) -> dict[str, Any] |
         raise UnsupportedShadowSourceError(source_type)
     prompt_version = prompt_version_for(source_type, settings, raw.get("vertical"))
     existing = get_ai_review(settings, signal_id, settings.ai_model_id, prompt_version)
-    review_status = get_signal_review_status(settings, signal_id)
     if existing is not None:
-        return _result(existing, idempotent=True, review_status=review_status)
+        if existing.get("status") == "SUCCEEDED":
+            apply_safe_approval_policy(settings, signal_id)
+        return _result(
+            existing,
+            idempotent=True,
+            review_status=get_signal_review_status(settings, signal_id),
+        )
 
     review = evaluate_shadow(raw, settings)
     saved = save_ai_review(settings, signal_id, review)
     if not saved:
         existing = get_ai_review(settings, signal_id, settings.ai_model_id, prompt_version)
         if existing is not None:
-            return _result(existing, idempotent=True, review_status=review_status)
-    return _result(review, idempotent=not saved, review_status=review_status)
+            if existing.get("status") == "SUCCEEDED":
+                apply_safe_approval_policy(settings, signal_id)
+            return _result(
+                existing,
+                idempotent=True,
+                review_status=get_signal_review_status(settings, signal_id),
+            )
+    if review.get("status") == "SUCCEEDED":
+        apply_safe_approval_policy(settings, signal_id)
+    return _result(
+        review,
+        idempotent=not saved,
+        review_status=get_signal_review_status(settings, signal_id),
+    )

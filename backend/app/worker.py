@@ -9,6 +9,7 @@ from app.logging import configure_logging
 from app.queueing import EnrichmentMessage
 from app.repository import (
     ai_review_exists,
+    apply_safe_approval_policy,
     auto_reject_refused_planning,
     correlate_signal,
     get_raw_signal,
@@ -64,7 +65,10 @@ def process_message(settings: Settings, body: str) -> None:
         source_type = str(raw.get("source_type") or "").lower()
         prompt_version = prompt_version_for(source_type, settings, raw.get("vertical"))
         if not ai_review_exists(settings, message.signal_id, model_id, prompt_version):
-            save_ai_review(settings, message.signal_id, evaluate_shadow(raw, settings))
+            review = evaluate_shadow(raw, settings)
+            saved = save_ai_review(settings, message.signal_id, review)
+            if saved and review.get("status") == "SUCCEEDED":
+                apply_safe_approval_policy(settings, message.signal_id)
 
 
 def handler(event: dict[str, Any], context: Any) -> dict[str, list[dict[str, str]]]:

@@ -73,6 +73,7 @@ def test_re_evaluation_is_idempotent_and_does_not_call_bedrock(monkeypatch):
     )
     monkeypatch.setattr("app.shadow_review.get_ai_review", lambda *args: stored)
     monkeypatch.setattr("app.shadow_review.get_signal_review_status", lambda *args: "PENDING")
+    monkeypatch.setattr("app.shadow_review.apply_safe_approval_policy", lambda *args: {})
     monkeypatch.setattr(
         "app.shadow_review.evaluate_shadow",
         lambda *args: (_ for _ in ()).throw(AssertionError("Bedrock must not be called")),
@@ -92,6 +93,7 @@ def test_re_evaluation_saves_success_without_changing_review_status(monkeypatch)
     )
     monkeypatch.setattr("app.shadow_review.get_ai_review", lambda *args: None)
     monkeypatch.setattr("app.shadow_review.get_signal_review_status", lambda *args: "PENDING")
+    monkeypatch.setattr("app.shadow_review.apply_safe_approval_policy", lambda *args: {})
     monkeypatch.setattr("app.shadow_review.evaluate_shadow", lambda *args: review())
     monkeypatch.setattr(
         "app.shadow_review.save_ai_review", lambda *args: saved.append(args[2]) or True
