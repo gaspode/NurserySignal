@@ -91,6 +91,7 @@ def test_historical_backfill_is_bounded_and_chunked_without_changing_live_clamp(
     assert payload["verticals"] == ["NURSERY", "CHILDRENS_HOME"]
     assert payload["from_date"] == "2025-03-29"
     assert payload["to_date"] == "2025-04-04"
+    assert payload["page_size"] == 250
     with pytest.raises(ValueError, match="cannot exceed 550 days"):
         PlanningBackfillBounds.from_values(from_date="2025-01-01", to_date="2026-09-29")
 
@@ -134,7 +135,7 @@ def test_completed_backfill_chunk_is_reused_and_next_chunk_is_queued_once(
 
     class FakeSqs:
         def send_message(self, **kwargs):
-            sent.append(json.loads(kwargs["MessageBody"]))
+            sent.append({**kwargs, "body": json.loads(kwargs["MessageBody"])})
             return {"MessageId": "next-1"}
 
     monkeypatch.setattr("app.collector.boto3.client", lambda name: FakeSqs())
@@ -142,8 +143,9 @@ def test_completed_backfill_chunk_is_reused_and_next_chunk_is_queued_once(
     assert result["records_fetched"] == 12
     assert result["chunks_completed"] == 1
     assert len(sent) == 1
-    assert sent[0]["chunk_index"] == 1
-    assert sent[0]["cumulative_counts"]["records_fetched"] == 12
+    assert sent[0]["DelaySeconds"] == 60
+    assert sent[0]["body"]["chunk_index"] == 1
+    assert sent[0]["body"]["cumulative_counts"]["records_fetched"] == 12
 
 
 def test_positive_and_exclusion_matching() -> None:

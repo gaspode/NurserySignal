@@ -269,6 +269,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, int]:
                 raise RuntimeError("PLANNING_MANUAL_RUN_QUEUE_URL is not configured")
             response = boto3.client("sqs").send_message(
                 QueueUrl=settings.planning_manual_run_queue_url,
+                DelaySeconds=60,
                 MessageBody=json.dumps(
                     chunk_payload(
                         bounds,

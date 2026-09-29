@@ -112,7 +112,7 @@ def chunk_payload(
         "total_record_cap": bounds.total_record_cap,
         "max_records": nursery_limit,
         "care_max_records": care_limit,
-        "page_size": min(nursery_limit, 100),
+        "page_size": min(nursery_limit, 250),
         "verticals": list(bounds.verticals),
         "cumulative_counts": cumulative_counts or {},
         "run_id": f"{backfill_id}-chunk-{chunk_index + 1:03d}",
