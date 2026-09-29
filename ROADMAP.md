@@ -849,11 +849,29 @@ Paid-pilot activation check (2026-09-28):
   published customer opportunities were unchanged. Next step is manual review of the 27 QA holdouts and
   monitoring for any rejected holdout before considering a policy change; no broader CareProspect AI
   authority is approved.
-- CareProspect Planning shadow review is hardened in `care-planning-shadow-v2`: exact structured council
-  refusal/rejection and withdrawal outcomes are evaluated before subject relevance and are forced to
-  REJECT with no commercial-change evidence, while still allowing relevant-follow-up classification.
-  Proposed/existing lawfulness and planning follow-ups are distinguished explicitly. V1 assessments
-  remain immutable alongside v2. A bounded admin-only validation path supports read-only cohort/possible-
-  policy previews and batches of at most five new v2 assessments without changing review decisions or
-  customer publication. Deployment and production validation remain pending; CareProspect AI-assisted
-  approval is not enabled and would require a separate approval decision after the measured results.
+- CareProspect Planning shadow review is deployed at commit `bc70060` as
+  `care-planning-shadow-v2`. Exact structured council refusal/rejection and withdrawal outcomes are
+  evaluated before subject relevance and are forced to REJECT with no commercial-change evidence,
+  while still allowing relevant-follow-up classification. Proposed/existing lawfulness and planning
+  follow-ups are distinguished explicitly; v1 assessments remain immutable alongside v2. Bounded
+  production validation created versioned v2 evidence for 84 records without changing any review or
+  publication state. All 25 selected v1 false-approve refusal/withdrawal regressions now reject, as do
+  all four Certificate of Lawfulness refusal cases in the separate 59-record disagreement sample.
+  Within that disagreement sample v2 changed five recommendations from REJECT to APPROVE, and only
+  three records retain enough current data to reconstruct a human label under today's disagreement
+  definition: v1 and v2 each agree on two, with zero v2 false approvals and one v2 false rejection.
+  The operator-reported 60–70 record manual session cannot be reconstructed exactly because historical
+  review rows do not snapshot every policy input/bucket at decision time; its result must not be
+  overstated as a complete policy-time evaluation.
+- The read-only future-policy preview currently identifies 304 of 456 pending CareProspect Planning
+  records as potentially eligible at AI confidence >=0.95: 271 would fall into the approval bucket and
+  33 into a stable ten-percent QA holdout, leaving 185 manual. The eligible subtype mix is 154 explicit
+  change-of-use, 35 other explicit new homes, 67 proposed lawfulness, 38 other follow-ups and ten
+  condition variations. Because the preview still admits follow-ups/variations and only three human
+  labels are exactly reconstructable, CareProspect AI-assisted automation is not ready to enable. No
+  auto-approval or AI-only rejection was introduced; deterministic refusal/withdrawal remains
+  authoritative, customer publication remains at six, and a separate approval decision must follow a
+  prospectively labelled v2 QA cohort and a narrower eligibility review. API/database/Lambda health
+  passes, schedules are enabled, all active queues and non-collector DLQs are empty, the five previously
+  classified obsolete collector-DLQ messages remain untouched, and the refresh-only Terraform plan
+  shows only the expected moving RDS restore timestamp.
