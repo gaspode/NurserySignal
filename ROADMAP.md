@@ -849,3 +849,11 @@ Paid-pilot activation check (2026-09-28):
   published customer opportunities were unchanged. Next step is manual review of the 27 QA holdouts and
   monitoring for any rejected holdout before considering a policy change; no broader CareProspect AI
   authority is approved.
+- CareProspect Planning shadow review is hardened in `care-planning-shadow-v2`: exact structured council
+  refusal/rejection and withdrawal outcomes are evaluated before subject relevance and are forced to
+  REJECT with no commercial-change evidence, while still allowing relevant-follow-up classification.
+  Proposed/existing lawfulness and planning follow-ups are distinguished explicitly. V1 assessments
+  remain immutable alongside v2. A bounded admin-only validation path supports read-only cohort/possible-
+  policy previews and batches of at most five new v2 assessments without changing review decisions or
+  customer publication. Deployment and production validation remain pending; CareProspect AI-assisted
+  approval is not enabled and would require a separate approval decision after the measured results.

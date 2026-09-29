@@ -15,14 +15,20 @@ from botocore.exceptions import (
     ReadTimeoutError,
 )
 
+from app.care_planning_review import (
+    normalize_structured_planning_value,
+    planning_withdrawal_assessment,
+    structured_planning_values,
+)
 from app.config import Settings
 from app.logging import configure_logging
+from app.review_triage import planning_refusal_assessment
 
 logger = configure_logging()
 ALLOWED_RECOMMENDATIONS = {"APPROVE", "REJECT", "NEEDS_HUMAN"}
 RECRUITMENT_PROMPT_VERSION = "recruitment-shadow-v3"
 PLANNING_PROMPT_VERSION = "planning-shadow-v3"
-CARE_PLANNING_PROMPT_VERSION = "care-planning-shadow-v1"
+CARE_PLANNING_PROMPT_VERSION = "care-planning-shadow-v2"
 CARE_RECRUITMENT_PROMPT_VERSION = "care-recruitment-shadow-v1"
 SUPPORTED_SHADOW_SOURCE_TYPES = frozenset({"planning", "recruitment"})
 RECRUITMENT_SYSTEM_PROMPT = """NurserySignal recruitment shadow review,
@@ -67,14 +73,35 @@ operator, opening date or ownership. Do not emit recruitment_relevance. Return s
 {"recommendation":"APPROVE|REJECT|NEEDS_HUMAN","confidence":0.0,"reason":"brief reason",
 "planning_relevance":"RELEVANT_CHANGE|RELEVANT_FOLLOWUP|RELEVANT_ROUTINE|UNCERTAIN|IRRELEVANT",
 "commercial_change_evidence":"NONE|WEAK|STRONG"}."""
-CARE_PLANNING_SYSTEM_PROMPT = """CareSignal planning shadow review, prompt version
-care-planning-shadow-v1. Decide whether this is genuinely about a UK children's
-residential care home and whether it indicates a commercially material opening,
-conversion, relocation, expansion or occupancy increase. APPROVE explicit children's
-home proposals and material changes. REJECT adult/elderly/nursing care, generic C2
-without children context, day nurseries, hospitals, boarding schools and incidental
-references. Use NEEDS_HUMAN only for genuinely ambiguous evidence. Never include or
-infer resident identities or safeguarding details. Return strict JSON only:
+CARE_PLANNING_SYSTEM_PROMPT = """CareProspect planning shadow review, prompt version
+care-planning-shadow-v2. Evaluate structured council outcome/status BEFORE proposal
+relevance, in this exact order:
+1. If an authoritative structured decision/status is REFUSED, REFUSAL, REJECTED,
+APPLICATION REFUSED, PERMISSION REFUSED, REFUSE PERMISSION, REFUSE CONSENT,
+REFUSE PERMISSION/CONSENT, REFUSAL OF PERMISSION, REFUSAL OF CONSENT,
+CERTIFICATE OF LAWFULNESS - REFUSED, CERTIFICATE OF LAWFULNESS REFUSED, or
+PERMISSION/CONSENT REFUSED, always return recommendation REJECT and
+commercial_change_evidence NONE. Strong children's-home wording never overrides a
+refusal. If the subject is genuinely a children's home, use planning_relevance
+RELEVANT_FOLLOWUP and explain that the subject is relevant but the council refused the
+application.
+2. If structured status is WITHDRAWN, APPLICATION WITHDRAWN or WITHDRAWN BY APPLICANT,
+always return recommendation REJECT and commercial_change_evidence NONE. Explain that
+this application is no longer active; a later resubmission must be assessed independently.
+3. Otherwise decide whether this is genuinely about a UK children's residential care home
+and a commercially material opening, conversion, relocation, expansion or occupancy
+increase. APPROVE explicit new-home proposals and material changes.
+4. Distinguish proposed lawfulness from existing-use lawfulness. Proposed lawfulness may
+be APPROVE when explicit and active. Existing-use lawfulness is not a fresh opening by
+default and should normally be RELEVANT_FOLLOWUP and REJECT from new-opening review.
+5. Treat condition variations, condition discharges, non-material amendments and records
+referencing prior permission as follow-up/supporting evidence, not a new opening, unless
+the current application itself clearly creates material new provision.
+REJECT adult/elderly/nursing care, generic C2 without children context, day nurseries,
+hospitals, boarding schools and incidental references. Use NEEDS_HUMAN only for genuinely
+ambiguous evidence. The structured outcome fields are authoritative; do not infer refusal
+from free proposal text. Relevance does not equal current commercial viability. Never
+include or infer resident identities or safeguarding details. Return strict JSON only:
 {"recommendation":"APPROVE|REJECT|NEEDS_HUMAN","confidence":0.0,"reason":"brief reason",
 "planning_relevance":"RELEVANT_CHANGE|RELEVANT_FOLLOWUP|RELEVANT_ROUTINE|UNCERTAIN|IRRELEVANT",
 "commercial_change_evidence":"NONE|WEAK|STRONG"}."""
@@ -135,6 +162,11 @@ def _input_for_model(raw: dict[str, Any]) -> dict[str, Any]:
     recruitment_context = metadata.get("recruitment_classification")
     if not isinstance(recruitment_context, dict):
         recruitment_context = None
+    structured_outcomes = []
+    for value in structured_planning_values(metadata):
+        normalized = normalize_structured_planning_value(value)
+        if normalized and normalized not in structured_outcomes:
+            structured_outcomes.append(normalized)
     return {
         "source_type": raw.get("source_type"),
         "vertical": raw.get("vertical"),
@@ -143,8 +175,48 @@ def _input_for_model(raw: dict[str, Any]) -> dict[str, Any]:
         "location_hint": str(raw.get("location_hint") or "")[:1000],
         "organisation_hint": str(raw.get("organisation_hint") or "")[:1000],
         "metadata": useful_metadata,
+        "structured_planning_outcomes": structured_outcomes,
         "recruitment_context": recruitment_context,
     }
+
+
+def _apply_care_planning_outcome_guard(
+    raw: dict[str, Any], result: dict[str, Any]
+) -> dict[str, Any]:
+    """Make exact structured refusal/withdrawal authoritative over model relevance."""
+    if result.get("status") != "SUCCEEDED":
+        return result
+    metadata = raw.get("metadata") if isinstance(raw.get("metadata"), dict) else {}
+    refusal = planning_refusal_assessment(metadata)
+    withdrawal = planning_withdrawal_assessment(metadata)
+    if not refusal.refused and not withdrawal.withdrawn:
+        return result
+    care_classification = metadata.get("care_classification")
+    subject_relevant = (
+        isinstance(care_classification, dict) and care_classification.get("matched") is True
+    ) or str(result.get("planning_relevance") or "").startswith("RELEVANT_")
+    guarded = dict(result)
+    guarded["recommendation"] = "REJECT"
+    guarded["commercial_change_evidence"] = "NONE"
+    if subject_relevant:
+        guarded["planning_relevance"] = "RELEVANT_FOLLOWUP"
+    if refusal.refused:
+        guarded["reason"] = (
+            "Relevant children’s-home subject matter, but the authoritative structured "
+            f"council outcome is {refusal.value}; the application was refused."
+            if subject_relevant
+            else f"The authoritative structured council outcome is {refusal.value}; "
+            "the application was refused."
+        )
+    else:
+        guarded["reason"] = (
+            "Relevant children’s-home subject matter, but the authoritative structured "
+            f"council outcome is {withdrawal.value}; this application is no longer active."
+            if subject_relevant
+            else f"The authoritative structured council outcome is {withdrawal.value}; "
+            "this application is no longer active."
+        )
+    return guarded
 
 
 def _failure(
@@ -293,6 +365,8 @@ def evaluate_shadow(raw: dict[str, Any], settings: Settings) -> dict[str, Any]:
         result = _parse(
             response, settings, started, source_type, deterministic_relevance, vertical
         )
+        if vertical == "CHILDRENS_HOME" and source_type == "planning":
+            result = _apply_care_planning_outcome_guard(raw, result)
     except (ReadTimeoutError, ConnectTimeoutError, EndpointConnectionError):
         result = _failure(settings, "TIMEOUT", started, source_type, vertical)
     except ClientError as exc:

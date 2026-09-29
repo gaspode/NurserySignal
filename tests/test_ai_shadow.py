@@ -96,7 +96,7 @@ def test_care_prompts_are_vertical_and_source_specific():
     config = Settings()
     assert (
         prompt_version_for("planning", config, "CHILDRENS_HOME")
-        == "care-planning-shadow-v1"
+        == "care-planning-shadow-v2"
     )
     assert (
         prompt_version_for("recruitment", config, "CHILDRENS_HOME")
@@ -255,8 +255,87 @@ def test_earls_lane_mixed_use_response_uses_planning_semantics(monkeypatch):
 
 def test_care_planning_prompt_is_unchanged_by_nursery_mixed_use_guidance():
     prompt = system_prompt_for("planning", "CHILDRENS_HOME")
-    assert "care-planning-shadow-v1" in prompt
+    assert "care-planning-shadow-v2" in prompt
+    assert "structured council outcome/status BEFORE proposal" in prompt
+    assert "Strong children's-home wording never overrides" in prompt
+    assert "Existing-use lawfulness is not a fresh opening" in prompt
     assert "90 dwellings and a new children's nursery" not in prompt
+
+
+@pytest.mark.parametrize(
+    "decision",
+    [
+        "Refusal",
+        "Refused",
+        "Refuse Permission/Consent",
+        "Certificate of Lawfulness — Refused",
+        "Application Refused",
+        "Permission/Consent Refused",
+    ],
+)
+def test_care_planning_structured_refusal_overrides_ai_approve(monkeypatch, decision):
+    value = raw()
+    value.update(
+        {
+            "vertical": "CHILDRENS_HOME",
+            "title": "Change of use from C3 to C2 children's home",
+            "raw_text": "Explicit proposed new children's home.",
+            "metadata": {
+                "decision": decision,
+                "care_classification": {"matched": True},
+            },
+        }
+    )
+    client = BedrockClient(response("APPROVE", 0.95))
+    monkeypatch.setattr("app.ai_shadow.boto3.client", lambda *args, **kwargs: client)
+
+    result = evaluate_shadow(value, Settings())
+
+    assert result["prompt_version"] == "care-planning-shadow-v2"
+    assert result["recommendation"] == "REJECT"
+    assert result["planning_relevance"] == "RELEVANT_FOLLOWUP"
+    assert result["commercial_change_evidence"] == "NONE"
+    assert "refused" in result["reason"].lower()
+    model_input = json.loads(client.calls[0]["messages"][0]["content"][0]["text"])
+    assert model_input["structured_planning_outcomes"]
+
+
+def test_care_planning_structured_withdrawal_overrides_ai_approve(monkeypatch):
+    value = raw()
+    value.update(
+        {
+            "vertical": "CHILDRENS_HOME",
+            "metadata": {
+                "decision": "Withdrawn by Applicant",
+                "care_classification": {"matched": True},
+            },
+        }
+    )
+    monkeypatch.setattr(
+        "app.ai_shadow.boto3.client", lambda *args, **kwargs: BedrockClient(response("APPROVE"))
+    )
+
+    result = evaluate_shadow(value, Settings())
+
+    assert result["recommendation"] == "REJECT"
+    assert result["commercial_change_evidence"] == "NONE"
+    assert "no longer active" in result["reason"]
+
+
+def test_care_planning_active_explicit_proposal_can_still_approve(monkeypatch):
+    value = raw()
+    value.update(
+        {
+            "vertical": "CHILDRENS_HOME",
+            "title": "Change of use from C3 to C2 children's home",
+            "metadata": {"decision": "Grant Conditionally"},
+        }
+    )
+    monkeypatch.setattr(
+        "app.ai_shadow.boto3.client", lambda *args, **kwargs: BedrockClient(response("APPROVE"))
+    )
+
+    assert evaluate_shadow(value, Settings())["recommendation"] == "APPROVE"
 
 
 def test_shadow_rejects_malformed_or_invalid_confidence(monkeypatch):

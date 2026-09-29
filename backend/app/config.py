@@ -36,7 +36,7 @@ class Settings:
     ai_prompt_version: str = "shadow-v3"
     ai_planning_prompt_version: str = "planning-shadow-v3"
     ai_recruitment_prompt_version: str = "recruitment-shadow-v3"
-    ai_care_planning_prompt_version: str = "care-planning-shadow-v1"
+    ai_care_planning_prompt_version: str = "care-planning-shadow-v2"
     ai_care_recruitment_prompt_version: str = "care-recruitment-shadow-v1"
     source_runs_table_name: str | None = None
     planning_manual_run_queue_url: str | None = None
@@ -94,7 +94,7 @@ class Settings:
                 "AI_RECRUITMENT_PROMPT_VERSION", "recruitment-shadow-v3"
             ),
             ai_care_planning_prompt_version=os.getenv(
-                "AI_CARE_PLANNING_PROMPT_VERSION", "care-planning-shadow-v1"
+                "AI_CARE_PLANNING_PROMPT_VERSION", "care-planning-shadow-v2"
             ),
             ai_care_recruitment_prompt_version=os.getenv(
                 "AI_CARE_RECRUITMENT_PROMPT_VERSION", "care-recruitment-shadow-v1"

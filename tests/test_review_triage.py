@@ -34,6 +34,7 @@ def test_structured_refusal_variants_are_unambiguous() -> None:
         "Refusal of Permission",
         "Refusal of Consent",
         "Permission/Consent Refused",
+        "Certificate of Lawfulness — Refused",
     ):
         result = planning_refusal_assessment(
             {"planning_status": value, "decision_date": "2026-04-03"}

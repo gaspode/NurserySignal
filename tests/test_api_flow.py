@@ -1127,6 +1127,49 @@ def test_care_planning_backlog_actions_are_admin_only_and_bounded(monkeypatch) -
     assert denied["statusCode"] == 403
 
 
+def test_care_planning_ai_validation_is_admin_only_bounded_and_non_mutating(monkeypatch) -> None:
+    captured = {}
+    monkeypatch.setattr(
+        "app.handler.care_planning_ai_validation_preview",
+        lambda settings, **kwargs: captured.update(kwargs) or {"policy_preview": {}},
+    )
+    preview = handler(
+        event(
+            "/admin/review-triage/care-planning/ai-validation",
+            query={"limit": "999"},
+        ),
+        None,
+    )
+    assert preview["statusCode"] == 200
+    assert captured["sample_limit"] == 100
+
+    evaluated = {}
+    monkeypatch.setattr(
+        "app.handler.run_care_planning_ai_validation",
+        lambda settings, **kwargs: evaluated.update(kwargs)
+        or {"review_decisions_mutated": False},
+    )
+    response = handler(
+        event(
+            "/admin/review-triage/care-planning/ai-validation",
+            "POST",
+            body=json.dumps({"operation": "evaluate", "signal_ids": [str(uuid4())]}),
+        ),
+        None,
+    )
+    assert response["statusCode"] == 200
+    assert evaluated["actor"] == CLAIMS["sub"]
+
+    denied = handler(
+        event(
+            "/admin/review-triage/care-planning/ai-validation",
+            claims={"sub": "staff", "cognito:groups": ["Other"]},
+        ),
+        None,
+    )
+    assert denied["statusCode"] == 403
+
+
 def test_recruitment_planning_diagnostic_is_bounded_and_read_only(monkeypatch) -> None:
     captured = {}
     monkeypatch.setattr(

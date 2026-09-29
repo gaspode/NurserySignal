@@ -96,7 +96,7 @@ variable "ai_recruitment_prompt_version" {
 
 variable "ai_care_planning_prompt_version" {
   type        = string
-  default     = "care-planning-shadow-v1"
+  default     = "care-planning-shadow-v2"
   description = "CareSignal planning shadow-review prompt version."
 }
 

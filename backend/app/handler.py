@@ -23,6 +23,11 @@ from app.backtest_repository import (
     seed_care_ofsted_benchmark,
 )
 from app.backtesting import BacktestBounds
+from app.care_ai_validation import (
+    care_planning_ai_validation_preview,
+    care_planning_ai_validation_report,
+    run_care_planning_ai_validation,
+)
 from app.care_backfill import backfill_care_from_stored_evidence
 from app.care_planning_review import validate_care_planning_subtype
 from app.config import Settings
@@ -318,6 +323,8 @@ def _admin_path(path: str) -> tuple[str, str | None]:
         return "care-planning-withdrawn", None
     if path == "/admin/review-triage/care-planning/fastpath":
         return "care-planning-fastpath", None
+    if path == "/admin/review-triage/care-planning/ai-validation":
+        return "care-planning-ai-validation", None
     if path == "/admin/review-triage/safe-approve":
         return "review-triage-safe-approve", None
     if path == "/admin/verticals/CHILDRENS_HOME/backfill":
@@ -1347,6 +1354,44 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                         limit=min(max(int(payload.get("limit", 100)), 1), 100),
                     ),
                 )
+            if action == "care-planning-ai-validation":
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                if method == "GET":
+                    return _response(
+                        200,
+                        care_planning_ai_validation_preview(
+                            settings,
+                            sample_limit=min(
+                                max(int(_query(event, "limit") or "80"), 1), 100
+                            ),
+                        ),
+                    )
+                if method == "POST":
+                    payload = parse_json_payload(_raw_body(event))
+                    signal_ids = payload.get("signal_ids")
+                    if not isinstance(signal_ids, list):
+                        raise ValueError("signal_ids_required")
+                    operation = str(payload.get("operation") or "evaluate").lower()
+                    if operation == "report":
+                        return _response(
+                            200,
+                            care_planning_ai_validation_report(
+                                settings, signal_ids=[str(value) for value in signal_ids]
+                            ),
+                        )
+                    if operation != "evaluate":
+                        raise ValueError("invalid_ai_validation_operation")
+                    actor = str(claims.get("sub") or claims.get("username") or "unknown")
+                    return _response(
+                        200,
+                        run_care_planning_ai_validation(
+                            settings,
+                            signal_ids=[str(value) for value in signal_ids],
+                            actor=actor,
+                        ),
+                    )
             if action == "review-triage-safe-approve" and method == "POST":
                 admin_error = _require_admin(claims, settings)
                 if admin_error:
