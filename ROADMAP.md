@@ -949,3 +949,22 @@ Paid-pilot activation check (2026-09-28):
   withdrawal is pending, and the one active appeal remains support-only. The 20 unsupported draft
   opportunities remain untouched. Exact next step: manually review the pending cohort and the two failed
   v2 assessments; do not broaden CareProspect AI automation.
+- `care-planning-ai-approval-v1` is deployed as the first narrowly authoritative CareProspect AI-assisted
+  policy. It requires a latest successful `care-planning-shadow-v2` APPROVE at confidence >=0.95,
+  canonical non-negative Planning outcome, no ambiguity/false-positive or prior policy/human state, and
+  exactly `NEW_HOME_CHANGE_OF_USE` or `NEW_HOME_OTHER_EXPLICIT`. All lawfulness, condition, amendment,
+  follow-up and ambiguous subtypes remain manual. The stable UUID modulo-ten QA holdout is persisted in
+  signal facts and exposed through the `Care AI approval QA` inbox bucket; rejected holdouts raise an
+  admin warning. AI rejection remains advisory and customer publication remains manual.
+- The production preview reconciled all 321 pending records: 160 eligible (130 change-of-use and 30 other
+  explicit homes), comprising 142 auto-approvals and 18 QA holdouts. The 161 exclusions were 141 subtype,
+  15 AI recommendation, four confidence and one canonical outcome; no stale/failed assessment entered the
+  cohort. Two serial batches (100 and 60) applied all 160 markers with 142 approvals, 18 pending holdouts,
+  zero failures and zero idempotent skips. Batch reporting found 87 then 34 distinct existing opportunities
+  (not deduplicated across batches) and 122 existing active relationships; approval created no opportunities or relationships and
+  published inventory remained six before/after. Final preview reports zero remaining eligible records.
+  CareProspect Planning pending is now 179: 18 policy QA holdouts, 93 rule/AI disagreements, five AI
+  uncertain and 63 other manual records. QA monitoring is 18 pending, zero approved, zero rejected and no
+  warning. The prior deterministic fast-path history remains immutable; future Care auto-approval now
+  waits for complete current-v2 AI evidence. Keep the holdout at 10% and review it prospectively before
+  considering any policy expansion; do not broaden into lawfulness/follow-up subtypes.
