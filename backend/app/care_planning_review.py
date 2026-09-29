@@ -5,9 +5,14 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
+from app.planning_outcomes import (
+    PlanningOutcome,
+    canonical_planning_outcome,
+)
+
 CARE_PLANNING_FASTPATH_POLICY_VERSION = "care-planning-fastpath-v1"
 CARE_PLANNING_QA_MODULUS = 10
-WITHDRAWAL_POLICY_VERSION = "planning-withdrawal-v1"
+WITHDRAWAL_POLICY_VERSION = "planning-withdrawal-v2"
 
 CARE_PLANNING_SUBTYPES = frozenset(
     {
@@ -25,22 +30,6 @@ CARE_PLANNING_SUBTYPES = frozenset(
     }
 )
 CARE_PLANNING_FILTERS = CARE_PLANNING_SUBTYPES | {"EXPLICIT_NEW_HOME"}
-
-WITHDRAWN_DECISIONS = frozenset({"WITHDRAWN", "APPLICATION WITHDRAWN", "WITHDRAWN BY APPLICANT"})
-FASTPATH_PLANNING_DECISIONS = frozenset(
-    {
-        "APPROVED",
-        "GRANTED",
-        "GRANT CONDITIONALLY",
-        "GRANTED CONDITIONALLY",
-        "PERMISSION GRANTED",
-        "APPLICATION PERMITTED",
-        "PENDING",
-        "AWAITING DECISION",
-        "REGISTERED",
-        "PENDING CONSIDERATION",
-    }
-)
 
 _HOME = re.compile(
     r"\b(?:children(?:['’]s|s)?\s+(?:residential\s+)?(?:care\s+)?home|"
@@ -112,49 +101,20 @@ class CarePlanningSubtypeAssessment:
     reasons: tuple[str, ...]
 
 
-def normalize_structured_planning_value(value: Any) -> str:
-    if not isinstance(value, (str, int, float)):
-        return ""
-    return re.sub(r"[^A-Z0-9]+", " ", str(value).upper()).strip()
-
-
-def _nested(mapping: dict[str, Any], *keys: str) -> Any:
-    current: Any = mapping
-    for key in keys:
-        if not isinstance(current, dict):
-            return None
-        current = current.get(key)
-    return current
-
-
-def structured_planning_values(metadata: Any) -> tuple[Any, ...]:
-    data = metadata if isinstance(metadata, dict) else {}
-    return (
-        data.get("decision"),
-        data.get("planning_status"),
-        data.get("status"),
-        _nested(data, "provider_record", "decision", "outcome"),
-        _nested(data, "provider_record", "status"),
-    )
-
-
 def planning_withdrawal_assessment(metadata: Any) -> WithdrawalAssessment:
-    data = metadata if isinstance(metadata, dict) else {}
-    for value in structured_planning_values(data):
-        normalized = normalize_structured_planning_value(value)
-        if normalized in WITHDRAWN_DECISIONS:
-            decision_date = data.get("decision_date") or _nested(
-                data, "provider_record", "date_decided"
-            )
-            return WithdrawalAssessment(True, normalized, str(decision_date or "") or None)
-    return WithdrawalAssessment(False)
+    outcome = canonical_planning_outcome(metadata)
+    return WithdrawalAssessment(
+        outcome.withdrawn,
+        outcome.matched_value if outcome.withdrawn else None,
+        outcome.decision_date if outcome.withdrawn else None,
+    )
 
 
 def care_planning_decision_allows_fastpath(metadata: Any) -> bool:
-    return any(
-        normalize_structured_planning_value(value) in FASTPATH_PLANNING_DECISIONS
-        for value in structured_planning_values(metadata)
-    )
+    return canonical_planning_outcome(metadata).outcome in {
+        PlanningOutcome.APPROVED,
+        PlanningOutcome.PENDING,
+    }
 
 
 def validate_care_planning_subtype(value: str | None) -> str | None:
@@ -196,19 +156,34 @@ def extract_prior_planning_references(text: str) -> tuple[str, ...]:
     return tuple(references[:10])
 
 
-def classify_care_planning_subtype(
-    raw: dict[str, Any], *, refused: bool = False
-) -> CarePlanningSubtypeAssessment:
+def classify_care_planning_subtype(raw: dict[str, Any]) -> CarePlanningSubtypeAssessment:
     text = _planning_text(raw)
     metadata = raw.get("metadata")
     references = extract_prior_planning_references(text)
-    if refused:
+    outcome = canonical_planning_outcome(metadata)
+    if outcome.refused:
         return CarePlanningSubtypeAssessment(
             "REFUSED", False, False, references, ("explicit structured refusal",)
         )
-    if planning_withdrawal_assessment(metadata).withdrawn:
+    if outcome.withdrawn:
         return CarePlanningSubtypeAssessment(
             "WITHDRAWN", False, False, references, ("explicit structured withdrawal",)
+        )
+    if outcome.outcome is PlanningOutcome.REFUSED_UNDER_APPEAL:
+        return CarePlanningSubtypeAssessment(
+            "FOLLOW_UP_OTHER",
+            False,
+            False,
+            references,
+            ("refused application under active appeal",),
+        )
+    if outcome.outcome is PlanningOutcome.APPEAL_ALLOWED:
+        return CarePlanningSubtypeAssessment(
+            "FOLLOW_UP_OTHER",
+            False,
+            False,
+            references,
+            ("appeal allowed lifecycle evidence",),
         )
     home = bool(_HOME.search(text))
     material_capacity = bool(_MATERIAL_CAPACITY.search(text))

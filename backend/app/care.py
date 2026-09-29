@@ -10,8 +10,8 @@ from app.care_planning_review import (
 )
 from app.opportunity_policy import OpportunityCreationDecision
 from app.planning import PlanningRecord, planning_record_from_signal
+from app.planning_outcomes import canonical_planning_outcome
 from app.recruitment import RecruitmentRecord, recruitment_record_from_signal
-from app.review_triage import planning_refusal_assessment
 
 CARE_PLANNING_DIRECT = (
     r"\bchildren(?:['’]s|s)?\s+(?:residential\s+)?(?:care\s+)?home\b",
@@ -260,9 +260,8 @@ def enrich_care_signal(raw: dict[str, Any]) -> dict[str, Any]:
     metadata = raw.get("metadata") or {}
     if source_type == "planning":
         decision = classify_care_planning(planning_record_from_signal(raw))
-        planning_subtype = classify_care_planning_subtype(
-            raw, refused=planning_refusal_assessment(metadata).refused
-        )
+        planning_outcome = canonical_planning_outcome(metadata)
+        planning_subtype = classify_care_planning_subtype(raw)
         matched = decision.matched
         change_type = decision.change_type
         relevance = (
@@ -384,6 +383,15 @@ def enrich_care_signal(raw: dict[str, Any]) -> dict[str, Any]:
         ),
         "source_type": source_type,
         "planning_candidate_matched": matched if source_type == "planning" else None,
+        "planning_outcome": (
+            planning_outcome.outcome.value if source_type == "planning" else None
+        ),
+        "planning_outcome_value": (
+            planning_outcome.matched_value if source_type == "planning" else None
+        ),
+        "planning_outcome_field": (
+            planning_outcome.matched_field if source_type == "planning" else None
+        ),
         "planning_subtype": planning_subtype.subtype if source_type == "planning" else None,
         "planning_subtype_reasons": (
             list(planning_subtype.reasons) if source_type == "planning" else []

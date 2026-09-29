@@ -76,6 +76,7 @@ from app.repository import (
     merge_opportunities,
     opportunity_detail,
     organisation_detail,
+    planning_outcome_dry_run,
     recalculate_opportunity_creation,
     reclassify_pending_care_planning,
     record_admin_audit,
@@ -323,6 +324,8 @@ def _admin_path(path: str) -> tuple[str, str | None]:
         return "care-planning-reclassify", None
     if path == "/admin/review-triage/care-planning/withdrawn":
         return "care-planning-withdrawn", None
+    if path == "/admin/review-triage/care-planning/outcomes":
+        return "care-planning-outcomes", None
     if path == "/admin/review-triage/care-planning/fastpath":
         return "care-planning-fastpath", None
     if path == "/admin/review-triage/care-planning/ai-validation":
@@ -1341,6 +1344,12 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                         limit=min(max(int(payload.get("limit", 2000)), 1), 2500),
                     ),
                 )
+            if action == "care-planning-outcomes" and method == "GET":
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                limit = min(max(int(_query(event, "limit") or "2500"), 1), 2500)
+                return _response(200, planning_outcome_dry_run(settings, limit=limit))
             if action == "care-planning-fastpath" and method == "POST":
                 admin_error = _require_admin(claims, settings)
                 if admin_error:

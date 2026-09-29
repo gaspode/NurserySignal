@@ -15,13 +15,10 @@ from botocore.exceptions import (
     ReadTimeoutError,
 )
 
-from app.care_planning_review import (
-    normalize_structured_planning_value,
-    planning_withdrawal_assessment,
-    structured_planning_values,
-)
+from app.care_planning_review import planning_withdrawal_assessment
 from app.config import Settings
 from app.logging import configure_logging
+from app.planning_outcomes import normalize_structured_planning_value, structured_planning_values
 from app.review_triage import planning_refusal_assessment
 
 logger = configure_logging()

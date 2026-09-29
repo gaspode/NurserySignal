@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from collections import Counter
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -14,9 +15,7 @@ from app.care_planning_review import (
     care_planning_fastpath_eligible,
     care_planning_fastpath_qa_bucket,
     care_planning_fastpath_qa_holdout,
-    normalize_structured_planning_value,
     planning_withdrawal_assessment,
-    structured_planning_values,
     validate_care_planning_subtype,
 )
 from app.classification import CLASSIFICATION_RULE_VERSION
@@ -35,6 +34,14 @@ from app.correlation import (
 )
 from app.db import connection
 from app.ingestion import NormalizedSignal
+from app.planning_outcomes import (
+    PLANNING_OUTCOME_POLICY_VERSION,
+    PlanningOutcome,
+    canonical_planning_outcome,
+    normalize_structured_planning_value,
+    structured_planning_fields,
+    structured_planning_values,
+)
 from app.queueing import EnrichmentMessage, send_enrichment_message
 from app.recruitment import recruitment_record_from_signal
 from app.review_triage import (
@@ -1493,8 +1500,8 @@ def _auto_reject_refused_planning_with_connection(
     *,
     actor: str,
 ) -> bool:
-    assessment = planning_refusal_assessment(metadata)
-    if not assessment.refused:
+    outcome = canonical_planning_outcome(metadata)
+    if not outcome.refused:
         return False
     reason = "Automatically rejected — planning permission refused by council."
     review_facts = {
@@ -1502,8 +1509,11 @@ def _auto_reject_refused_planning_with_connection(
             "status": "REJECTED",
             "reason": reason,
             "policy_version": REFUSAL_POLICY_VERSION,
-            "planning_decision": assessment.value,
-            "decision_date": assessment.decision_date,
+            "outcome_policy_version": PLANNING_OUTCOME_POLICY_VERSION,
+            "planning_outcome": outcome.outcome.value,
+            "planning_decision": outcome.matched_value,
+            "planning_outcome_field": outcome.matched_field,
+            "decision_date": outcome.decision_date,
         }
     }
     row = conn.execute(
@@ -1532,8 +1542,11 @@ def _auto_reject_refused_planning_with_connection(
                         "signal_id": signal_id,
                         "reason": reason,
                         "policy_version": REFUSAL_POLICY_VERSION,
-                        "planning_decision": assessment.value,
-                        "decision_date": assessment.decision_date,
+                        "outcome_policy_version": PLANNING_OUTCOME_POLICY_VERSION,
+                        "planning_outcome": outcome.outcome.value,
+                        "planning_decision": outcome.matched_value,
+                        "planning_outcome_field": outcome.matched_field,
+                        "decision_date": outcome.decision_date,
                     }
                 ),
                 row[0],
@@ -1565,16 +1578,19 @@ def _auto_reject_withdrawn_planning_with_connection(
     *,
     actor: str,
 ) -> bool:
-    assessment = planning_withdrawal_assessment(metadata)
-    if not assessment.withdrawn:
+    outcome = canonical_planning_outcome(metadata)
+    if not outcome.withdrawn:
         return False
     reason = "Automatically rejected — planning application withdrawn."
     marker = {
         "status": "REJECTED",
         "reason": reason,
         "policy_version": WITHDRAWAL_POLICY_VERSION,
-        "planning_decision": assessment.value,
-        "decision_date": assessment.decision_date,
+        "outcome_policy_version": PLANNING_OUTCOME_POLICY_VERSION,
+        "planning_outcome": outcome.outcome.value,
+        "planning_decision": outcome.matched_value,
+        "planning_outcome_field": outcome.matched_field,
+        "decision_date": outcome.decision_date,
     }
     row = conn.execute(
         """
@@ -1618,6 +1634,136 @@ def auto_reject_withdrawn_planning(
         )
         conn.commit()
     return updated
+
+
+def planning_outcome_dry_run(
+    settings: Settings, *, limit: int = 2500
+) -> dict[str, Any]:
+    """Read-only report of canonical outcomes for pending CareProspect Planning.
+
+    The report also inventories the real structured provider vocabulary across
+    the bounded CareProspect Planning corpus. It never changes reviews,
+    opportunities, relationships, AI assessments, or publication state.
+    """
+    bounded_limit = min(max(int(limit), 1), 2500)
+    with connection(settings) as conn:
+        pending_rows = conn.execute(
+            """
+            SELECT rs.id, rs.external_id, rs.title, rs.metadata,
+                   se.extracted_facts,
+                   EXISTS (
+                       SELECT 1
+                       FROM opportunity_signals os
+                       JOIN opportunities o ON o.id = os.opportunity_id
+                       WHERE os.raw_signal_id = rs.id
+                         AND os.status = 'ACTIVE'
+                         AND o.publication_status = 'PUBLISHED'
+                   ) AS affects_published
+            FROM raw_signals rs
+            JOIN signal_enrichments se ON se.raw_signal_id = rs.id
+            WHERE rs.vertical = 'CHILDRENS_HOME'
+              AND rs.source_type = 'planning'
+              AND se.review_status = 'PENDING'
+            ORDER BY rs.discovered_at DESC, rs.id DESC
+            LIMIT %s
+            """,
+            (bounded_limit,),
+        ).fetchall()
+        vocabulary_rows = conn.execute(
+            """
+            SELECT rs.metadata
+            FROM raw_signals rs
+            WHERE rs.vertical = 'CHILDRENS_HOME'
+              AND rs.source_type = 'planning'
+            ORDER BY rs.discovered_at DESC, rs.id DESC
+            LIMIT %s
+            """,
+            (bounded_limit,),
+        ).fetchall()
+
+    outcome_counts: Counter[str] = Counter()
+    override_counts: Counter[str] = Counter()
+    representatives: dict[str, list[dict[str, Any]]] = {}
+    published_ids: set[str] = set()
+    for (
+        signal_id,
+        external_id,
+        title,
+        raw_metadata,
+        extracted_facts,
+        affects_published,
+    ) in pending_rows:
+        metadata = raw_metadata if isinstance(raw_metadata, dict) else {}
+        facts = extracted_facts if isinstance(extracted_facts, dict) else {}
+        assessment = canonical_planning_outcome(metadata)
+        outcome = assessment.outcome.value
+        outcome_counts[outcome] += 1
+        if facts.get("opportunity_creation_decision") == "CREATE_OPPORTUNITY" and (
+            assessment.terminal_negative
+            or assessment.outcome is PlanningOutcome.REFUSED_UNDER_APPEAL
+        ):
+            override_counts[outcome] += 1
+        if affects_published:
+            published_ids.add(str(signal_id))
+        bucket = representatives.setdefault(outcome, [])
+        if len(bucket) < 5:
+            bucket.append(
+                {
+                    "signal_id": str(signal_id),
+                    "provider_reference": str(external_id or ""),
+                    "title": str(title or "")[:240],
+                    "council": metadata.get("council"),
+                    "planning_status": metadata.get("planning_status"),
+                    "decision": metadata.get("decision"),
+                    "decision_date": assessment.decision_date,
+                    "matched_field": assessment.matched_field,
+                    "matched_value": assessment.matched_value,
+                    "current_opportunity_action": facts.get(
+                        "opportunity_creation_decision"
+                    ),
+                    "affects_published": bool(affects_published),
+                }
+            )
+
+    concepts = re.compile(
+        r"\b(?:REFUS\w*|REJECT\w*|WITHDRAW\w*|APPROV\w*|GRANT\w*|PERMISSION|"
+        r"APPEAL\w*|DISMISS\w*|ALLOW\w*)\b"
+    )
+    vocabulary: Counter[tuple[str, str]] = Counter()
+    for (raw_metadata,) in vocabulary_rows:
+        for field, raw_value in structured_planning_fields(raw_metadata):
+            value = str(raw_value or "").strip()
+            normalized = normalize_structured_planning_value(value)
+            if normalized and concepts.search(normalized):
+                vocabulary[(field, value)] += 1
+
+    return {
+        "policy_version": PLANNING_OUTCOME_POLICY_VERSION,
+        "read_only": True,
+        "pending_inspected": len(pending_rows),
+        "inspection_limit": bounded_limit,
+        "outcomes": dict(sorted(outcome_counts.items())),
+        "current_create_opportunity_overrides": dict(sorted(override_counts.items())),
+        "terminal_negative_total": sum(
+            outcome_counts.get(outcome.value, 0)
+            for outcome in (
+                PlanningOutcome.REFUSED,
+                PlanningOutcome.WITHDRAWN,
+                PlanningOutcome.APPEAL_DISMISSED,
+            )
+        ),
+        "refused_under_active_appeal": outcome_counts.get(
+            PlanningOutcome.REFUSED_UNDER_APPEAL.value, 0
+        ),
+        "published_opportunity_signal_count": len(published_ids),
+        "representatives": representatives,
+        "provider_vocabulary": [
+            {"field": field, "value": value, "count": count}
+            for (field, value), count in sorted(
+                vocabulary.items(), key=lambda item: (-item[1], item[0][0], item[0][1])
+            )[:150]
+        ],
+    }
 
 
 def cleanup_withdrawn_care_planning_signals(

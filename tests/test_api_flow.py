@@ -1127,6 +1127,34 @@ def test_care_planning_backlog_actions_are_admin_only_and_bounded(monkeypatch) -
     assert denied["statusCode"] == 403
 
 
+def test_care_planning_outcome_dry_run_is_admin_only_bounded_and_read_only(
+    monkeypatch,
+) -> None:
+    captured = {}
+    monkeypatch.setattr(
+        "app.handler.planning_outcome_dry_run",
+        lambda settings, **kwargs: captured.update(kwargs)
+        or {"read_only": True, "pending_inspected": 12},
+    )
+    response = handler(
+        event(
+            "/admin/review-triage/care-planning/outcomes",
+            query={"limit": "99999"},
+        ),
+        None,
+    )
+    assert response["statusCode"] == 200
+    assert captured["limit"] == 2500
+    denied = handler(
+        event(
+            "/admin/review-triage/care-planning/outcomes",
+            claims={"sub": "staff", "cognito:groups": ["Other"]},
+        ),
+        None,
+    )
+    assert denied["statusCode"] == 403
+
+
 def test_care_planning_ai_validation_is_admin_only_bounded_and_non_mutating(monkeypatch) -> None:
     captured = {}
     monkeypatch.setattr(

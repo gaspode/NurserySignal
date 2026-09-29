@@ -4,27 +4,13 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
-from app.care_planning_review import normalize_structured_planning_value
+from app.planning_outcomes import canonical_planning_outcome, normalize_structured_planning_value
 
-REFUSAL_POLICY_VERSION = "planning-refusal-v3"
+REFUSAL_POLICY_VERSION = "planning-refusal-v4"
 SAFE_APPROVAL_MIN_CONFIDENCE = 0.95
 SAFE_APPROVAL_POLICY_VERSION = "safe-approval-v1"
 SAFE_APPROVAL_VERTICALS = frozenset({"NURSERY"})
 SAFE_APPROVAL_QA_MODULUS = 10
-REFUSED_DECISIONS = {
-    "REFUSAL",
-    "REFUSED",
-    "REJECTED",
-    "PERMISSION REFUSED",
-    "APPLICATION REFUSED",
-    "REFUSE PERMISSION CONSENT",
-    "REFUSE PERMISSION",
-    "REFUSE CONSENT",
-    "REFUSAL OF PERMISSION",
-    "REFUSAL OF CONSENT",
-    "PERMISSION CONSENT REFUSED",
-    "CERTIFICATE OF LAWFULNESS REFUSED",
-}
 TRIAGE_BUCKETS = frozenset(
     {
         "SAFE_APPROVE_AGREEMENT",
@@ -60,32 +46,13 @@ def validate_triage_bucket(value: str | None) -> str | None:
     return normalized
 
 
-def _nested(mapping: dict[str, Any], *keys: str) -> Any:
-    current: Any = mapping
-    for key in keys:
-        if not isinstance(current, dict):
-            return None
-        current = current.get(key)
-    return current
-
-
 def planning_refusal_assessment(metadata: Any) -> RefusalAssessment:
-    data = metadata if isinstance(metadata, dict) else {}
-    values = (
-        data.get("decision"),
-        data.get("planning_status"),
-        data.get("status"),
-        _nested(data, "provider_record", "decision", "outcome"),
-        _nested(data, "provider_record", "status"),
+    outcome = canonical_planning_outcome(metadata)
+    return RefusalAssessment(
+        outcome.refused,
+        outcome.matched_value if outcome.refused else None,
+        outcome.decision_date if outcome.refused else None,
     )
-    for value in values:
-        normalized = normalize_planning_decision(value)
-        if normalized in REFUSED_DECISIONS:
-            decision_date = data.get("decision_date") or _nested(
-                data, "provider_record", "date_decided"
-            )
-            return RefusalAssessment(True, normalized, str(decision_date or "") or None)
-    return RefusalAssessment(False)
 
 
 def deterministic_review_recommendation(extracted_facts: Any) -> str:

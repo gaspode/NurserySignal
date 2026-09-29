@@ -42,7 +42,7 @@ def test_structured_refusal_variants_are_unambiguous() -> None:
         assert result.refused is True
         assert result.decision_date == "2026-04-03"
     assert normalize_planning_decision("Permission: refused.") == "PERMISSION REFUSED"
-    assert REFUSAL_POLICY_VERSION == "planning-refusal-v3"
+    assert REFUSAL_POLICY_VERSION == "planning-refusal-v4"
 
 
 def test_non_refusal_terminal_states_are_not_auto_rejected() -> None:
@@ -56,9 +56,9 @@ def test_non_refusal_terminal_states_are_not_auto_rejected() -> None:
         "Non-material amendment",
         "Appeal pending",
         "Appeal allowed",
-        "Appeal dismissed",
     ):
         assert planning_refusal_assessment({"decision": value}).refused is False
+    assert planning_refusal_assessment({"decision": "Appeal dismissed"}).refused is True
 
 
 def test_nested_provider_decision_is_used_but_description_text_is_not() -> None:
@@ -299,7 +299,7 @@ def test_refusal_review_uses_authoritative_pending_transition_and_audit(monkeypa
     assert len(audits) == 1
     assert "PLANNING_REFUSAL_AUTO_REJECT" in audits[0][0]
     assert "Automatically rejected" in audits[0][1][1].obj["reason"]
-    assert audits[0][1][1].obj["policy_version"] == "planning-refusal-v3"
+    assert audits[0][1][1].obj["policy_version"] == "planning-refusal-v4"
 
 
 class SafeApprovalConnection:
