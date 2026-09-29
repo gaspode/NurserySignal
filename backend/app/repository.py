@@ -2189,30 +2189,39 @@ def apply_care_planning_fastpath_policy(
 
 
 def cleanup_refused_planning_signals(
-    settings: Settings, *, actor: str, limit: int = 2000
+    settings: Settings, *, actor: str, limit: int = 2000, vertical: str = "ALL"
 ) -> dict[str, Any]:
     """Boundedly remove explicit structured refusals from the pending review inbox."""
     bounded_limit = min(max(int(limit), 1), 2500)
+    selected_vertical = validate_vertical_filter(vertical)
+    vertical_clause = "" if selected_vertical == "ALL" else " AND rs.vertical = %s"
+    row_params: list[Any] = []
+    if selected_vertical != "ALL":
+        row_params.append(selected_vertical)
+    row_params.append(bounded_limit)
     with connection(settings) as conn:
         rows = conn.execute(
-            """
+            f"""
             SELECT rs.id, rs.metadata, rs.vertical, se.review_status
             FROM raw_signals rs
             JOIN signal_enrichments se ON se.raw_signal_id = rs.id
             WHERE rs.source_type = 'planning' AND se.review_status = 'PENDING'
+              {vertical_clause}
             ORDER BY rs.discovered_at DESC, rs.id DESC
             LIMIT %s
             """,
-            (bounded_limit,),
+            row_params,
         ).fetchall()
         reviewed_rows = conn.execute(
-            """
+            f"""
             SELECT rs.metadata
             FROM raw_signals rs
             JOIN signal_enrichments se ON se.raw_signal_id = rs.id
             WHERE rs.source_type = 'planning'
               AND se.review_status IN ('APPROVED', 'REJECTED')
-            """
+              {vertical_clause}
+            """,
+            row_params[:-1],
         ).fetchall()
     refused = [
         (str(row[0]), row[1] or {}, str(row[2]))
@@ -2270,6 +2279,7 @@ def cleanup_refused_planning_signals(
                         "explicit_refusals_found": len(refused),
                         "auto_rejected": updated,
                         "errors": errors,
+                        "vertical": selected_vertical,
                     }
                 ),
             ),
@@ -2309,6 +2319,7 @@ def cleanup_refused_planning_signals(
             ).fetchone()[0]
     return {
         "policy_version": REFUSAL_POLICY_VERSION,
+        "vertical": selected_vertical,
         "pending_planning_inspected": len(rows),
         "inspection_limit": bounded_limit,
         "explicit_refusals_found": len(refused),

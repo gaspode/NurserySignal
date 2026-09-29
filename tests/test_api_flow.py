@@ -1044,7 +1044,7 @@ def test_refusal_cleanup_and_safe_approve_are_bounded_admin_actions(monkeypatch)
         event(
             "/admin/review-triage/refusals",
             "POST",
-            body=json.dumps({"limit": 99999}),
+            body=json.dumps({"limit": 99999, "vertical": "CHILDRENS_HOME"}),
         ),
         None,
     )
@@ -1065,6 +1065,7 @@ def test_refusal_cleanup_and_safe_approve_are_bounded_admin_actions(monkeypatch)
     )
     assert cleanup["statusCode"] == 200
     assert cleanup_args["limit"] == 2500
+    assert cleanup_args["vertical"] == "CHILDRENS_HOME"
     assert preview["statusCode"] == 200
     assert approve_args["limit"] == 100
     assert approve_args["preview"] is True

@@ -1314,6 +1314,9 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                         settings,
                         actor=actor,
                         limit=min(max(int(payload.get("limit", 2000)), 1), 2500),
+                        vertical=validate_vertical_filter(
+                            str(payload.get("vertical") or "ALL")
+                        ),
                     ),
                 )
             if action == "care-planning-reclassify" and method == "POST":
