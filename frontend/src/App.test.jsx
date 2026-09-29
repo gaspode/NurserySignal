@@ -58,6 +58,7 @@ const triageResult = {
     EXPLICIT_PLANNING_REFUSAL: 2,
     SAFE_APPROVE_AGREEMENT: 7,
     QA_HOLDOUT_CARE_AI_APPROVAL: 9,
+    QA_HOLDOUT_CARE_LAWFULNESS: 1,
     DETERMINISTIC_AI_DISAGREE: 3,
     AI_UNCERTAIN: 4,
     MANUAL_REVIEW_REQUIRED: 5,
@@ -71,6 +72,12 @@ const triageResult = {
     by_policy_version: {
       "care-planning-ai-approval-v1": { qa_approved: 18, qa_rejected: 0 },
     },
+  },
+  care_planning_lawfulness_monitoring: {
+    policy_version: "care-planning-lawfulness-proposed-v1",
+    auto_approved: 0,
+    qa_holdouts: 1,
+    qa_holdouts_rejected: 0,
   },
 };
 
@@ -255,6 +262,8 @@ describe("admin frontend", () => {
     expect(screen.getByText(/AI rejection remains advisory/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Rule\/AI disagree 3/ })).toHaveTextContent("3");
     expect(screen.getByRole("button", { name: /Care AI approval QA 9/ })).toHaveTextContent("9");
+    expect(screen.getByRole("button", { name: /Care lawfulness QA 1/ })).toHaveTextContent("1");
+    expect(screen.getByText(/care-planning-lawfulness-proposed-v1/)).toBeInTheDocument();
     expect(screen.getByText(/5% future QA target/)).toBeInTheDocument();
     expect(screen.getByText(/Historical v1 validation: 18 approved · 0 rejected/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Approve safe agreement set" })).not.toBeInTheDocument();

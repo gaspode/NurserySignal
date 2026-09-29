@@ -7,6 +7,7 @@ from app.care import enrich_care_signal
 from app.care_planning_review import (
     CARE_PLANNING_AI_APPROVAL_POLICY_VERSION,
     CARE_PLANNING_FASTPATH_POLICY_VERSION,
+    CARE_PLANNING_LAWFULNESS_POLICY_VERSION,
     WITHDRAWAL_POLICY_VERSION,
     care_planning_ai_approval_exclusion,
     care_planning_ai_approval_outcome,
@@ -15,6 +16,10 @@ from app.care_planning_review import (
     care_planning_fastpath_eligible,
     care_planning_fastpath_qa_bucket,
     care_planning_fastpath_qa_holdout,
+    care_planning_lawfulness_exclusion,
+    care_planning_lawfulness_outcome,
+    care_planning_lawfulness_qa_bucket,
+    care_planning_lawfulness_qa_holdout,
     classify_care_planning_subtype,
     planning_withdrawal_assessment,
 )
@@ -22,6 +27,7 @@ from app.config import Settings
 from app.repository import (
     apply_care_planning_ai_approval_policy,
     apply_care_planning_fastpath_policy,
+    apply_care_planning_lawfulness_policy,
     auto_reject_withdrawn_planning,
     care_planning_manual_analysis_from_rows,
 )
@@ -36,6 +42,30 @@ def ai_approval_kwargs(**overrides):
         "metadata": {"planning_status": "Pending"},
         "extracted_facts": {
             "planning_subtype": "NEW_HOME_CHANGE_OF_USE",
+            "likely_false_positive": False,
+            "planning_ambiguity_markers": [],
+        },
+        "ai_status": "SUCCEEDED",
+        "ai_prompt_version": "care-planning-shadow-v2",
+        "ai_recommendation": "APPROVE",
+        "ai_confidence": 0.95,
+    }
+    values.update(overrides)
+    return values
+
+
+def lawfulness_approval_kwargs(**overrides):
+    values = {
+        "vertical": "CHILDRENS_HOME",
+        "source_type": "planning",
+        "review_status": "PENDING",
+        "reviewed_by": None,
+        "metadata": {"decision": "Approved"},
+        "extracted_facts": {
+            "planning_subtype": "LAWFULNESS_PROPOSED",
+            "explicit_new_home_proposal": True,
+            "opportunity_creation_decision": "CREATE_OPPORTUNITY",
+            "planning_prior_references": [],
             "likely_false_positive": False,
             "planning_ambiguity_markers": [],
         },
@@ -167,6 +197,81 @@ def test_historical_care_ai_policy_marker_prevents_reclassification() -> None:
         care_planning_ai_approval_exclusion(**ai_approval_kwargs(extracted_facts=facts))
         == "EXISTING_REVIEW_OR_POLICY_STATE"
     )
+
+
+def test_proposed_lawfulness_policy_exact_eligibility_and_stable_qa() -> None:
+    assert care_planning_lawfulness_exclusion(**lawfulness_approval_kwargs()) is None
+    signal_ids = [str(UUID(int=value)) for value in range(1, 101)]
+    assert sum(care_planning_lawfulness_qa_holdout(value) for value in signal_ids) == 10
+    signal_id = str(UUID(int=20))
+    assert care_planning_lawfulness_qa_bucket(signal_id) == 0
+    assert (
+        care_planning_lawfulness_outcome(signal_id=signal_id, **lawfulness_approval_kwargs())
+        == "QA_HOLDOUT"
+    )
+    assert care_planning_lawfulness_qa_holdout(signal_id)
+
+
+def test_proposed_lawfulness_policy_excludes_unvalidated_semantics() -> None:
+    base_facts = lawfulness_approval_kwargs()["extracted_facts"]
+    cases = (
+        ({"extracted_facts": {**base_facts, "planning_subtype": "LAWFULNESS_EXISTING"}}, "SUBTYPE"),
+        ({"ai_confidence": 0.90}, "AI_CONFIDENCE"),
+        ({"ai_recommendation": "REJECT"}, "AI_RECOMMENDATION"),
+        ({"ai_recommendation": "NEEDS_HUMAN"}, "AI_RECOMMENDATION"),
+        ({"ai_status": "FAILED"}, "AI_VERSION_OR_STATUS"),
+        ({"ai_prompt_version": "care-planning-shadow-v1"}, "AI_VERSION_OR_STATUS"),
+        ({"metadata": {"decision": "Refused"}}, "PLANNING_OUTCOME"),
+        ({"metadata": {"decision": "Withdrawn"}}, "PLANNING_OUTCOME"),
+        (
+            {"metadata": {"decision": "Refused", "planning_status": "Appeal started"}},
+            "PLANNING_OUTCOME",
+        ),
+        ({"metadata": {"decision": "Appeal dismissed"}}, "PLANNING_OUTCOME"),
+        (
+            {
+                "extracted_facts": {
+                    **base_facts,
+                    "opportunity_creation_decision": "SUPPORT_EXISTING_ONLY",
+                }
+            },
+            "OPPORTUNITY_DECISION",
+        ),
+        (
+            {"extracted_facts": {**base_facts, "opportunity_creation_decision": "REVIEW"}},
+            "OPPORTUNITY_DECISION",
+        ),
+        (
+            {"extracted_facts": {**base_facts, "likely_false_positive": True}},
+            "LIKELY_FALSE_POSITIVE",
+        ),
+        (
+            {"extracted_facts": {**base_facts, "planning_ambiguity_markers": ["unclear"]}},
+            "AMBIGUITY",
+        ),
+        (
+            {"extracted_facts": {**base_facts, "planning_prior_references": ["24/1234/F"]}},
+            "PRIOR_APPLICATION_REFERENCE",
+        ),
+        ({"review_status": "APPROVED"}, "EXISTING_REVIEW_OR_POLICY_STATE"),
+        ({"reviewed_by": "admin"}, "EXISTING_REVIEW_OR_POLICY_STATE"),
+        (
+            {
+                "extracted_facts": {
+                    **base_facts,
+                    "care_planning_ai_approval": {
+                        "policy_version": "care-planning-ai-approval-v1.1"
+                    },
+                }
+            },
+            "EXISTING_REVIEW_OR_POLICY_STATE",
+        ),
+    )
+    for overrides, expected in cases:
+        assert (
+            care_planning_lawfulness_exclusion(**lawfulness_approval_kwargs(**overrides))
+            == expected
+        )
 
 
 def raw_planning(
@@ -527,6 +632,100 @@ def test_care_ai_qa_holdout_remains_pending(monkeypatch) -> None:
 
     monkeypatch.setattr("app.repository.connection", fake_connection)
     result = apply_care_planning_ai_approval_policy(Settings(), signal_id)
+    assert result == {"signal_id": signal_id, "outcome": "QA_HOLDOUT", "updated": True}
+    assert fake.status == "PENDING"
+    assert fake.marker["qa_bucket"] == 0
+
+
+class LawfulnessApprovalConnection:
+    def __init__(self, signal_id: str) -> None:
+        self.signal_id = signal_id
+        self.status = "PENDING"
+        self.reviewed_by = None
+        self.marker = None
+        self.statements: list[tuple[str, object]] = []
+        self.last_result: list[tuple] = []
+
+    def execute(self, sql, params=None):
+        self.statements.append((sql, params))
+        if "SELECT rs.id, rs.vertical" in sql:
+            facts = {
+                "planning_subtype": "LAWFULNESS_PROPOSED",
+                "explicit_new_home_proposal": True,
+                "opportunity_creation_decision": "CREATE_OPPORTUNITY",
+                "planning_prior_references": [],
+                "likely_false_positive": False,
+                "planning_ambiguity_markers": [],
+            }
+            if self.marker:
+                facts["care_planning_lawfulness_approval"] = self.marker
+            self.last_result = [
+                (
+                    self.signal_id,
+                    "CHILDRENS_HOME",
+                    "planning",
+                    {"decision": "Approved"},
+                    self.status,
+                    self.reviewed_by,
+                    facts,
+                    "SUCCEEDED",
+                    "APPROVE",
+                    0.95,
+                    "care-planning-shadow-v2",
+                )
+            ]
+        elif "UPDATE signal_enrichments" in sql and self.status == "PENDING":
+            marker_index = 1 if "review_status = 'APPROVED'" in sql else 0
+            self.marker = params[marker_index].obj["care_planning_lawfulness_approval"]
+            if "review_status = 'APPROVED'" in sql:
+                self.status = "APPROVED"
+                self.reviewed_by = params[0]
+            self.last_result = [(self.signal_id,)]
+        else:
+            self.last_result = []
+        return self
+
+    def fetchone(self):
+        return self.last_result[0] if self.last_result else None
+
+    def commit(self) -> None:
+        return None
+
+
+def test_proposed_lawfulness_auto_approval_is_audited_and_idempotent(monkeypatch) -> None:
+    signal_id = str(uuid4())
+    while care_planning_lawfulness_qa_holdout(signal_id):
+        signal_id = str(uuid4())
+    fake = LawfulnessApprovalConnection(signal_id)
+
+    @contextmanager
+    def fake_connection(settings):
+        yield fake
+
+    monkeypatch.setattr("app.repository.connection", fake_connection)
+    first = apply_care_planning_lawfulness_policy(Settings(), signal_id)
+    second = apply_care_planning_lawfulness_policy(Settings(), signal_id)
+    assert first == {"signal_id": signal_id, "outcome": "AUTO_APPROVE", "updated": True}
+    assert second["updated"] is False
+    assert fake.reviewed_by == f"system:{CARE_PLANNING_LAWFULNESS_POLICY_VERSION}"
+    assert fake.marker["planning_subtype"] == "LAWFULNESS_PROPOSED"
+    assert fake.marker["planning_outcome"] == "APPROVED"
+    assert fake.marker["opportunity_creation_decision"] == "CREATE_OPPORTUNITY"
+    audits = [sql for sql, _ in fake.statements if "INSERT INTO admin_audit_events" in sql]
+    assert len(audits) == 1
+    assert not any("publication_status" in sql for sql, _ in fake.statements)
+
+
+def test_proposed_lawfulness_qa_holdout_remains_pending(monkeypatch) -> None:
+    signal_id = str(UUID(int=20))
+    fake = LawfulnessApprovalConnection(signal_id)
+
+    @contextmanager
+    def fake_connection(settings):
+        yield fake
+
+    monkeypatch.setattr("app.repository.connection", fake_connection)
+    result = apply_care_planning_lawfulness_policy(Settings(), signal_id)
     assert result == {"signal_id": signal_id, "outcome": "QA_HOLDOUT", "updated": True}
     assert fake.status == "PENDING"
     assert fake.marker["qa_bucket"] == 0

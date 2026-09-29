@@ -11,6 +11,7 @@ from app.queueing import EnrichmentMessage
 from app.repository import (
     ai_review_exists,
     apply_care_planning_ai_approval_policy,
+    apply_care_planning_lawfulness_policy,
     apply_safe_approval_policy,
     auto_reject_refused_planning,
     auto_reject_withdrawn_planning,
@@ -59,8 +60,10 @@ def process_message(settings: Settings, body: str) -> None:
                 message.signal_id,
                 raw.get("metadata"),
             )
-    if not refused and not withdrawn and (
-        getattr(settings, "database_url", None) or getattr(settings, "db_secret_arn", None)
+    if (
+        not refused
+        and not withdrawn
+        and (getattr(settings, "database_url", None) or getattr(settings, "db_secret_arn", None))
     ):
         opportunity = correlate_signal(settings, message.signal_id, candidate)
     logger.info(
@@ -89,6 +92,7 @@ def process_message(settings: Settings, body: str) -> None:
             # ineligible on failed/stale/missing AI. Calling after an idempotent
             # retry is safe even when the v2 assessment already existed.
             apply_care_planning_ai_approval_policy(settings, message.signal_id)
+            apply_care_planning_lawfulness_policy(settings, message.signal_id)
         elif saved and review.get("status") == "SUCCEEDED":
             apply_safe_approval_policy(settings, message.signal_id)
 

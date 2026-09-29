@@ -17,6 +17,9 @@ from app.care_planning_review import (
     CARE_PLANNING_AI_APPROVAL_PROMPT_VERSION,
     CARE_PLANNING_AI_APPROVAL_SUBTYPES,
     CARE_PLANNING_FASTPATH_POLICY_VERSION,
+    CARE_PLANNING_LAWFULNESS_MIN_CONFIDENCE,
+    CARE_PLANNING_LAWFULNESS_POLICY_VERSION,
+    CARE_PLANNING_LAWFULNESS_PROMPT_VERSION,
     WITHDRAWAL_POLICY_VERSION,
     care_planning_ai_approval_exclusion,
     care_planning_ai_approval_outcome,
@@ -24,6 +27,9 @@ from app.care_planning_review import (
     care_planning_fastpath_eligible,
     care_planning_fastpath_qa_bucket,
     care_planning_fastpath_qa_holdout,
+    care_planning_lawfulness_exclusion,
+    care_planning_lawfulness_outcome,
+    care_planning_lawfulness_qa_bucket,
     planning_withdrawal_assessment,
     validate_care_planning_subtype,
 )
@@ -2539,6 +2545,210 @@ def care_planning_ai_approval_backlog(
     }
 
 
+def _care_planning_lawfulness_evaluation(
+    items: list[dict[str, Any]],
+) -> tuple[list[tuple[dict[str, Any], str]], dict[str, int]]:
+    eligible: list[tuple[dict[str, Any], str]] = []
+    exclusions: dict[str, int] = {}
+    for item in items:
+        confidence = float(item["ai_confidence"]) if item.get("ai_confidence") is not None else None
+        reason = care_planning_lawfulness_exclusion(
+            vertical=item["vertical"],
+            source_type=item["source_type"],
+            review_status=item["review_status"],
+            reviewed_by=item.get("reviewed_by"),
+            metadata=item.get("metadata"),
+            extracted_facts=item.get("extracted_facts"),
+            ai_status=item.get("ai_status"),
+            ai_prompt_version=item.get("ai_prompt_version"),
+            ai_recommendation=item.get("ai_recommendation"),
+            ai_confidence=confidence,
+        )
+        if reason:
+            exclusions[reason] = exclusions.get(reason, 0) + 1
+            continue
+        eligible.append(
+            (
+                item,
+                care_planning_lawfulness_outcome(
+                    signal_id=str(item["id"]),
+                    vertical=item["vertical"],
+                    source_type=item["source_type"],
+                    review_status=item["review_status"],
+                    reviewed_by=item.get("reviewed_by"),
+                    metadata=item.get("metadata"),
+                    extracted_facts=item.get("extracted_facts"),
+                    ai_status=item.get("ai_status"),
+                    ai_prompt_version=item.get("ai_prompt_version"),
+                    ai_recommendation=item.get("ai_recommendation"),
+                    ai_confidence=confidence,
+                ),
+            )
+        )
+    return eligible, exclusions
+
+
+def care_planning_lawfulness_preview(settings: Settings) -> dict[str, Any]:
+    """Preview proposed-lawfulness v1 over the bounded pending Planning cohort."""
+    items = _care_planning_ai_approval_rows(settings)
+    eligible, exclusions = _care_planning_lawfulness_evaluation(items)
+    with connection(settings) as conn:
+        published = int(
+            conn.execute(
+                """SELECT count(*) FROM opportunities
+                   WHERE vertical = 'CHILDRENS_HOME' AND publication_status = 'PUBLISHED'"""
+            ).fetchone()[0]
+        )
+    return {
+        "preview": True,
+        "policy_version": CARE_PLANNING_LAWFULNESS_POLICY_VERSION,
+        "prompt_version": CARE_PLANNING_LAWFULNESS_PROMPT_VERSION,
+        "confidence_threshold": CARE_PLANNING_LAWFULNESS_MIN_CONFIDENCE,
+        "qa_target_percent": 10,
+        "pending_evaluated": len(items),
+        "eligible": len(eligible),
+        "would_auto_approve": sum(outcome == "AUTO_APPROVE" for _, outcome in eligible),
+        "qa_holdouts": sum(outcome == "QA_HOLDOUT" for _, outcome in eligible),
+        "exclusions": dict(sorted(exclusions.items())),
+        "published_opportunities": published,
+        "customer_publication_unchanged": True,
+    }
+
+
+def apply_care_planning_lawfulness_policy(
+    settings: Settings, signal_id: str, *, trigger_actor: str | None = None
+) -> dict[str, Any]:
+    """Apply proposed-lawfulness v1 once after a successful current v2 assessment."""
+    with connection(settings) as conn:
+        row = conn.execute(
+            """
+            SELECT rs.id, rs.vertical, rs.source_type, rs.metadata, se.review_status,
+                   se.reviewed_by, se.extracted_facts, ai.status, ai.recommendation,
+                   ai.confidence, ai.prompt_version
+            FROM raw_signals rs
+            JOIN signal_enrichments se ON se.raw_signal_id = rs.id
+            LEFT JOIN LATERAL (
+                SELECT status, recommendation, confidence, prompt_version
+                FROM signal_ai_reviews
+                WHERE raw_signal_id = rs.id
+                ORDER BY created_at DESC, id DESC LIMIT 1
+            ) ai ON TRUE
+            WHERE rs.id = %s
+            FOR UPDATE OF se
+            """,
+            (signal_id,),
+        ).fetchone()
+        if row is None:
+            return {"signal_id": signal_id, "outcome": "NOT_ELIGIBLE", "updated": False}
+        fields = (
+            "id",
+            "vertical",
+            "source_type",
+            "metadata",
+            "review_status",
+            "reviewed_by",
+            "extracted_facts",
+            "ai_status",
+            "ai_recommendation",
+            "ai_confidence",
+            "ai_prompt_version",
+        )
+        item = dict(zip(fields, row))
+        confidence = float(item["ai_confidence"]) if item.get("ai_confidence") is not None else None
+        outcome = care_planning_lawfulness_outcome(
+            signal_id=str(item["id"]),
+            vertical=item["vertical"],
+            source_type=item["source_type"],
+            review_status=item["review_status"],
+            reviewed_by=item.get("reviewed_by"),
+            metadata=item.get("metadata"),
+            extracted_facts=item.get("extracted_facts"),
+            ai_status=item.get("ai_status"),
+            ai_prompt_version=item.get("ai_prompt_version"),
+            ai_recommendation=item.get("ai_recommendation"),
+            ai_confidence=confidence,
+        )
+        if outcome == "NOT_ELIGIBLE":
+            return {"signal_id": signal_id, "outcome": outcome, "updated": False}
+        facts = item.get("extracted_facts") or {}
+        canonical_outcome = canonical_planning_outcome(item.get("metadata"))
+        marker = {
+            "policy_version": CARE_PLANNING_LAWFULNESS_POLICY_VERSION,
+            "outcome": outcome,
+            "qa_bucket": care_planning_lawfulness_qa_bucket(str(item["id"])),
+            "ai_prompt_version": item.get("ai_prompt_version"),
+            "ai_recommendation": item.get("ai_recommendation"),
+            "ai_confidence": confidence,
+            "planning_subtype": facts.get("planning_subtype"),
+            "planning_outcome": canonical_outcome.outcome.value,
+            "planning_outcome_policy_version": PLANNING_OUTCOME_POLICY_VERSION,
+            "opportunity_creation_decision": facts.get("opportunity_creation_decision"),
+            "source_type": item["source_type"],
+            "vertical": item["vertical"],
+            "trigger": "admin" if trigger_actor else "live_enrichment",
+        }
+        marker_json = Jsonb({"care_planning_lawfulness_approval": marker})
+        if outcome == "QA_HOLDOUT":
+            updated = conn.execute(
+                """
+                UPDATE signal_enrichments
+                SET extracted_facts = extracted_facts || %s, updated_at = now()
+                WHERE raw_signal_id = %s AND review_status = 'PENDING'
+                  AND COALESCE(
+                    extracted_facts->'care_planning_lawfulness_approval'->>'policy_version', ''
+                  ) <> %s
+                RETURNING raw_signal_id
+                """,
+                (marker_json, signal_id, CARE_PLANNING_LAWFULNESS_POLICY_VERSION),
+            ).fetchone()
+            action = "CARE_PLANNING_LAWFULNESS_QA_HOLDOUT"
+        else:
+            updated = conn.execute(
+                """
+                UPDATE signal_enrichments
+                SET review_status = 'APPROVED', reviewed_by = %s, reviewed_at = now(),
+                    extracted_facts = extracted_facts || %s, updated_at = now()
+                WHERE raw_signal_id = %s AND review_status = 'PENDING'
+                RETURNING raw_signal_id
+                """,
+                (
+                    f"system:{CARE_PLANNING_LAWFULNESS_POLICY_VERSION}",
+                    marker_json,
+                    signal_id,
+                ),
+            ).fetchone()
+            action = "CARE_PLANNING_LAWFULNESS_AUTO_APPROVE"
+        if updated:
+            conn.execute(
+                """
+                INSERT INTO admin_audit_events
+                    (action, actor, target_type, target_count, details, vertical)
+                VALUES (%s, %s, 'signal', 1, %s, 'CHILDRENS_HOME')
+                """,
+                (
+                    action,
+                    trigger_actor or f"system:{CARE_PLANNING_LAWFULNESS_POLICY_VERSION}",
+                    Jsonb(
+                        {
+                            "signal_id": signal_id,
+                            "reason": (
+                                "Auto-approved — proposed new-home lawfulness evidence and "
+                                "high-confidence current AI assessment agreed."
+                                if outcome == "AUTO_APPROVE"
+                            else (
+                                "QA holdout — otherwise qualifies for "
+                                "proposed-lawfulness approval."
+                            )
+                            ),
+                            **marker,
+                        }
+                    ),
+                ),
+            )
+            conn.commit()
+        return {"signal_id": signal_id, "outcome": outcome, "updated": bool(updated)}
+
+
 CARE_PLANNING_MANUAL_ANALYSIS_SUBTYPES = (
     "NEW_HOME_CHANGE_OF_USE",
     "NEW_HOME_OTHER_EXPLICIT",
@@ -3123,6 +3333,23 @@ def review_triage_summary(settings: Settings, *, vertical: str = "ALL") -> dict[
     care_ai_holdout_rejected = sum(
         item["review_status"] == "REJECTED" for item, _ in care_ai_holdouts
     )
+    care_lawfulness_records = []
+    for item in reviewed_all + pending:
+        facts = item.get("extracted_facts") or {}
+        marker = facts.get("care_planning_lawfulness_approval") if isinstance(facts, dict) else None
+        if (
+            isinstance(marker, dict)
+            and marker.get("policy_version") == CARE_PLANNING_LAWFULNESS_POLICY_VERSION
+        ):
+            care_lawfulness_records.append((item, marker))
+    care_lawfulness_holdouts = [
+        (item, marker)
+        for item, marker in care_lawfulness_records
+        if marker.get("outcome") == "QA_HOLDOUT"
+    ]
+    care_lawfulness_rejected = sum(
+        item["review_status"] == "REJECTED" for item, _ in care_lawfulness_holdouts
+    )
     care_ai_versions: dict[str, dict[str, int]] = {}
     for item, marker in care_ai_policy_records:
         version = str(marker.get("policy_version"))
@@ -3266,6 +3493,38 @@ def review_triage_summary(settings: Settings, *, vertical: str = "ALL") -> dict[
                 "CareProspect AI approval QA rejection detected; review "
                 "care-planning-ai-approval-v1 before continuing or widening automation."
                 if care_ai_holdout_rejected
+                else None
+            ),
+        },
+        "care_planning_lawfulness_monitoring": {
+            "policy_version": CARE_PLANNING_LAWFULNESS_POLICY_VERSION,
+            "historical_validation": {
+                "reviewed": 7,
+                "approved": 7,
+                "rejected": 0,
+                "caveat": "Narrow proposed-new-home lawfulness cohort only.",
+            },
+            "total_policy_records": len(care_lawfulness_records),
+            "auto_approved": sum(
+                marker.get("outcome") == "AUTO_APPROVE" for _, marker in care_lawfulness_records
+            ),
+            "qa_holdouts": len(care_lawfulness_holdouts),
+            "qa_holdouts_pending": sum(
+                item["review_status"] == "PENDING" for item, _ in care_lawfulness_holdouts
+            ),
+            "qa_holdouts_approved": sum(
+                item["review_status"] == "APPROVED" for item, _ in care_lawfulness_holdouts
+            ),
+            "qa_holdouts_rejected": care_lawfulness_rejected,
+            "observed_error_rate": (
+                care_lawfulness_rejected / len(care_lawfulness_holdouts)
+                if care_lawfulness_holdouts
+                else None
+            ),
+            "warning": (
+                "CareProspect proposed-lawfulness QA rejection detected; review "
+                "care-planning-lawfulness-proposed-v1 before continuing automation."
+                if care_lawfulness_rejected
                 else None
             ),
         },

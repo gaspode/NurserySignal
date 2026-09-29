@@ -6,6 +6,7 @@ from app.ai_shadow import SUPPORTED_SHADOW_SOURCE_TYPES, evaluate_shadow, prompt
 from app.config import Settings
 from app.repository import (
     apply_care_planning_ai_approval_policy,
+    apply_care_planning_lawfulness_policy,
     apply_safe_approval_policy,
     get_ai_review,
     get_raw_signal,
@@ -21,6 +22,7 @@ class UnsupportedShadowSourceError(ValueError):
 def _apply_review_policy(settings: Settings, signal_id: str, raw: dict[str, Any]) -> None:
     if raw.get("vertical") == "CHILDRENS_HOME" and raw.get("source_type") == "planning":
         apply_care_planning_ai_approval_policy(settings, signal_id)
+        apply_care_planning_lawfulness_policy(settings, signal_id)
     else:
         apply_safe_approval_policy(settings, signal_id)
 

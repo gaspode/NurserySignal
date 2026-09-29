@@ -94,13 +94,9 @@ def recruitment_response(recommendation="APPROVE", relevance="RELEVANT_ROUTINE")
 
 def test_care_prompts_are_vertical_and_source_specific():
     config = Settings()
+    assert prompt_version_for("planning", config, "CHILDRENS_HOME") == "care-planning-shadow-v2"
     assert (
-        prompt_version_for("planning", config, "CHILDRENS_HOME")
-        == "care-planning-shadow-v2"
-    )
-    assert (
-        prompt_version_for("recruitment", config, "CHILDRENS_HOME")
-        == "care-recruitment-shadow-v1"
+        prompt_version_for("recruitment", config, "CHILDRENS_HOME") == "care-recruitment-shadow-v1"
     )
     assert "children's" in system_prompt_for("planning", "CHILDRENS_HOME")
     assert "residential care home" in system_prompt_for("planning", "CHILDRENS_HOME")
@@ -475,6 +471,11 @@ def test_worker_applies_care_ai_policy_only_after_v2_assessment_exists(monkeypat
         "app.worker.apply_care_planning_ai_approval_policy",
         lambda _, signal_id: care_applied.append(signal_id),
     )
+    lawfulness_applied = []
+    monkeypatch.setattr(
+        "app.worker.apply_care_planning_lawfulness_policy",
+        lambda _, signal_id: lawfulness_applied.append(signal_id),
+    )
     monkeypatch.setattr(
         "app.worker.apply_safe_approval_policy",
         lambda _, signal_id: nursery_applied.append(signal_id),
@@ -484,6 +485,7 @@ def test_worker_applies_care_ai_policy_only_after_v2_assessment_exists(monkeypat
 
     assert result == {"batchItemFailures": []}
     assert care_applied == [str(signal["id"])]
+    assert lawfulness_applied == [str(signal["id"])]
     assert nursery_applied == []
 
 

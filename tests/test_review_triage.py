@@ -160,6 +160,26 @@ def test_current_care_ai_policy_marker_has_same_dedicated_triage_bucket() -> Non
     assert bucket == "QA_HOLDOUT_CARE_AI_APPROVAL"
 
 
+def test_lawfulness_qa_marker_has_separate_triage_bucket() -> None:
+    bucket = review_triage_bucket(
+        signal_id=str(uuid4()),
+        vertical="CHILDRENS_HOME",
+        source_type="planning",
+        review_status="PENDING",
+        metadata={"decision": "Approved"},
+        extracted_facts={
+            "care_planning_lawfulness_approval": {
+                "policy_version": "care-planning-lawfulness-proposed-v1",
+                "outcome": "QA_HOLDOUT",
+            }
+        },
+        ai_status="SUCCEEDED",
+        ai_recommendation="APPROVE",
+        ai_confidence=0.95,
+    )
+    assert bucket == "QA_HOLDOUT_CARE_LAWFULNESS"
+
+
 def test_pending_triage_filter_uses_shared_bucket_logic(monkeypatch) -> None:
     safe_id = uuid4()
     while safe_approval_qa_holdout(str(safe_id)):

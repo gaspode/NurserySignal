@@ -4,7 +4,10 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
-from app.care_planning_review import CARE_PLANNING_AI_APPROVAL_POLICY_VERSIONS
+from app.care_planning_review import (
+    CARE_PLANNING_AI_APPROVAL_POLICY_VERSIONS,
+    CARE_PLANNING_LAWFULNESS_POLICY_VERSION,
+)
 from app.planning_outcomes import canonical_planning_outcome, normalize_structured_planning_value
 
 REFUSAL_POLICY_VERSION = "planning-refusal-v4"
@@ -25,6 +28,8 @@ TRIAGE_BUCKETS = frozenset(
         "QA_HOLDOUT_EXPLICIT_NEW_HOME",
         "AUTO_APPROVED_CARE_AI_APPROVAL",
         "QA_HOLDOUT_CARE_AI_APPROVAL",
+        "AUTO_APPROVED_CARE_LAWFULNESS",
+        "QA_HOLDOUT_CARE_LAWFULNESS",
     }
 )
 
@@ -92,6 +97,15 @@ def review_triage_bucket(
     policy_record = facts.get("safe_approval")
     care_fastpath = facts.get("care_planning_fastpath")
     care_ai_approval = facts.get("care_planning_ai_approval")
+    care_lawfulness = facts.get("care_planning_lawfulness_approval")
+    if (
+        isinstance(care_lawfulness, dict)
+        and care_lawfulness.get("policy_version") == CARE_PLANNING_LAWFULNESS_POLICY_VERSION
+    ):
+        if review_status == "APPROVED" and care_lawfulness.get("outcome") == "AUTO_APPROVE":
+            return "AUTO_APPROVED_CARE_LAWFULNESS"
+        if review_status == "PENDING" and care_lawfulness.get("outcome") == "QA_HOLDOUT":
+            return "QA_HOLDOUT_CARE_LAWFULNESS"
     if (
         isinstance(care_ai_approval, dict)
         and care_ai_approval.get("policy_version") in CARE_PLANNING_AI_APPROVAL_POLICY_VERSIONS

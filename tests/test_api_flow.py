@@ -1050,6 +1050,27 @@ def test_care_planning_manual_analysis_is_admin_only_and_read_only(monkeypatch) 
     assert json.loads(response["body"])["no_new_subtype_automation_enabled"] is True
 
 
+def test_care_lawfulness_policy_preview_is_admin_only_and_read_only(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "app.handler.care_planning_lawfulness_preview",
+        lambda settings: {"preview": True, "eligible": 0, "qa_holdouts": 0},
+    )
+    denied = handler(
+        event(
+            "/admin/review-triage/care-planning/lawfulness-approval",
+            claims={"sub": "staff", "cognito:groups": ["Other"]},
+        ),
+        None,
+    )
+    assert denied["statusCode"] == 403
+    response = handler(
+        event("/admin/review-triage/care-planning/lawfulness-approval"),
+        None,
+    )
+    assert response["statusCode"] == 200
+    assert json.loads(response["body"]) == {"preview": True, "eligible": 0, "qa_holdouts": 0}
+
+
 def test_refusal_cleanup_and_safe_approve_are_bounded_admin_actions(monkeypatch) -> None:
     cleanup_args = {}
     approve_args = {}
