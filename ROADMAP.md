@@ -697,3 +697,13 @@ Paid-pilot activation check (2026-09-28):
   remain deliberately unstarted. The exact next step is to confirm/reset or raise the Plota historical
   API quota, then rerun the 60-day gate before authorising the full backfill; matching architecture does
   not need changing on the available evidence.
+- A bounded provider-only diagnostic confirmed the gate is Plota's exhausted one-off Demo record
+  allowance, not per-minute throttling or malformed historical querying. Both a seven-day historical
+  request and the normal two-day live-query equivalent returned `429 rate_limit_error`, `Retry-After:
+  86400`, and the explicit message that all 500 Demo records have been used; Plota's current official
+  documentation confirms Demo is capped at 500 one-off records/requests and excludes pre-2026 history.
+  The daily collector remains enabled but cannot receive previously unseen records with the present key.
+  The single next action is to move the Plota account to an appropriate paid commercial plan before any
+  further dry run; because CareProspect is a customer-facing multi-tenant product and the bounded seed can
+  require more than 10,000 records, confirm the required commercial tier/allowance with Plota rather than
+  assuming Starter is sufficient.
