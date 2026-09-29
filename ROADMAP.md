@@ -826,3 +826,16 @@ Paid-pilot activation check (2026-09-28):
   global matching. Customer publication remains explicitly manual. Deployment, bounded pending-backlog
   reclassification, withdrawn cleanup and the preview-only existing fast-path report remain the rollout
   gates; no existing fast-path backlog approval is authorised by this implementation step.
+- Production rollout (2026-09-29): 817 pending CareProspect Planning records were reclassified with zero
+  errors. The distribution was 410 new-home change-of-use, 52 other explicit new homes, 139 proposed
+  lawfulness, 14 existing-use lawfulness, 10 condition variations, 20 condition discharges, two
+  non-material amendments, 42 other follow-ups, 59 withdrawals and 69 ambiguous records. Exact
+  structured withdrawal cleanup audit-rejected all 59 withdrawals and left 758 pending. The existing
+  backlog preview found 239 fast-path-eligible records: 212 would be auto-approved and 27 would remain
+  as deterministic QA holdouts; 519 remain manual and 117 are support-only. The preview also identified
+  95 draft opportunities supported only by negative/follow-up/existing-use evidence for later manual
+  investigation; none were deleted or published. A production verification caught and fixed prose
+  `SUBMITTED` being parsed as a prior application reference; references now require a numeric component.
+  The six published customer opportunities remain unchanged. Next gate: explicit approval is required
+  before executing any bounded existing-backlog fast-path approval; monitor QA holdouts before widening
+  the policy, and keep proposed lawfulness/manual follow-up review conservative.
