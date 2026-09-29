@@ -875,3 +875,31 @@ Paid-pilot activation check (2026-09-28):
   passes, schedules are enabled, all active queues and non-collector DLQs are empty, the five previously
   classified obsolete collector-DLQ messages remain untouched, and the refresh-only Terraform plan
   shows only the expected moving RDS restore timestamp.
+- CareProspect pending Planning AI currency is now explicit and refreshable through a bounded,
+  admin-only workflow deployed at commit `5a8903e`. Review Triage and individual inbox rows distinguish
+  current v2, stale v1, missing and failed assessments; the confirmed action processes at most ten stale
+  or missing records serially, appends immutable v2 evidence, skips current records, and stops after
+  repeated provider failures. It does not invoke review decisions, CareProspect automation or customer
+  publication. Before refresh, 387 pending records comprised 48 current v2 and 339 stale v1, with no
+  missing or failed assessments; triage showed 113 deterministic/AI disagreements and 274 manual-review
+  records.
+- The production stale refresh completed all 339 candidates in 35 bounded invocations: 337 v2
+  assessments succeeded and two were preserved as `AI_FAILED` after isolated malformed model responses;
+  there was no Bedrock throttling and a final idempotency invocation selected zero records. No pending
+  stale or missing assessment remains. The current cohort is 385 successful v2 plus two failed v2
+  assessments. Deterministic post-refresh cleanup found zero CareProspect refusals and zero withdrawals,
+  so no review rows were mutated; the stale pending cohort contained zero v1-APPROVE to v2-REJECT
+  structured-negative corrections because those authoritative negative applications had already left
+  the pending inbox under the refusal/withdrawal policies.
+- The clean current cohort contains 282 AI APPROVE, 98 REJECT and five NEEDS_HUMAN assessments. Triage
+  now shows 159 deterministic/AI disagreements, five AI-uncertain and 223 manual-review records. The
+  pending subtype distribution is 183 new-home change-of-use, 40 other explicit new homes, seven
+  proposed lawfulness, 14 existing-use lawfulness, ten condition variations, 20 condition discharges,
+  two non-material amendments, 42 other follow-ups and 69 ambiguous. A refreshed policy preview is still
+  read-only: 205 records are potentially eligible, 182 would approve, 23 would be QA holdouts and 205
+  remain manual. CareProspect AI automation remains disabled; the next decision must use this current v2
+  cohort and explicitly account for follow-up/variation subtypes and the two failed assessments. The six
+  published customer opportunities remain unchanged. CI/deployment, API/database/HTTPS and queue health
+  pass; all active queues and non-collector DLQs are empty, while the five previously classified
+  collector-DLQ messages remain untouched. The post-deployment refresh-only plan shows only expected RDS
+  restore-time and deployed frontend-object metadata movement.
