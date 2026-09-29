@@ -673,3 +673,9 @@ Paid-pilot activation check (2026-09-28):
   shared six-point axis, while mobile stacks the same rows so every marker and the registration
   endpoint remain visible without page or local horizontal overflow. No customer-product, benchmark,
   matching or portal behaviour changed.
+- The timing timeline has received its focused production-polish pass. Ofsted registration now owns
+  a reserved endpoint column and the one-month tick remains independently readable at desktop,
+  compact desktop and stacked mobile widths. Planning annotations use endpoint labels, a primary
+  median flag and a quieter middle-50% band label; Recruitment uses a ring, stem and labelled point
+  without implying a range. Summary cards now separate planning range, planning median and the
+  recruitment example, and the public qualification uses concise reconstructed-history wording.

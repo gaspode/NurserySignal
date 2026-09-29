@@ -40,7 +40,11 @@ describe("CareProspect public website", () => {
     expect(screen.getByLabelText(/Planning evidence was observed from 389 to 96 days/)).toBeInTheDocument();
     expect(screen.getByLabelText("A recruitment signal appeared 97 days before registration.")).toBeInTheDocument();
     expect(screen.getByLabelText("Ofsted registration is the endpoint at 0 days.")).toBeInTheDocument();
-    expect(screen.getByText("Based on retrospective analysis of reconstructable historical registrations. Timing varies, and not every home produces every type of signal.")).toBeInTheDocument();
+    expect(screen.getByText("Based on reconstructed historical registrations. Timing varies, and not every home produces every type of signal.")).toBeInTheDocument();
+    expect(screen.getByText("Observed planning range")).toBeInTheDocument();
+    expect(screen.getByText("96–389 days")).toBeInTheDocument();
+    expect(screen.getAllByText("1 month").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Ofsted registration").length).toBeGreaterThan(0);
     expect(container.querySelector(".cp-bars")).not.toBeInTheDocument();
     expect(container.textContent).not.toContain("1 case");
     expect(container.textContent).not.toContain("one example in sample");

@@ -48,11 +48,11 @@ function TimingSection() {
   const middleWidth = `${((planning.q3Days - planning.q1Days) / registrationTiming.axisMaxDays) * 100}%`;
   return <section className="cp-lead-time" id="how-early">
     <div className="cp-section-intro"><p className="cp-kicker">The timing advantage</p><h2>Signals can appear months before registration</h2><p>CareProspect watches for the public evidence that appears as a new children’s home develops. Different signals can emerge at different stages, often long before the home reaches the Ofsted register.</p></div>
-    <div className="cp-timing-scroll" tabIndex="0" aria-label="Signals before Ofsted registration timeline">
+    <div className="cp-timing-scroll" aria-label="Signals before Ofsted registration timeline">
       <div className="cp-timing-chart">
         <div className="cp-timing-axis-label">Months before Ofsted registration</div>
-        <div className="cp-timing-axis" aria-hidden="true">{ticks.map((tick) => <div className="cp-timing-tick" key={tick.days} style={{ left: timingPosition(tick.days) }}><strong>{tick.label}</strong><span>{tick.daysLabel}</span></div>)}</div>
-        <div className="cp-timing-grid" aria-hidden="true">{ticks.map((tick) => <i key={tick.days} style={{ left: timingPosition(tick.days) }} />)}</div>
+        <div className="cp-timing-axis" aria-hidden="true">{ticks.map((tick) => <div className={`cp-timing-tick${tick.days === 30 ? " month-one" : ""}${tick.days === 0 ? " endpoint" : ""}`} key={tick.days} style={{ left: timingPosition(tick.days) }}><strong>{tick.label}</strong><span>{tick.daysLabel}</span></div>)}</div>
+        <div className="cp-timing-grid" aria-hidden="true">{ticks.map((tick) => <i className={tick.days === 30 ? "month-one" : tick.days === 0 ? "endpoint" : ""} key={tick.days} style={{ left: timingPosition(tick.days) }} />)}</div>
 
         <div className="cp-timing-label planning"><strong>Planning</strong><span>Planning applications and related council records</span></div>
         <div className="cp-timing-plot planning" aria-label="Planning evidence was observed from 389 to 96 days before registration, with a middle 50 percent range of 228 to 366 days and a median of 319 days.">
@@ -69,11 +69,11 @@ function TimingSection() {
       </div>
     </div>
     <div className="cp-timing-highlights" aria-label="Timing highlights">
-      <article><span>Earliest observed signal</span><strong>389 days</strong><small>before registration</small></article>
+      <article><span>Observed planning range</span><strong>96–389 days</strong><small>before registration</small></article>
       <article><span>Planning median</span><strong>319 days</strong><small>before registration</small></article>
       <article className="recruitment"><span>Recruitment example</span><strong>97 days</strong><small>before registration</small></article>
     </div>
-    <p className="cp-benchmark-note">Based on retrospective analysis of reconstructable historical registrations. Timing varies, and not every home produces every type of signal.</p>
+    <p className="cp-benchmark-note">Based on reconstructed historical registrations. Timing varies, and not every home produces every type of signal.</p>
   </section>;
 }
 
