@@ -345,7 +345,7 @@ resource "aws_sqs_queue" "collector_manual_runs_dlq" {
 
 resource "aws_sqs_queue" "planning_manual_runs" {
   name                       = "${local.name_prefix}-planning-manual-runs"
-  visibility_timeout_seconds = 120
+  visibility_timeout_seconds = 240
   sqs_managed_sse_enabled    = true
   redrive_policy = jsonencode({
     deadLetterTargetArn = aws_sqs_queue.collector_manual_runs_dlq.arn
