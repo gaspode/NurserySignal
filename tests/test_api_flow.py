@@ -1092,7 +1092,7 @@ def test_care_planning_backlog_actions_are_admin_only_and_bounded(monkeypatch) -
         event(
             "/admin/review-triage/care-planning/reclassify",
             "POST",
-            body=json.dumps({"limit": 99999}),
+            body=json.dumps({"limit": 99999, "signal_ids": [str(uuid4())]}),
         ),
         None,
     )
@@ -1113,6 +1113,7 @@ def test_care_planning_backlog_actions_are_admin_only_and_bounded(monkeypatch) -
         None,
     )
     assert reclassified["statusCode"] == 200 and reclassify_args["limit"] == 2500
+    assert len(reclassify_args["signal_ids"]) == 1
     assert withdrawn["statusCode"] == 200 and withdrawn_args["limit"] == 2500
     assert preview["statusCode"] == 200
     assert fastpath_args["preview"] is True and fastpath_args["limit"] == 100

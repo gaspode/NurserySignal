@@ -1325,12 +1325,22 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                     return admin_error
                 payload = parse_json_payload(_raw_body(event))
                 actor = str(claims.get("sub") or claims.get("username") or "unknown")
+                requested_ids = payload.get("signal_ids")
+                if requested_ids is not None:
+                    if (
+                        not isinstance(requested_ids, list)
+                        or not requested_ids
+                        or len(requested_ids) > 100
+                    ):
+                        raise ValueError("signal_ids must contain between 1 and 100 IDs")
+                    requested_ids = [str(UUID(str(value))) for value in requested_ids]
                 return _response(
                     200,
                     reclassify_pending_care_planning(
                         settings,
                         actor=actor,
                         limit=min(max(int(payload.get("limit", 2000)), 1), 2500),
+                        signal_ids=requested_ids,
                     ),
                 )
             if action == "care-planning-withdrawn" and method == "POST":

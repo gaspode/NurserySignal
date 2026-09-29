@@ -1836,13 +1836,26 @@ def cleanup_withdrawn_care_planning_signals(
 
 
 def reclassify_pending_care_planning(
-    settings: Settings, *, actor: str, limit: int = 2000
+    settings: Settings,
+    *,
+    actor: str,
+    limit: int = 2000,
+    signal_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     """Recompute pending CareProspect Planning subtype facts without touching labels."""
     bounded_limit = min(max(int(limit), 1), 2500)
+    targeted_ids = list(dict.fromkeys(signal_ids or []))
+    if len(targeted_ids) > 100:
+        raise ValueError("signal_ids_exceed_limit")
+    targeted_clause = " AND rs.id = ANY(%s::uuid[])" if targeted_ids else ""
+    params: list[Any] = []
+    if targeted_ids:
+        params.append(targeted_ids)
+        bounded_limit = min(bounded_limit, len(targeted_ids))
+    params.append(bounded_limit)
     with connection(settings) as conn:
         rows = conn.execute(
-            """
+            f"""
             SELECT rs.id, rs.schema_version, rs.source_type, rs.source_url,
                    rs.external_id, rs.discovered_at, rs.title, rs.raw_text,
                    rs.location_hint, rs.organisation_hint, rs.metadata, rs.vertical,
@@ -1851,10 +1864,11 @@ def reclassify_pending_care_planning(
             JOIN signal_enrichments se ON se.raw_signal_id = rs.id
             WHERE rs.vertical = 'CHILDRENS_HOME' AND rs.source_type = 'planning'
               AND se.review_status = 'PENDING'
+              {targeted_clause}
             ORDER BY rs.discovered_at DESC, rs.id DESC
             LIMIT %s
             """,
-            (bounded_limit,),
+            params,
         ).fetchall()
         fields = (
             "id",
@@ -1931,6 +1945,8 @@ def reclassify_pending_care_planning(
                         "updated": updated,
                         "subtypes": counts,
                         "errors": errors,
+                        "targeted": bool(targeted_ids),
+                        "requested_signal_ids": targeted_ids,
                     }
                 ),
             ),
@@ -1942,6 +1958,8 @@ def reclassify_pending_care_planning(
         "updated": updated,
         "subtypes": counts,
         "errors": errors,
+        "targeted": bool(targeted_ids),
+        "requested_signal_ids": targeted_ids,
         "manually_reviewed_untouched": True,
     }
 
