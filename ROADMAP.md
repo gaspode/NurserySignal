@@ -773,3 +773,14 @@ Paid-pilot activation check (2026-09-28):
   current SAFE_APPROVE_AGREEMENT cohort is exactly 64 pending Planning signals; admins can review it
   sequentially with filter/pagination state and a live remaining count preserved. No automatic or bulk
   approval was run or newly enabled, so the next gate remains manual validation of this exact cohort.
+- Safe-approval automation remains blocked at its required production validation gate. The current
+  read-only recomputation finds 69 qualifying reviewed Planning records rather than the reported 68;
+  all 69 are NurserySignal, all were approved, none were rejected, and all have AI confidence exactly
+  0.95. CareProspect/CHILDRENS_HOME has no qualifying deterministic cohort because its reviewed records
+  do not carry the same deterministic recommendation fields. The 69 total is consistent with the earlier
+  five-record labelled cohort plus the subsequently reviewed 64-record pending cohort, but current review
+  rows do not snapshot all policy inputs at the instant of the human decision, so exact decision-time
+  eligibility cannot be proven retrospectively. Per the safety gate, no safe-approval code, QA holdout,
+  deployment or backlog mutation was performed. The exact next step is to reconcile whether the intended
+  validated cohort is the latest 64, the reported 68, or all 69, and explicitly approve the authoritative
+  cohort definition before implementing NurserySignal-only automation.
