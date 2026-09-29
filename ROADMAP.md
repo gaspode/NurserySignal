@@ -744,9 +744,19 @@ Paid-pilot activation check (2026-09-28):
 - A read-only bounded Recruitment-to-Planning diagnostic now categorises up to 50 unmatched CareProspect
   recruitment signals using concrete postcode, locality, operator/applicant and stale/non-material
   evidence, without creating links or changing matching thresholds. The matching diagnostic, production
-  refusal cleanup, human-label evaluation and safe-approval preview are awaiting a normally authenticated
-  SignalHub admin invocation: direct Lambda invocation with fabricated claims was explicitly rejected as
-  an authentication bypass. Infrastructure and application health pass; Planning and Recruitment daily
+  refusal cleanup, human-label evaluation and safe-approval preview were subsequently run through five
+  explicitly authorised, narrowly scoped direct Lambda admin invocations (including before/after triage
+  captures). The cleanup inspected 1,782
+  pending Planning signals and audit-rejected all 205 explicit council refusals with no errors; 79
+  Withdrawn records remained pending by policy. The active Planning queue fell to 1,577 while preserving
+  205 automatic reviews in history. Of 403 prior human reviews, AI agreed with 97.1% of NurserySignal and
+  99.0% of CareProspect decisions, but only five labelled records met the complete 0.95 deterministic-plus-AI
+  approval policy, so no safe threshold is recommended. A preview identified 64 currently eligible records
+  but correctly disabled execution; no bulk approvals were performed. The requested 40-record Recruitment
+  diagnostic found only four current records satisfying every relevant/unmatched eligibility condition,
+  and all four had no plausible Planning candidate. This supports continued manual review and prospective
+  label collection; it does not yet justify threshold changes or a focused matching rewrite. Infrastructure
+  and application health pass; Planning and Recruitment daily
   schedules and the Planning manual-run consumer are enabled, primary queues and four non-collector DLQs
   are empty. The five retained collector DLQ messages were inspected without deletion: two are obsolete
   early dry-run first chunks, two are obsolete completed-backfill continuation chunks (17 and 33), and one
