@@ -903,3 +903,35 @@ Paid-pilot activation check (2026-09-28):
   pass; all active queues and non-collector DLQs are empty, while the five previously classified
   collector-DLQ messages remain untouched. The post-deployment refresh-only plan shows only expected RDS
   restore-time and deployed frontend-object metadata movement.
+- CareProspect Planning outcome hardening replaces the duplicated exact refusal/withdrawal lists with
+  one versioned `planning-outcome-v1` canonical layer over Plota's authoritative `decision`,
+  `planning_status` and nested provider fields. The production vocabulary showed qualified/coded values
+  including `FULL-REF`, `Planning Permission - Refused`, `Refusal - Full`, `Decided: REFUSE`,
+  `Refused LUC`, `Certificate Refused (Lawful Dev. Cert.)`, `Withdrawn (P)`, `Withdrawn - Applicant`
+  and `Withdrawn after Registration`; these were the reason the earlier exact cleanup incorrectly found
+  zero negatives after the v2 AI refresh. Canonical outcomes are REFUSED, WITHDRAWN, APPROVED, PENDING,
+  REFUSED_UNDER_APPEAL, APPEAL_ALLOWED, APPEAL_DISMISSED and UNKNOWN. Matching is anchored to structured
+  fields rather than proposal-text substrings. Final refusal/appeal dismissal and application withdrawal
+  override proposal relevance, while an active appealed refusal is retained as follow-up lifecycle
+  evidence and cannot create a new opening.
+- The read-only production dry run inspected 350 pending CareProspect Planning records and found 24 final
+  refusals, five withdrawals and one refused application under active appeal; 27 of those records still
+  carried stale CREATE_OPPORTUNITY facts. Manual inspection of all 30 records found no false-positive
+  outcome classifications and no link to a published customer opportunity. The CareProspect-scoped,
+  audited cleanup rejected all 24 refusals under `planning-refusal-v4` and all five withdrawals under
+  `planning-withdrawal-v2`, with zero errors. It identified 24 associated draft opportunities, of which
+  20 now have no non-rejected support; they remain preserved for manual lifecycle/duplicate review and
+  were not deleted or published. The sole active appeal was reclassified by exact signal ID to
+  FOLLOW_UP_OTHER / SUPPORT_EXISTING_ONLY. Post-cleanup reporting shows 321 pending, zero final
+  refusal/withdrawal outcomes, one retained active appeal, and no negative/appeal record still carrying
+  CREATE_OPPORTUNITY. Hillingdon provider record `j78cun1u` (`Withdrawn (P)`, 2026-06-12) had already
+  been rejected before cleanup and remains immutable; the new canonical path prevents this vocabulary
+  from creating future live opportunities.
+- Commits `62cf255`, `42fbbf0` and `372c558` deployed successfully through CI/OIDC. Backend tests pass
+  (357), frontend tests pass (78), Ruff/build/Terraform validation pass, and the post-deployment plan is
+  clean when built with production frontend configuration. API/database and CareProspect HTTPS health
+  pass; Planning and Recruitment schedules and the Planning manual-run mapping are enabled; active
+  queues and non-collector DLQs are empty. The five previously retained collector-DLQ messages remain
+  untouched. AI v1/v2 assessments and customer publication were unchanged. Exact next step: manually
+  assess the 20 unsupported draft opportunities before any lifecycle cleanup; do not broaden outcome
+  automation or CareProspect AI authority.
