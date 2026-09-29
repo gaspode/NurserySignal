@@ -162,6 +162,7 @@ def test_admin_list_filters_and_paginates(monkeypatch) -> None:
         "include_excluded": False,
         "opportunity_decision": None,
         "vertical": "NURSERY",
+        "triage_bucket": None,
     }
 
 
@@ -220,6 +221,30 @@ def test_admin_list_passes_bounded_text_search(monkeypatch) -> None:
     response = handler(event("/admin/signals", query={"q": "nursery planning ref"}), None)
     assert response["statusCode"] == 200
     assert captured["search"] == "nursery planning ref"
+
+
+def test_admin_list_validates_and_forwards_triage_bucket(monkeypatch) -> None:
+    captured = {}
+
+    def fake_list(settings, **kwargs):
+        captured.update(kwargs)
+        return {"items": [], "total": 0}
+
+    monkeypatch.setattr("app.handler.list_signals", fake_list)
+    response = handler(
+        event(
+            "/admin/signals",
+            query={"triage_bucket": "SAFE_APPROVE_AGREEMENT"},
+        ),
+        None,
+    )
+    assert response["statusCode"] == 200
+    assert captured["triage_bucket"] == "SAFE_APPROVE_AGREEMENT"
+    invalid = handler(
+        event("/admin/signals", query={"triage_bucket": "arbitrary_expression"}),
+        None,
+    )
+    assert invalid["statusCode"] == 400
 
 
 def test_admin_lists_validate_and_forward_vertical_scope(monkeypatch) -> None:

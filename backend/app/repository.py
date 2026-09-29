@@ -33,6 +33,7 @@ from app.review_triage import (
     planning_refusal_assessment,
     review_triage_bucket,
     safe_approval_candidate,
+    validate_triage_bucket,
 )
 from app.verticals import (
     ALL_VERTICALS,
@@ -549,8 +550,10 @@ def list_signals(
     include_excluded: bool = False,
     opportunity_decision: str | None = None,
     vertical: str | None = None,
+    triage_bucket: str | None = None,
 ) -> dict[str, Any]:
     vertical = validate_vertical_filter(vertical)
+    triage_bucket = validate_triage_bucket(triage_bucket)
     clauses = ["TRUE"]
     params: list[Any] = []
     if vertical != ALL_VERTICALS:
@@ -606,6 +609,15 @@ def list_signals(
     if opportunity_decision:
         clauses.append("se.extracted_facts->>'opportunity_creation_decision' = %s")
         params.append(opportunity_decision)
+    if triage_bucket:
+        triage_ids = pending_review_triage_ids(
+            settings, vertical=vertical, bucket=triage_bucket
+        )
+        if triage_ids:
+            clauses.append("rs.id = ANY(%s::uuid[])")
+            params.append(triage_ids)
+        else:
+            clauses.append("FALSE")
     where = " AND ".join(clauses)
     with connection(settings) as conn:
         total = conn.execute(
@@ -1390,7 +1402,7 @@ def auto_reject_refused_planning(
     signal_id: str,
     metadata: dict[str, Any] | None,
     *,
-    actor: str = "system:planning-refusal-policy-v1",
+    actor: str = f"system:{REFUSAL_POLICY_VERSION}",
 ) -> bool:
     """Reject one pending signal from an explicit structured council refusal only."""
     with connection(settings) as conn:
@@ -1462,7 +1474,7 @@ def cleanup_refused_planning_signals(
                             conn,
                             signal_id,
                             metadata,
-                            actor="system:planning-refusal-policy-v1",
+                            actor=f"system:{REFUSAL_POLICY_VERSION}",
                         )
                     )
             except Exception:
@@ -1733,6 +1745,41 @@ def review_triage_summary(settings: Settings, *, vertical: str = "ALL") -> dict[
         "pending_buckets": buckets,
         "safe_pending_count": len(safe_ids),
     }
+
+
+def pending_review_triage_ids(
+    settings: Settings, *, vertical: str, bucket: str
+) -> list[str]:
+    """Return pending Planning IDs in one validated server-side triage bucket."""
+    vertical = validate_vertical_filter(vertical)
+    bucket = validate_triage_bucket(bucket)
+    if bucket is None:
+        return []
+    summary = review_triage_summary(settings, vertical=vertical)
+    threshold = float(
+        summary.get("recommended_safe_threshold") or SAFE_APPROVAL_MIN_CONFIDENCE
+    )
+    with connection(settings) as conn:
+        pending = _review_triage_rows(conn, "PENDING", vertical)
+    return [
+        str(item["id"])
+        for item in pending
+        if review_triage_bucket(
+            source_type=item["source_type"],
+            review_status=item["review_status"],
+            metadata=item["metadata"],
+            extracted_facts=item["extracted_facts"],
+            ai_status=item["ai_status"],
+            ai_recommendation=item["ai_recommendation"],
+            ai_confidence=(
+                float(item["ai_confidence"])
+                if item["ai_confidence"] is not None
+                else None
+            ),
+            threshold=threshold,
+        )
+        == bucket
+    ]
 
 
 def safe_agreement_bulk_approve(

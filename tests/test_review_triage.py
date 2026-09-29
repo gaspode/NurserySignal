@@ -2,8 +2,9 @@ from contextlib import contextmanager
 from uuid import uuid4
 
 from app.config import Settings
-from app.repository import auto_reject_refused_planning
+from app.repository import auto_reject_refused_planning, pending_review_triage_ids
 from app.review_triage import (
+    REFUSAL_POLICY_VERSION,
     deterministic_review_recommendation,
     normalize_planning_decision,
     planning_refusal_assessment,
@@ -13,13 +14,25 @@ from app.review_triage import (
 
 
 def test_structured_refusal_variants_are_unambiguous() -> None:
-    for value in ("REFUSED", "rejected", "Permission: refused", "Application refused."):
+    for value in (
+        "REFUSED",
+        "rejected",
+        "Permission: refused",
+        "Application refused.",
+        "Refuse Permission/Consent",
+        "Refuse Permission",
+        "Refuse Consent",
+        "Refusal of Permission",
+        "Refusal of Consent",
+        "Permission/Consent Refused",
+    ):
         result = planning_refusal_assessment(
             {"planning_status": value, "decision_date": "2026-04-03"}
         )
         assert result.refused is True
         assert result.decision_date == "2026-04-03"
     assert normalize_planning_decision("Permission: refused.") == "PERMISSION REFUSED"
+    assert REFUSAL_POLICY_VERSION == "planning-refusal-v2"
 
 
 def test_non_refusal_terminal_states_are_not_auto_rejected() -> None:
@@ -97,6 +110,59 @@ def test_ai_reject_never_enters_safe_approval_bucket() -> None:
     assert bucket == "MANUAL_REVIEW_REQUIRED"
 
 
+def test_pending_triage_filter_uses_shared_bucket_logic(monkeypatch) -> None:
+    safe_id = uuid4()
+    disagree_id = uuid4()
+    facts = {
+        "planning_candidate_matched": True,
+        "opportunity_creation_decision": "CREATE_OPPORTUNITY",
+    }
+    rows = [
+        {
+            "id": safe_id,
+            "source_type": "planning",
+            "review_status": "PENDING",
+            "metadata": {},
+            "extracted_facts": facts,
+            "ai_status": "SUCCEEDED",
+            "ai_recommendation": "APPROVE",
+            "ai_confidence": 0.96,
+        },
+        {
+            "id": disagree_id,
+            "source_type": "planning",
+            "review_status": "PENDING",
+            "metadata": {},
+            "extracted_facts": facts,
+            "ai_status": "SUCCEEDED",
+            "ai_recommendation": "REJECT",
+            "ai_confidence": 0.99,
+        },
+    ]
+
+    @contextmanager
+    def fake_connection(settings):
+        yield object()
+
+    monkeypatch.setattr("app.repository.connection", fake_connection)
+    monkeypatch.setattr(
+        "app.repository.review_triage_summary",
+        lambda settings, vertical: {"recommended_safe_threshold": None},
+    )
+
+    def fake_rows(conn, review_status, vertical):
+        assert review_status == "PENDING"
+        return rows
+
+    monkeypatch.setattr("app.repository._review_triage_rows", fake_rows)
+    assert pending_review_triage_ids(
+        Settings(), vertical="NURSERY", bucket="SAFE_APPROVE_AGREEMENT"
+    ) == [str(safe_id)]
+    assert pending_review_triage_ids(
+        Settings(), vertical="NURSERY", bucket="DETERMINISTIC_AI_DISAGREE"
+    ) == [str(disagree_id)]
+
+
 def test_disagreement_and_uncertainty_have_separate_triage_buckets() -> None:
     facts = {
         "planning_candidate_matched": True,
@@ -172,3 +238,4 @@ def test_refusal_review_uses_authoritative_pending_transition_and_audit(monkeypa
     assert len(audits) == 1
     assert "PLANNING_REFUSAL_AUTO_REJECT" in audits[0][0]
     assert "Automatically rejected" in audits[0][1][1].obj["reason"]
+    assert audits[0][1][1].obj["policy_version"] == "planning-refusal-v2"

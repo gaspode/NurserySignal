@@ -243,8 +243,42 @@ describe("admin frontend", () => {
     render(<ReviewInboxPage apiClient={apiClient} onNavigate={vi.fn()} />);
     expect(await screen.findByRole("heading", { name: "Review triage" })).toBeInTheDocument();
     expect(screen.getByText(/AI rejection remains advisory/)).toBeInTheDocument();
-    expect(screen.getByText(/Rule\/AI disagree/)).toHaveTextContent("3");
+    expect(screen.getByRole("button", { name: /Rule\/AI disagree 3/ })).toHaveTextContent("3");
     expect(screen.queryByRole("button", { name: "Approve safe agreement set" })).not.toBeInTheDocument();
+  });
+
+  it("filters to the safe-agreement cohort and keeps it active after manual review", async () => {
+    let reviewed = false;
+    const apiClient = vi.fn(async (path, options = {}) => {
+      if (path === "/admin/signals/signal-1/approve" && options.method === "POST") {
+        reviewed = true;
+        return { signal_id: "signal-1", review_status: "APPROVED" };
+      }
+      if (path === "/admin/review-triage") return triageResult;
+      if (path.includes("triage_bucket=SAFE_APPROVE_AGREEMENT")) {
+        return reviewed ? listResult([], 6) : listResult([pendingItem], 7);
+      }
+      return listResult();
+    });
+    render(<ReviewInboxPage apiClient={apiClient} onNavigate={vi.fn()} />);
+    await screen.findByRole("heading", { name: "Review triage" });
+
+    await userEvent.click(screen.getByRole("button", { name: /Safe approve agreement 7/ }));
+    await waitFor(() => expect(apiClient).toHaveBeenCalledWith(
+      expect.stringContaining("triage_bucket=SAFE_APPROVE_AGREEMENT")
+    ));
+    expect(screen.getByLabelText("Triage bucket")).toHaveValue("SAFE_APPROVE_AGREEMENT");
+    expect(screen.getByRole("status")).toHaveTextContent("Safe agreement candidates: 7 remaining");
+
+    await userEvent.click(screen.getByRole("button", { name: `Actions for ${pendingItem.title}` }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Approve" }));
+    await waitFor(() => expect(screen.getByText(/Safe agreement candidates:/).closest(".triage-remaining")).toHaveTextContent(
+      "Safe agreement candidates: 6 remaining"
+    ));
+    expect(apiClient).not.toHaveBeenCalledWith(
+      "/admin/review-triage/safe-approve",
+      expect.objectContaining({ body: expect.stringContaining('"preview":false') })
+    );
   });
 
   it("previews and confirms a bounded safe agreement approval", async () => {
@@ -290,10 +324,13 @@ describe("admin frontend", () => {
       .mockResolvedValueOnce(detail())
       .mockResolvedValueOnce({ signal_id: "signal-1", review_status: "APPROVED" })
       .mockResolvedValueOnce(listResult([{ ...pendingItem, id: "signal-2" }]));
-    render(<SignalDetail signalId="signal-1" apiClient={apiClient} queueMode onReviewed={onReviewed} onBack={vi.fn()} />);
+    render(<SignalDetail signalId="signal-1" apiClient={apiClient} queueMode queueQuery="triage_bucket=SAFE_APPROVE_AGREEMENT&offset=10" onReviewed={onReviewed} onBack={vi.fn()} />);
     expect(await screen.findByText("A new nursery is proposed.")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Approve" }));
     await waitFor(() => expect(onReviewed).toHaveBeenCalledWith({ message: "Signal approved successfully.", nextId: "signal-2" }));
+    expect(apiClient).toHaveBeenCalledWith(
+      "/admin/signals?triage_bucket=SAFE_APPROVE_AGREEMENT&offset=0&review_status=PENDING&limit=1"
+    );
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(nativeConfirm).not.toHaveBeenCalled();
   });

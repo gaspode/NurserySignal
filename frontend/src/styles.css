@@ -76,6 +76,12 @@ h2 { color: #102a43; font-size: 1rem; margin-bottom: 1rem; }
 .source-counts { display: flex; flex-wrap: wrap; gap: 0.45rem; margin-bottom: 0.45rem; }
 .source-counts span { background: #f8fafc; border-radius: 5px; color: #627d98; font-size: 0.75rem; padding: 0.4rem 0.5rem; }
 .source-counts strong { color: #102a43; }
+.triage-counts button { background: #f8fafc; border: 1px solid #d9e2ec; border-radius: 5px; color: #486581; cursor: pointer; font: inherit; font-size: 0.75rem; padding: 0.4rem 0.5rem; }
+.triage-counts button:hover { border-color: #829ab1; }
+.triage-counts button:focus-visible { outline: 3px solid rgba(20, 82, 63, 0.25); outline-offset: 2px; }
+.triage-counts button.active { background: #e7ede9; border-color: #14523f; color: #0f3b2e; }
+.triage-counts button strong { color: #102a43; }
+.triage-remaining { margin-bottom: 1rem; }
 .source-history { border-top: 1px solid #f0f4f8; margin-top: 1rem; padding-top: 0.8rem; }
 .source-history summary { color: #1967a3; cursor: pointer; font-size: 0.8rem; font-weight: 700; }
 .source-history-row { align-items: center; color: #627d98; display: flex; font-size: 0.75rem; justify-content: space-between; padding: 0.45rem 0; }

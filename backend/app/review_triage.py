@@ -4,14 +4,29 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-REFUSAL_POLICY_VERSION = "planning-refusal-v1"
+REFUSAL_POLICY_VERSION = "planning-refusal-v2"
 SAFE_APPROVAL_MIN_CONFIDENCE = 0.95
 REFUSED_DECISIONS = {
     "REFUSED",
     "REJECTED",
     "PERMISSION REFUSED",
     "APPLICATION REFUSED",
+    "REFUSE PERMISSION CONSENT",
+    "REFUSE PERMISSION",
+    "REFUSE CONSENT",
+    "REFUSAL OF PERMISSION",
+    "REFUSAL OF CONSENT",
+    "PERMISSION CONSENT REFUSED",
 }
+TRIAGE_BUCKETS = frozenset(
+    {
+        "SAFE_APPROVE_AGREEMENT",
+        "DETERMINISTIC_AI_DISAGREE",
+        "AI_UNCERTAIN",
+        "MANUAL_REVIEW_REQUIRED",
+        "EXPLICIT_PLANNING_REFUSAL",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -25,6 +40,15 @@ def normalize_planning_decision(value: Any) -> str:
     if not isinstance(value, (str, int, float)):
         return ""
     return re.sub(r"[^A-Z0-9]+", " ", str(value).upper()).strip()
+
+
+def validate_triage_bucket(value: str | None) -> str | None:
+    if value in (None, ""):
+        return None
+    normalized = str(value).strip().upper()
+    if normalized not in TRIAGE_BUCKETS:
+        raise ValueError("invalid_triage_bucket")
+    return normalized
 
 
 def _nested(mapping: dict[str, Any], *keys: str) -> Any:

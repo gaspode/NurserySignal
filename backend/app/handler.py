@@ -83,6 +83,7 @@ from app.repository import (
     split_opportunity,
     unlink_signal_from_opportunity,
 )
+from app.review_triage import validate_triage_bucket
 from app.service import EnrichmentQueueError, SignalConflictError, ingest_signal, parse_json_payload
 from app.shadow_review import UnsupportedShadowSourceError, reevaluate_ai_shadow
 from app.source_runs import finish_run, get_run, list_runs, start_run
@@ -1477,6 +1478,9 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                         include_excluded=_query(event, "include_excluded") == "true",
                         opportunity_decision=_query(event, "opportunity_decision"),
                         vertical=validate_vertical_filter(_query(event, "vertical")),
+                        triage_bucket=validate_triage_bucket(
+                            _query(event, "triage_bucket")
+                        ),
                     ),
                 )
             if action == "opportunity-list" and method == "GET":
