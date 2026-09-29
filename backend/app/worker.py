@@ -4,13 +4,16 @@ import json
 from typing import Any
 
 from app.ai_shadow import SUPPORTED_SHADOW_SOURCE_TYPES, evaluate_shadow, prompt_version_for
+from app.care_planning_review import planning_withdrawal_assessment
 from app.config import Settings
 from app.logging import configure_logging
 from app.queueing import EnrichmentMessage
 from app.repository import (
     ai_review_exists,
+    apply_care_planning_fastpath_policy,
     apply_safe_approval_policy,
     auto_reject_refused_planning,
+    auto_reject_withdrawn_planning,
     correlate_signal,
     get_raw_signal,
     save_ai_review,
@@ -37,23 +40,37 @@ def process_message(settings: Settings, body: str) -> None:
     created = save_enrichment(settings, candidate)
     opportunity = {"opportunity_id": "disabled", "linked": False}
     refused = False
+    withdrawn = False
     if raw.get("source_type") == "planning":
         refused = planning_refusal_assessment(raw.get("metadata")).refused
+        withdrawn = (
+            raw.get("vertical") == "CHILDRENS_HOME"
+            and planning_withdrawal_assessment(raw.get("metadata")).withdrawn
+        )
         if refused:
             auto_reject_refused_planning(
                 settings,
                 message.signal_id,
                 raw.get("metadata"),
             )
-    if not refused and (
+        elif withdrawn:
+            auto_reject_withdrawn_planning(
+                settings,
+                message.signal_id,
+                raw.get("metadata"),
+            )
+        elif raw.get("vertical") == "CHILDRENS_HOME":
+            apply_care_planning_fastpath_policy(settings, message.signal_id)
+    if not refused and not withdrawn and (
         getattr(settings, "database_url", None) or getattr(settings, "db_secret_arn", None)
     ):
         opportunity = correlate_signal(settings, message.signal_id, candidate)
     logger.info(
-        "enrichment signal_id=%s created=%s refused=%s opportunity_id=%s linked=%s",
+        "enrichment signal_id=%s created=%s refused=%s withdrawn=%s opportunity_id=%s linked=%s",
         message.signal_id,
         created,
         refused,
+        withdrawn,
         opportunity["opportunity_id"],
         opportunity["linked"],
     )

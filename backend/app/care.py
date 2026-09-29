@@ -4,9 +4,14 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+from app.care_planning_review import (
+    care_planning_decision_allows_fastpath,
+    classify_care_planning_subtype,
+)
 from app.opportunity_policy import OpportunityCreationDecision
 from app.planning import PlanningRecord, planning_record_from_signal
 from app.recruitment import RecruitmentRecord, recruitment_record_from_signal
+from app.review_triage import planning_refusal_assessment
 
 CARE_PLANNING_DIRECT = (
     r"\bchildren(?:['’]s|s)?\s+(?:residential\s+)?(?:care\s+)?home\b",
@@ -255,6 +260,9 @@ def enrich_care_signal(raw: dict[str, Any]) -> dict[str, Any]:
     metadata = raw.get("metadata") or {}
     if source_type == "planning":
         decision = classify_care_planning(planning_record_from_signal(raw))
+        planning_subtype = classify_care_planning_subtype(
+            raw, refused=planning_refusal_assessment(metadata).refused
+        )
         matched = decision.matched
         change_type = decision.change_type
         relevance = (
@@ -328,6 +336,28 @@ def enrich_care_signal(raw: dict[str, Any]) -> dict[str, Any]:
         if matched
         else "IGNORE_FOR_OPPORTUNITY"
     )
+    if source_type == "planning":
+        if planning_subtype.subtype in {"REFUSED", "WITHDRAWN"}:
+            action = "IGNORE_FOR_OPPORTUNITY"
+            commercial_change = "NONE"
+        elif planning_subtype.subtype in {
+            "LAWFULNESS_EXISTING",
+            "CONDITION_VARIATION",
+            "CONDITION_DISCHARGE",
+            "NON_MATERIAL_AMENDMENT",
+            "FOLLOW_UP_OTHER",
+        }:
+            action = "SUPPORT_EXISTING_ONLY" if matched else "IGNORE_FOR_OPPORTUNITY"
+            commercial_change = (
+                "STRONG"
+                if planning_subtype.material_capacity_change
+                and planning_subtype.subtype == "CONDITION_VARIATION"
+                else "NONE"
+            )
+        elif planning_subtype.subtype == "LAWFULNESS_PROPOSED":
+            action = "CREATE_OPPORTUNITY" if matched else "REVIEW"
+        elif planning_subtype.subtype == "AMBIGUOUS":
+            action = "REVIEW" if matched else "IGNORE_FOR_OPPORTUNITY"
     creation_reason = (
         "Planning evidence indicates expansion of an existing children's home"
         if source_type == "planning" and change_type == "EXPANSION"
@@ -353,6 +383,28 @@ def enrich_care_signal(raw: dict[str, Any]) -> dict[str, Any]:
             else "care-procurement"
         ),
         "source_type": source_type,
+        "planning_candidate_matched": matched if source_type == "planning" else None,
+        "planning_subtype": planning_subtype.subtype if source_type == "planning" else None,
+        "planning_subtype_reasons": (
+            list(planning_subtype.reasons) if source_type == "planning" else []
+        ),
+        "explicit_new_home_proposal": (
+            planning_subtype.explicit_new_home if source_type == "planning" else False
+        ),
+        "planning_decision_fastpath_eligible": (
+            care_planning_decision_allows_fastpath(metadata) if source_type == "planning" else False
+        ),
+        "planning_material_capacity_change": (
+            planning_subtype.material_capacity_change if source_type == "planning" else False
+        ),
+        "planning_prior_references": (
+            list(planning_subtype.prior_application_references) if source_type == "planning" else []
+        ),
+        "planning_ambiguity_markers": (
+            list(planning_subtype.reasons)
+            if source_type == "planning" and planning_subtype.subtype == "AMBIGUOUS"
+            else []
+        ),
         "children_home_relevance": relevance,
         "recruitment_relevance": relevance if source_type == "recruitment" else "unknown",
         "commercial_change_evidence": commercial_change,

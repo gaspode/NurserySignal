@@ -24,6 +24,7 @@ from app.backtest_repository import (
 )
 from app.backtesting import BacktestBounds
 from app.care_backfill import backfill_care_from_stored_evidence
+from app.care_planning_review import validate_care_planning_subtype
 from app.config import Settings
 from app.customer import (
     apply_pilot_publications,
@@ -53,7 +54,9 @@ from app.logging import configure_logging
 from app.organisation_lookup import ManualCompanyLookupError, lookup_manual_company_candidate
 from app.planning_backfill import PlanningBackfillBounds, chunk_payload
 from app.repository import (
+    care_planning_fastpath_backlog,
     cleanup_refused_planning_signals,
+    cleanup_withdrawn_care_planning_signals,
     create_opportunity_from_signal,
     link_signal_to_opportunity,
     list_match_reviews,
@@ -67,6 +70,7 @@ from app.repository import (
     opportunity_detail,
     organisation_detail,
     recalculate_opportunity_creation,
+    reclassify_pending_care_planning,
     record_admin_audit,
     recruitment_planning_diagnostic,
     release_organisation_review_ofsted_enrichment_request,
@@ -308,6 +312,12 @@ def _admin_path(path: str) -> tuple[str, str | None]:
         return "review-triage", None
     if path == "/admin/review-triage/refusals":
         return "review-triage-refusals", None
+    if path == "/admin/review-triage/care-planning/reclassify":
+        return "care-planning-reclassify", None
+    if path == "/admin/review-triage/care-planning/withdrawn":
+        return "care-planning-withdrawn", None
+    if path == "/admin/review-triage/care-planning/fastpath":
+        return "care-planning-fastpath", None
     if path == "/admin/review-triage/safe-approve":
         return "review-triage-safe-approve", None
     if path == "/admin/verticals/CHILDRENS_HOME/backfill":
@@ -1294,6 +1304,49 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                         limit=min(max(int(payload.get("limit", 2000)), 1), 2500),
                     ),
                 )
+            if action == "care-planning-reclassify" and method == "POST":
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                payload = parse_json_payload(_raw_body(event))
+                actor = str(claims.get("sub") or claims.get("username") or "unknown")
+                return _response(
+                    200,
+                    reclassify_pending_care_planning(
+                        settings,
+                        actor=actor,
+                        limit=min(max(int(payload.get("limit", 2000)), 1), 2500),
+                    ),
+                )
+            if action == "care-planning-withdrawn" and method == "POST":
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                payload = parse_json_payload(_raw_body(event))
+                actor = str(claims.get("sub") or claims.get("username") or "unknown")
+                return _response(
+                    200,
+                    cleanup_withdrawn_care_planning_signals(
+                        settings,
+                        actor=actor,
+                        limit=min(max(int(payload.get("limit", 2000)), 1), 2500),
+                    ),
+                )
+            if action == "care-planning-fastpath" and method == "POST":
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                payload = parse_json_payload(_raw_body(event))
+                actor = str(claims.get("sub") or claims.get("username") or "unknown")
+                return _response(
+                    200,
+                    care_planning_fastpath_backlog(
+                        settings,
+                        actor=actor,
+                        preview=bool(payload.get("preview", True)),
+                        limit=min(max(int(payload.get("limit", 100)), 1), 100),
+                    ),
+                )
             if action == "review-triage-safe-approve" and method == "POST":
                 admin_error = _require_admin(claims, settings)
                 if admin_error:
@@ -1480,6 +1533,9 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                         vertical=validate_vertical_filter(_query(event, "vertical")),
                         triage_bucket=validate_triage_bucket(
                             _query(event, "triage_bucket")
+                        ),
+                        planning_subtype=validate_care_planning_subtype(
+                            _query(event, "planning_subtype")
                         ),
                     ),
                 )

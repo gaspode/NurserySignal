@@ -163,6 +163,7 @@ def test_admin_list_filters_and_paginates(monkeypatch) -> None:
         "opportunity_decision": None,
         "vertical": "NURSERY",
         "triage_bucket": None,
+        "planning_subtype": None,
     }
 
 
@@ -242,6 +243,30 @@ def test_admin_list_validates_and_forwards_triage_bucket(monkeypatch) -> None:
     assert captured["triage_bucket"] == "SAFE_APPROVE_AGREEMENT"
     invalid = handler(
         event("/admin/signals", query={"triage_bucket": "arbitrary_expression"}),
+        None,
+    )
+    assert invalid["statusCode"] == 400
+
+
+def test_admin_list_validates_and_forwards_planning_subtype(monkeypatch) -> None:
+    captured = {}
+
+    def fake_list(settings, **kwargs):
+        captured.update(kwargs)
+        return {"items": [], "total": 0}
+
+    monkeypatch.setattr("app.handler.list_signals", fake_list)
+    response = handler(
+        event(
+            "/admin/signals",
+            query={"planning_subtype": "CONDITION_VARIATION"},
+        ),
+        None,
+    )
+    assert response["statusCode"] == 200
+    assert captured["planning_subtype"] == "CONDITION_VARIATION"
+    invalid = handler(
+        event("/admin/signals", query={"planning_subtype": "arbitrary_expression"}),
         None,
     )
     assert invalid["statusCode"] == 400
@@ -1044,6 +1069,62 @@ def test_refusal_cleanup_and_safe_approve_are_bounded_admin_actions(monkeypatch)
     assert approve_args["limit"] == 100
     assert approve_args["preview"] is True
     assert approve_args["vertical"] == "CHILDRENS_HOME"
+
+
+def test_care_planning_backlog_actions_are_admin_only_and_bounded(monkeypatch) -> None:
+    reclassify_args = {}
+    withdrawn_args = {}
+    fastpath_args = {}
+    monkeypatch.setattr(
+        "app.handler.reclassify_pending_care_planning",
+        lambda settings, **kwargs: reclassify_args.update(kwargs) or {"updated": 1},
+    )
+    monkeypatch.setattr(
+        "app.handler.cleanup_withdrawn_care_planning_signals",
+        lambda settings, **kwargs: withdrawn_args.update(kwargs) or {"auto_rejected": 1},
+    )
+    monkeypatch.setattr(
+        "app.handler.care_planning_fastpath_backlog",
+        lambda settings, **kwargs: fastpath_args.update(kwargs) or {"preview": True},
+    )
+    reclassified = handler(
+        event(
+            "/admin/review-triage/care-planning/reclassify",
+            "POST",
+            body=json.dumps({"limit": 99999}),
+        ),
+        None,
+    )
+    withdrawn = handler(
+        event(
+            "/admin/review-triage/care-planning/withdrawn",
+            "POST",
+            body=json.dumps({"limit": 99999}),
+        ),
+        None,
+    )
+    preview = handler(
+        event(
+            "/admin/review-triage/care-planning/fastpath",
+            "POST",
+            body=json.dumps({"preview": True, "limit": 999}),
+        ),
+        None,
+    )
+    assert reclassified["statusCode"] == 200 and reclassify_args["limit"] == 2500
+    assert withdrawn["statusCode"] == 200 and withdrawn_args["limit"] == 2500
+    assert preview["statusCode"] == 200
+    assert fastpath_args["preview"] is True and fastpath_args["limit"] == 100
+    denied = handler(
+        event(
+            "/admin/review-triage/care-planning/fastpath",
+            "POST",
+            body=json.dumps({"preview": True}),
+            claims={"sub": "staff", "cognito:groups": ["Other"]},
+        ),
+        None,
+    )
+    assert denied["statusCode"] == 403
 
 
 def test_recruitment_planning_diagnostic_is_bounded_and_read_only(monkeypatch) -> None:

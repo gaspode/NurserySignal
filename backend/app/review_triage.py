@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
+
+from app.care_planning_review import normalize_structured_planning_value
 
 REFUSAL_POLICY_VERSION = "planning-refusal-v3"
 SAFE_APPROVAL_MIN_CONFIDENCE = 0.95
@@ -32,6 +33,8 @@ TRIAGE_BUCKETS = frozenset(
         "AI_UNCERTAIN",
         "MANUAL_REVIEW_REQUIRED",
         "EXPLICIT_PLANNING_REFUSAL",
+        "AUTO_APPROVED_EXPLICIT_NEW_HOME",
+        "QA_HOLDOUT_EXPLICIT_NEW_HOME",
     }
 )
 
@@ -44,9 +47,7 @@ class RefusalAssessment:
 
 
 def normalize_planning_decision(value: Any) -> str:
-    if not isinstance(value, (str, int, float)):
-        return ""
-    return re.sub(r"[^A-Z0-9]+", " ", str(value).upper()).strip()
+    return normalize_structured_planning_value(value)
 
 
 def validate_triage_bucket(value: str | None) -> str | None:
@@ -115,14 +116,20 @@ def review_triage_bucket(
     threshold: float = SAFE_APPROVAL_MIN_CONFIDENCE,
 ) -> str:
     facts = extracted_facts if isinstance(extracted_facts, dict) else {}
+    if source_type == "planning" and planning_refusal_assessment(metadata).refused:
+        return "EXPLICIT_PLANNING_REFUSAL"
     policy_record = facts.get("safe_approval")
+    care_fastpath = facts.get("care_planning_fastpath")
+    if isinstance(care_fastpath, dict):
+        if review_status == "APPROVED" and care_fastpath.get("outcome") == "AUTO_APPROVE":
+            return "AUTO_APPROVED_EXPLICIT_NEW_HOME"
+        if review_status == "PENDING" and care_fastpath.get("outcome") == "QA_HOLDOUT":
+            return "QA_HOLDOUT_EXPLICIT_NEW_HOME"
     if isinstance(policy_record, dict):
         if review_status == "APPROVED" and policy_record.get("outcome") == "AUTO_APPROVE":
             return "AUTO_APPROVED_SAFE_AGREEMENT"
         if review_status == "PENDING" and policy_record.get("outcome") == "QA_HOLDOUT":
             return "QA_HOLDOUT_SAFE_AGREEMENT"
-    if source_type == "planning" and planning_refusal_assessment(metadata).refused:
-        return "EXPLICIT_PLANNING_REFUSAL"
     if review_status != "PENDING" or source_type != "planning":
         return "MANUAL_REVIEW_REQUIRED"
     deterministic = deterministic_review_recommendation(extracted_facts)

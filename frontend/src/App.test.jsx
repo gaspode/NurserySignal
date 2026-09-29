@@ -247,6 +247,37 @@ describe("admin frontend", () => {
     expect(screen.queryByRole("button", { name: "Approve safe agreement set" })).not.toBeInTheDocument();
   });
 
+  it("filters CareProspect planning by the server-side subtype", async () => {
+    const careItem = {
+      ...pendingItem,
+      vertical: "CHILDRENS_HOME",
+      title: "Use of dwellinghouse as a children's care home",
+      extracted_facts: {
+        planning_subtype: "NEW_HOME_CHANGE_OF_USE",
+      },
+    };
+    const apiClient = vi.fn(async (path) => {
+      if (path === "/admin/review-triage") return triageResult;
+      if (path.includes("planning_subtype=NEW_HOME_CHANGE_OF_USE")) {
+        return listResult([careItem]);
+      }
+      return listResult();
+    });
+    render(<ReviewInboxPage apiClient={apiClient} onNavigate={vi.fn()} />);
+    await screen.findByRole("heading", { name: "Review triage" });
+    await userEvent.selectOptions(
+      screen.getByLabelText("Planning subtype"),
+      "NEW_HOME_CHANGE_OF_USE"
+    );
+    await waitFor(() =>
+      expect(apiClient).toHaveBeenCalledWith(
+        expect.stringContaining("planning_subtype=NEW_HOME_CHANGE_OF_USE")
+      )
+    );
+    expect(await screen.findByText(careItem.title)).toBeInTheDocument();
+    expect(screen.getAllByText("Explicit new home — change of use").length).toBeGreaterThan(1);
+  });
+
   it("filters to the safe-agreement cohort and keeps it active after manual review", async () => {
     let reviewed = false;
     const apiClient = vi.fn(async (path, options = {}) => {

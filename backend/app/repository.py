@@ -8,6 +8,17 @@ from uuid import UUID
 
 from psycopg.types.json import Jsonb
 
+from app.care_planning_review import (
+    CARE_PLANNING_FASTPATH_POLICY_VERSION,
+    WITHDRAWAL_POLICY_VERSION,
+    care_planning_fastpath_eligible,
+    care_planning_fastpath_qa_bucket,
+    care_planning_fastpath_qa_holdout,
+    normalize_structured_planning_value,
+    planning_withdrawal_assessment,
+    structured_planning_values,
+    validate_care_planning_subtype,
+)
 from app.classification import CLASSIFICATION_RULE_VERSION
 from app.companies_house import (
     OrganisationCandidate,
@@ -554,9 +565,11 @@ def list_signals(
     opportunity_decision: str | None = None,
     vertical: str | None = None,
     triage_bucket: str | None = None,
+    planning_subtype: str | None = None,
 ) -> dict[str, Any]:
     vertical = validate_vertical_filter(vertical)
     triage_bucket = validate_triage_bucket(triage_bucket)
+    planning_subtype = validate_care_planning_subtype(planning_subtype)
     clauses = ["TRUE"]
     params: list[Any] = []
     if vertical != ALL_VERTICALS:
@@ -612,6 +625,15 @@ def list_signals(
     if opportunity_decision:
         clauses.append("se.extracted_facts->>'opportunity_creation_decision' = %s")
         params.append(opportunity_decision)
+    if planning_subtype:
+        if planning_subtype == "EXPLICIT_NEW_HOME":
+            clauses.append(
+                "se.extracted_facts->>'planning_subtype' IN "
+                "('NEW_HOME_CHANGE_OF_USE', 'NEW_HOME_OTHER_EXPLICIT')"
+            )
+        else:
+            clauses.append("se.extracted_facts->>'planning_subtype' = %s")
+            params.append(planning_subtype)
     if triage_bucket:
         triage_ids = pending_review_triage_ids(
             settings, vertical=vertical, bucket=triage_bucket
@@ -1520,6 +1542,490 @@ def auto_reject_refused_planning(
     return updated
 
 
+def _auto_reject_withdrawn_planning_with_connection(
+    conn: Any,
+    signal_id: str,
+    metadata: dict[str, Any] | None,
+    *,
+    actor: str,
+) -> bool:
+    assessment = planning_withdrawal_assessment(metadata)
+    if not assessment.withdrawn:
+        return False
+    reason = "Automatically rejected — planning application withdrawn."
+    marker = {
+        "status": "REJECTED",
+        "reason": reason,
+        "policy_version": WITHDRAWAL_POLICY_VERSION,
+        "planning_decision": assessment.value,
+        "decision_date": assessment.decision_date,
+    }
+    row = conn.execute(
+        """
+        UPDATE signal_enrichments se
+        SET review_status = 'REJECTED', reviewed_by = %s, reviewed_at = now(),
+            extracted_facts = se.extracted_facts || %s, updated_at = now()
+        FROM raw_signals rs
+        WHERE se.raw_signal_id = rs.id AND rs.id = %s
+          AND rs.source_type = 'planning' AND se.review_status = 'PENDING'
+        RETURNING rs.vertical
+        """,
+        (actor, Jsonb({"automatic_review": marker}), signal_id),
+    ).fetchone()
+    if row:
+        conn.execute(
+            """
+            INSERT INTO admin_audit_events
+                (action, actor, target_type, target_count, details, vertical)
+            VALUES ('PLANNING_WITHDRAWAL_AUTO_REJECT', %s, 'signal', 1, %s, %s)
+            """,
+            (
+                actor,
+                Jsonb({"signal_id": signal_id, **marker}),
+                row[0],
+            ),
+        )
+    return row is not None
+
+
+def auto_reject_withdrawn_planning(
+    settings: Settings,
+    signal_id: str,
+    metadata: dict[str, Any] | None,
+    *,
+    actor: str = f"system:{WITHDRAWAL_POLICY_VERSION}",
+) -> bool:
+    """Reject one pending signal from an exact structured withdrawal only."""
+    with connection(settings) as conn:
+        updated = _auto_reject_withdrawn_planning_with_connection(
+            conn, signal_id, metadata, actor=actor
+        )
+        conn.commit()
+    return updated
+
+
+def cleanup_withdrawn_care_planning_signals(
+    settings: Settings, *, actor: str, limit: int = 2000
+) -> dict[str, Any]:
+    """Boundedly remove exact CareProspect withdrawals from the pending inbox."""
+    bounded_limit = min(max(int(limit), 1), 2500)
+    with connection(settings) as conn:
+        rows = conn.execute(
+            """
+            SELECT rs.id, rs.metadata
+            FROM raw_signals rs
+            JOIN signal_enrichments se ON se.raw_signal_id = rs.id
+            WHERE rs.vertical = 'CHILDRENS_HOME' AND rs.source_type = 'planning'
+              AND se.review_status = 'PENDING'
+            ORDER BY rs.discovered_at DESC, rs.id DESC
+            LIMIT %s
+            """,
+            (bounded_limit,),
+        ).fetchall()
+        withdrawn = [
+            (str(row[0]), row[1] or {})
+            for row in rows
+            if planning_withdrawal_assessment(row[1]).withdrawn
+        ]
+        updated = 0
+        errors = 0
+        for signal_id, metadata in withdrawn:
+            try:
+                with conn.transaction():
+                    updated += int(
+                        _auto_reject_withdrawn_planning_with_connection(
+                            conn,
+                            signal_id,
+                            metadata,
+                            actor=f"system:{WITHDRAWAL_POLICY_VERSION}",
+                        )
+                    )
+            except Exception:
+                errors += 1
+        conn.execute(
+            """
+            INSERT INTO admin_audit_events
+                (action, actor, target_type, target_count, details, vertical)
+            VALUES ('PLANNING_WITHDRAWAL_CLEANUP', %s, 'signal', %s, %s, 'CHILDRENS_HOME')
+            """,
+            (
+                actor,
+                updated,
+                Jsonb(
+                    {
+                        "policy_version": WITHDRAWAL_POLICY_VERSION,
+                        "inspected": len(rows),
+                        "withdrawals_found": len(withdrawn),
+                        "auto_rejected": updated,
+                        "errors": errors,
+                    }
+                ),
+            ),
+        )
+        conn.commit()
+    return {
+        "policy_version": WITHDRAWAL_POLICY_VERSION,
+        "pending_care_planning_inspected": len(rows),
+        "inspection_limit": bounded_limit,
+        "withdrawals_found": len(withdrawn),
+        "auto_rejected": updated,
+        "errors": errors,
+    }
+
+
+def reclassify_pending_care_planning(
+    settings: Settings, *, actor: str, limit: int = 2000
+) -> dict[str, Any]:
+    """Recompute pending CareProspect Planning subtype facts without touching labels."""
+    bounded_limit = min(max(int(limit), 1), 2500)
+    with connection(settings) as conn:
+        rows = conn.execute(
+            """
+            SELECT rs.id, rs.schema_version, rs.source_type, rs.source_url,
+                   rs.external_id, rs.discovered_at, rs.title, rs.raw_text,
+                   rs.location_hint, rs.organisation_hint, rs.metadata, rs.vertical,
+                   se.review_status, se.extracted_facts
+            FROM raw_signals rs
+            JOIN signal_enrichments se ON se.raw_signal_id = rs.id
+            WHERE rs.vertical = 'CHILDRENS_HOME' AND rs.source_type = 'planning'
+              AND se.review_status = 'PENDING'
+            ORDER BY rs.discovered_at DESC, rs.id DESC
+            LIMIT %s
+            """,
+            (bounded_limit,),
+        ).fetchall()
+        fields = (
+            "id",
+            "schema_version",
+            "source_type",
+            "source_url",
+            "external_id",
+            "discovered_at",
+            "title",
+            "raw_text",
+            "location_hint",
+            "organisation_hint",
+            "metadata",
+            "vertical",
+            "review_status",
+            "existing_facts",
+        )
+        counts: dict[str, int] = {}
+        updated = 0
+        errors = 0
+        for row in rows:
+            raw = dict(zip(fields, row))
+            try:
+                candidate = policy_for("CHILDRENS_HOME").classify_signal(raw)
+                facts = candidate["extracted_facts"]
+                existing = raw.get("existing_facts") or {}
+                for marker_name in ("automatic_review", "safe_approval", "care_planning_fastpath"):
+                    if marker_name in existing:
+                        facts[marker_name] = existing[marker_name]
+                subtype = str(facts.get("planning_subtype") or "AMBIGUOUS")
+                counts[subtype] = counts.get(subtype, 0) + 1
+                changed = conn.execute(
+                    """
+                    UPDATE signal_enrichments
+                    SET schema_version = %s, event_type = %s, nursery_name = %s,
+                        operator_name = %s, address = %s, expected_opening_date = %s,
+                        capacity = %s, lifecycle_stage = %s, confidence = %s,
+                        extracted_facts = %s, evidence = %s, updated_at = now()
+                    WHERE raw_signal_id = %s AND review_status = 'PENDING'
+                    RETURNING raw_signal_id
+                    """,
+                    (
+                        candidate["schema_version"],
+                        candidate["event_type"],
+                        candidate["nursery_name"],
+                        candidate["operator_name"],
+                        candidate["address"],
+                        candidate["expected_opening_date"],
+                        candidate["capacity"],
+                        candidate["lifecycle_stage"],
+                        candidate["confidence"],
+                        Jsonb(facts),
+                        Jsonb(candidate["evidence"]),
+                        raw["id"],
+                    ),
+                ).fetchone()
+                updated += int(changed is not None)
+            except Exception:
+                errors += 1
+        conn.execute(
+            """
+            INSERT INTO admin_audit_events
+                (action, actor, target_type, target_count, details, vertical)
+            VALUES ('CARE_PLANNING_SUBTYPE_RECLASSIFY', %s, 'signal', %s, %s,
+                    'CHILDRENS_HOME')
+            """,
+            (
+                actor,
+                updated,
+                Jsonb(
+                    {
+                        "policy_version": CARE_PLANNING_FASTPATH_POLICY_VERSION,
+                        "inspected": len(rows),
+                        "updated": updated,
+                        "subtypes": counts,
+                        "errors": errors,
+                    }
+                ),
+            ),
+        )
+        conn.commit()
+    return {
+        "policy_version": CARE_PLANNING_FASTPATH_POLICY_VERSION,
+        "pending_inspected": len(rows),
+        "updated": updated,
+        "subtypes": counts,
+        "errors": errors,
+        "manually_reviewed_untouched": True,
+    }
+
+
+def care_planning_fastpath_backlog(
+    settings: Settings, *, actor: str, preview: bool, limit: int = 100
+) -> dict[str, Any]:
+    """Preview/apply one bounded batch of the exact Care Planning fast path."""
+    bounded_limit = min(max(int(limit), 1), 100)
+    with connection(settings) as conn:
+        rows = conn.execute(
+            """
+            SELECT rs.id, rs.vertical, rs.source_type, rs.metadata, se.review_status,
+                   se.extracted_facts
+            FROM raw_signals rs
+            JOIN signal_enrichments se ON se.raw_signal_id = rs.id
+            WHERE rs.vertical = 'CHILDRENS_HOME' AND rs.source_type = 'planning'
+              AND se.review_status = 'PENDING'
+            ORDER BY rs.discovered_at DESC, rs.id DESC
+            LIMIT 2500
+            """
+        ).fetchall()
+        items = [
+            dict(
+                zip(
+                    (
+                        "id",
+                        "vertical",
+                        "source_type",
+                        "metadata",
+                        "review_status",
+                        "extracted_facts",
+                    ),
+                    row,
+                )
+            )
+            for row in rows
+        ]
+        eligible = [
+            item
+            for item in items
+            if not planning_refusal_assessment(item["metadata"]).refused
+            and not planning_withdrawal_assessment(item["metadata"]).withdrawn
+            and care_planning_fastpath_eligible(
+                vertical=item["vertical"],
+                source_type=item["source_type"],
+                review_status=item["review_status"],
+                extracted_facts=item["extracted_facts"],
+            )
+        ]
+        subtype_counts: dict[str, int] = {}
+        for item in items:
+            subtype = str((item["extracted_facts"] or {}).get("planning_subtype") or "AMBIGUOUS")
+            subtype_counts[subtype] = subtype_counts.get(subtype, 0) + 1
+        support_only = sum(
+            (item["extracted_facts"] or {}).get("opportunity_creation_decision")
+            == "SUPPORT_EXISTING_ONLY"
+            for item in items
+        )
+        manual = len(items) - len(eligible)
+        unsupported = conn.execute(
+            """
+            SELECT count(DISTINCT o.id)
+            FROM opportunities o
+            WHERE o.vertical = 'CHILDRENS_HOME' AND o.publication_status = 'DRAFT'
+              AND EXISTS (
+                SELECT 1 FROM opportunity_signals os
+                JOIN signal_enrichments se ON se.raw_signal_id = os.raw_signal_id
+                WHERE os.opportunity_id = o.id AND os.status = 'ACTIVE'
+                  AND se.extracted_facts->>'planning_subtype' IN
+                    ('REFUSED', 'WITHDRAWN', 'LAWFULNESS_EXISTING',
+                     'CONDITION_DISCHARGE', 'NON_MATERIAL_AMENDMENT', 'FOLLOW_UP_OTHER')
+              )
+              AND NOT EXISTS (
+                SELECT 1 FROM opportunity_signals os
+                JOIN signal_enrichments se ON se.raw_signal_id = os.raw_signal_id
+                WHERE os.opportunity_id = o.id AND os.status = 'ACTIVE'
+                  AND COALESCE(se.extracted_facts->>'planning_subtype', '') NOT IN
+                    ('REFUSED', 'WITHDRAWN', 'LAWFULNESS_EXISTING',
+                     'CONDITION_DISCHARGE', 'NON_MATERIAL_AMENDMENT', 'FOLLOW_UP_OTHER')
+                  AND se.review_status <> 'REJECTED'
+              )
+            """
+        ).fetchone()[0]
+    auto_ids = [
+        str(item["id"])
+        for item in eligible
+        if not care_planning_fastpath_qa_holdout(str(item["id"]))
+    ]
+    holdout_ids = [
+        str(item["id"]) for item in eligible if care_planning_fastpath_qa_holdout(str(item["id"]))
+    ]
+    batch_ids = [str(item["id"]) for item in eligible[:bounded_limit]]
+    if preview:
+        return {
+            "preview": True,
+            "policy_version": CARE_PLANNING_FASTPATH_POLICY_VERSION,
+            "pending_evaluated": len(items),
+            "subtypes": subtype_counts,
+            "eligible_total": len(eligible),
+            "would_auto_approve": len(auto_ids),
+            "qa_holdouts": len(holdout_ids),
+            "support_only": support_only,
+            "manual_remainder": manual,
+            "unsupported_draft_opportunities": int(unsupported),
+            "batch_limit": bounded_limit,
+            "customer_publication_unchanged": True,
+        }
+    results = [
+        apply_care_planning_fastpath_policy(settings, signal_id, trigger_actor=actor)
+        for signal_id in batch_ids
+    ]
+    return {
+        "preview": False,
+        "policy_version": CARE_PLANNING_FASTPATH_POLICY_VERSION,
+        "requested": len(batch_ids),
+        "updated": sum(item["updated"] for item in results),
+        "auto_approved": sum(
+            item["updated"] and item["outcome"] == "AUTO_APPROVE" for item in results
+        ),
+        "qa_holdouts": sum(item["updated"] and item["outcome"] == "QA_HOLDOUT" for item in results),
+        "customer_publication_unchanged": True,
+    }
+
+
+def apply_care_planning_fastpath_policy(
+    settings: Settings, signal_id: str, *, trigger_actor: str | None = None
+) -> dict[str, Any]:
+    """Apply deterministic CareProspect explicit-new-home review policy once."""
+    with connection(settings) as conn:
+        row = conn.execute(
+            """
+            SELECT rs.id, rs.vertical, rs.source_type, rs.metadata, se.review_status,
+                   se.extracted_facts
+            FROM raw_signals rs
+            JOIN signal_enrichments se ON se.raw_signal_id = rs.id
+            WHERE rs.id = %s
+            FOR UPDATE OF se
+            """,
+            (signal_id,),
+        ).fetchone()
+        if row is None:
+            return {"signal_id": signal_id, "outcome": "INELIGIBLE", "updated": False}
+        fields = (
+            "id",
+            "vertical",
+            "source_type",
+            "metadata",
+            "review_status",
+            "extracted_facts",
+        )
+        item = dict(zip(fields, row))
+        if (
+            planning_refusal_assessment(item["metadata"]).refused
+            or planning_withdrawal_assessment(item["metadata"]).withdrawn
+        ):
+            return {"signal_id": signal_id, "outcome": "INELIGIBLE", "updated": False}
+        if not care_planning_fastpath_eligible(
+            vertical=item["vertical"],
+            source_type=item["source_type"],
+            review_status=item["review_status"],
+            extracted_facts=item["extracted_facts"],
+        ):
+            return {"signal_id": signal_id, "outcome": "INELIGIBLE", "updated": False}
+        outcome = (
+            "QA_HOLDOUT" if care_planning_fastpath_qa_holdout(str(item["id"])) else "AUTO_APPROVE"
+        )
+        qa_bucket = care_planning_fastpath_qa_bucket(str(item["id"]))
+        facts = item["extracted_facts"] or {}
+        marker = {
+            "policy_version": CARE_PLANNING_FASTPATH_POLICY_VERSION,
+            "outcome": outcome,
+            "qa_bucket": qa_bucket,
+            "planning_subtype": facts.get("planning_subtype"),
+            "planning_decision": next(
+                (
+                    normalize_structured_planning_value(value)
+                    for value in structured_planning_values(item["metadata"])
+                    if normalize_structured_planning_value(value)
+                ),
+                None,
+            ),
+            "deterministic_evidence": facts.get("planning_subtype_reasons") or [],
+            "source_type": item["source_type"],
+            "vertical": item["vertical"],
+            "trigger": "admin_backlog" if trigger_actor else "live_enrichment",
+        }
+        if outcome == "QA_HOLDOUT":
+            updated = conn.execute(
+                """
+                UPDATE signal_enrichments
+                SET extracted_facts = extracted_facts || %s, updated_at = now()
+                WHERE raw_signal_id = %s AND review_status = 'PENDING'
+                  AND COALESCE(
+                        extracted_facts->'care_planning_fastpath'->>'policy_version', ''
+                      ) <> %s
+                RETURNING raw_signal_id
+                """,
+                (
+                    Jsonb({"care_planning_fastpath": marker}),
+                    signal_id,
+                    CARE_PLANNING_FASTPATH_POLICY_VERSION,
+                ),
+            ).fetchone()
+            action = "CARE_PLANNING_FASTPATH_QA_HOLDOUT"
+        else:
+            updated = conn.execute(
+                """
+                UPDATE signal_enrichments
+                SET review_status = 'APPROVED', reviewed_by = %s, reviewed_at = now(),
+                    extracted_facts = extracted_facts || %s, updated_at = now()
+                WHERE raw_signal_id = %s AND review_status = 'PENDING'
+                RETURNING raw_signal_id
+                """,
+                (
+                    f"system:{CARE_PLANNING_FASTPATH_POLICY_VERSION}",
+                    Jsonb({"care_planning_fastpath": marker}),
+                    signal_id,
+                ),
+            ).fetchone()
+            action = "CARE_PLANNING_FASTPATH_AUTO_APPROVE"
+        if updated:
+            conn.execute(
+                """
+                INSERT INTO admin_audit_events
+                    (action, actor, target_type, target_count, details, vertical)
+                VALUES (%s, %s, 'signal', 1, %s, 'CHILDRENS_HOME')
+                """,
+                (
+                    action,
+                    trigger_actor or f"system:{CARE_PLANNING_FASTPATH_POLICY_VERSION}",
+                    Jsonb(
+                        {
+                            "signal_id": signal_id,
+                            "reason": (
+                                "Auto-approved — explicit new children’s-home planning proposal."
+                            ),
+                            **marker,
+                        }
+                    ),
+                ),
+            )
+            conn.commit()
+        return {"signal_id": signal_id, "outcome": outcome, "updated": bool(updated)}
+
+
 def cleanup_refused_planning_signals(
     settings: Settings, *, actor: str, limit: int = 2000
 ) -> dict[str, Any]:
@@ -1855,6 +2361,21 @@ def review_triage_summary(settings: Settings, *, vertical: str = "ALL") -> dict[
         if marker.get("outcome") == "QA_HOLDOUT"
     ]
     holdout_rejected = sum(item["review_status"] == "REJECTED" for item, _ in holdouts)
+    care_policy_records = []
+    for item in reviewed_all + pending:
+        facts = item.get("extracted_facts") or {}
+        marker = facts.get("care_planning_fastpath") if isinstance(facts, dict) else None
+        if (
+            isinstance(marker, dict)
+            and marker.get("policy_version") == CARE_PLANNING_FASTPATH_POLICY_VERSION
+        ):
+            care_policy_records.append((item, marker))
+    care_holdouts = [
+        (item, marker)
+        for item, marker in care_policy_records
+        if marker.get("outcome") == "QA_HOLDOUT"
+    ]
+    care_holdout_rejected = sum(item["review_status"] == "REJECTED" for item, _ in care_holdouts)
     return {
         "policy_version": "review-triage-v2",
         "safe_approval_policy_version": SAFE_APPROVAL_POLICY_VERSION,
@@ -1901,6 +2422,30 @@ def review_triage_summary(settings: Settings, *, vertical: str = "ALL") -> dict[
                 "QA holdout rejection detected; review safe-approval-v1 before widening or "
                 "continuing automation."
                 if holdout_rejected
+                else None
+            ),
+        },
+        "care_planning_qa_monitoring": {
+            "policy_version": CARE_PLANNING_FASTPATH_POLICY_VERSION,
+            "total_policy_records": len(care_policy_records),
+            "auto_approved": sum(
+                marker.get("outcome") == "AUTO_APPROVE" for _, marker in care_policy_records
+            ),
+            "qa_holdouts": len(care_holdouts),
+            "qa_holdouts_pending": sum(
+                item["review_status"] == "PENDING" for item, _ in care_holdouts
+            ),
+            "qa_holdouts_approved": sum(
+                item["review_status"] == "APPROVED" for item, _ in care_holdouts
+            ),
+            "qa_holdouts_rejected": care_holdout_rejected,
+            "observed_error_rate": (
+                care_holdout_rejected / len(care_holdouts) if care_holdouts else None
+            ),
+            "warning": (
+                "CareProspect explicit-new-home QA rejection detected; suspend and review "
+                "care-planning-fastpath-v1."
+                if care_holdout_rejected
                 else None
             ),
         },
@@ -2369,6 +2914,57 @@ def correlate_signal(
         match = None
         match_reason = None
         uncertain_matches: list[tuple[Any, float, str]] = []
+        prior_references = [
+            str(value).upper()
+            for value in (candidate.get("extracted_facts") or {}).get(
+                "planning_prior_references", []
+            )
+            if value
+        ]
+        if source_type == "planning" and prior_references:
+            referenced = conn.execute(
+                """
+                SELECT o.id
+                FROM opportunities o
+                JOIN opportunity_signals os ON os.opportunity_id = o.id
+                JOIN raw_signals prior ON prior.id = os.raw_signal_id
+                WHERE o.vertical = %s AND o.review_status NOT IN ('MERGED', 'REJECTED')
+                  AND os.status = 'ACTIVE' AND prior.source_type = 'planning'
+                  AND (
+                    upper(prior.external_id) = ANY(%s)
+                    OR upper(COALESCE(prior.metadata->'provider_record'->>'id', '')) = ANY(%s)
+                    OR upper(COALESCE(prior.metadata->>'application_id', '')) = ANY(%s)
+                  )
+                ORDER BY o.updated_at DESC
+                LIMIT 2
+                """,
+                (
+                    signal_vertical,
+                    [*prior_references, *(f"PLOTA:{item}" for item in prior_references)],
+                    prior_references,
+                    prior_references,
+                ),
+            ).fetchall()
+            if len(referenced) == 1:
+                referenced_id = referenced[0][0]
+                blocked = conn.execute(
+                    """SELECT 1 FROM opportunity_signals
+                       WHERE opportunity_id = %s AND raw_signal_id = %s
+                         AND status = 'REJECTED'""",
+                    (referenced_id, signal_id),
+                ).fetchone()
+                if not blocked:
+                    match = next((row for row in existing if row[0] == referenced_id), None)
+                    match_reason = "references an earlier linked planning application"
+            elif len(referenced) > 1:
+                for referenced_id, *_ in referenced:
+                    uncertain_matches.append(
+                        (
+                            referenced_id,
+                            0.7,
+                            "planning reference points to multiple possible opportunities",
+                        )
+                    )
         if source_type == "ofsted":
             area = normalize_identity(metadata.get("local_authority"))
             organisation = normalize_identity(operator)
@@ -2394,7 +2990,7 @@ def correlate_signal(
                         "is insufficient to identify one residential site safely",
                     )
                 )
-        else:
+        elif match is None:
             for row in existing:
                 comparison = classify_match(postcode, name, row[6], row[7] or row[1])
                 operator_comparison = classify_match(postcode, operator, row[6], row[7])

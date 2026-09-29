@@ -815,3 +815,14 @@ Paid-pilot activation check (2026-09-28):
   queues and their DLQs are empty, and the five previously classified collector-DLQ messages remain
   deliberately untouched. Post-deployment Terraform reports zero drift. This hardening gate is complete;
   the next automation gate remains prospective NurserySignal QA-holdout monitoring.
+- CareProspect Planning review hardening introduces versioned, internal planning semantics for explicit
+  new homes, proposed/existing lawfulness, condition variations/discharges, non-material amendments,
+  other follow-ups, refusals, withdrawals and ambiguity. `care-planning-fastpath-v1` is deliberately
+  limited to CHILDRENS_HOME Planning records with an explicit new-home subtype, a matched deterministic
+  candidate, CREATE_OPPORTUNITY policy, and an exact positive/pending structured council state; it uses
+  a stable one-in-ten QA holdout and does not depend on AI. `planning-withdrawal-v1` handles only exact
+  structured withdrawal variants, preserving evidence, audit and independent resubmissions. Follow-up
+  planning references are retained and may link to an already supported opportunity without relaxing
+  global matching. Customer publication remains explicitly manual. Deployment, bounded pending-backlog
+  reclassification, withdrawn cleanup and the preview-only existing fast-path report remain the rollout
+  gates; no existing fast-path backlog approval is authorised by this implementation step.
