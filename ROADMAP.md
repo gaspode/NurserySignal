@@ -803,3 +803,8 @@ Paid-pilot activation check (2026-09-28):
   queues and all non-collector DLQs are empty, and the five previously classified obsolete collector-DLQ
   messages remain deliberately untouched. The next automation gate is prospective QA-holdout monitoring;
   CareProspect remains manual.
+- Planning refusal policy v3 adds the exact normalized structured council decision `REFUSAL` to the
+  existing conservative refusal set. It remains exact-field matching only: AI APPROVE cannot override
+  the council refusal, while Withdrawn, Invalid, Returned, appeals, condition discharges and non-material
+  amendments remain outside this automatic policy. Deployment and the bounded audited production cleanup
+  are the only remaining gates for this small hardening change.

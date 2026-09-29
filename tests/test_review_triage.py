@@ -23,6 +23,8 @@ from app.review_triage import (
 def test_structured_refusal_variants_are_unambiguous() -> None:
     for value in (
         "REFUSED",
+        "Refusal",
+        "refusal.",
         "rejected",
         "Permission: refused",
         "Application refused.",
@@ -39,7 +41,7 @@ def test_structured_refusal_variants_are_unambiguous() -> None:
         assert result.refused is True
         assert result.decision_date == "2026-04-03"
     assert normalize_planning_decision("Permission: refused.") == "PERMISSION REFUSED"
-    assert REFUSAL_POLICY_VERSION == "planning-refusal-v2"
+    assert REFUSAL_POLICY_VERSION == "planning-refusal-v3"
 
 
 def test_non_refusal_terminal_states_are_not_auto_rejected() -> None:
@@ -241,7 +243,7 @@ def test_safe_approval_holdout_is_stable_and_refusal_wins() -> None:
         vertical="NURSERY",
         source_type="planning",
         review_status="PENDING",
-        metadata={"decision": "Refuse Permission/Consent"},
+        metadata={"decision": "Refusal"},
         extracted_facts={
             "planning_candidate_matched": True,
             "opportunity_creation_decision": "CREATE_OPPORTUNITY",
@@ -296,7 +298,7 @@ def test_refusal_review_uses_authoritative_pending_transition_and_audit(monkeypa
     assert len(audits) == 1
     assert "PLANNING_REFUSAL_AUTO_REJECT" in audits[0][0]
     assert "Automatically rejected" in audits[0][1][1].obj["reason"]
-    assert audits[0][1][1].obj["policy_version"] == "planning-refusal-v2"
+    assert audits[0][1][1].obj["policy_version"] == "planning-refusal-v3"
 
 
 class SafeApprovalConnection:

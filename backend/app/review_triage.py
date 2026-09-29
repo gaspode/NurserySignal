@@ -5,12 +5,13 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
-REFUSAL_POLICY_VERSION = "planning-refusal-v2"
+REFUSAL_POLICY_VERSION = "planning-refusal-v3"
 SAFE_APPROVAL_MIN_CONFIDENCE = 0.95
 SAFE_APPROVAL_POLICY_VERSION = "safe-approval-v1"
 SAFE_APPROVAL_VERTICALS = frozenset({"NURSERY"})
 SAFE_APPROVAL_QA_MODULUS = 10
 REFUSED_DECISIONS = {
+    "REFUSAL",
     "REFUSED",
     "REJECTED",
     "PERMISSION REFUSED",
