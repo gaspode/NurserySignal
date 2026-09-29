@@ -762,3 +762,14 @@ Paid-pilot activation check (2026-09-28):
   early dry-run first chunks, two are obsolete completed-backfill continuation chunks (17 and 33), and one
   is an obsolete two-day manual run from the exhausted Demo-key period. Their safe cleanup recommendation
   is purge/delete only those five known obsolete messages after separate operator approval.
+- Planning refusal policy v2 now recognises additional exact normalized structured decisions including
+  Refuse Permission/Consent, Refuse Permission, Refuse Consent, Refusal of Permission/Consent and the
+  equivalent reversed refusal wording, without inspecting free-text proposals or broadening treatment of
+  Withdrawn/Invalid/appeal/follow-up states. The bounded production cleanup inspected 1,566 pending
+  Planning signals and audit-rejected nine newly recognised refusals (five Refuse Permission/Consent and
+  four Refuse Permission casing variants), with zero errors; the server-side refusal cohort is now empty
+  and 79 Withdrawn records remain pending by policy. Review Inbox triage counts are now clickable and
+  backed by a validated `triage_bucket` API filter using the same shared evaluator as the summary. The
+  current SAFE_APPROVE_AGREEMENT cohort is exactly 64 pending Planning signals; admins can review it
+  sequentially with filter/pagination state and a live remaining count preserved. No automatic or bulk
+  approval was run or newly enabled, so the next gate remains manual validation of this exact cohort.
