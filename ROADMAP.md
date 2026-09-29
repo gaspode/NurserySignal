@@ -990,3 +990,22 @@ Paid-pilot activation check (2026-09-28):
   deterministic semantics and are not cleaner automation candidates. No new subtype automation was
   enabled. Exact next step: manually validate the seven proposed-lawfulness records, then make a separate
   policy decision using those labels.
+- `care-planning-lawfulness-proposed-v1` is now deployed as a separate, narrowly scoped future-review
+  policy after prospective manual validation of the seven-record cohort (7/7 approved, zero false
+  approvals and zero false rejects). Eligibility requires CHILDRENS_HOME Planning,
+  `LAWFULNESS_PROPOSED`, a latest successful `care-planning-shadow-v2` APPROVE at confidence >=0.95,
+  explicit new-home wording, canonical APPROVED outcome, CREATE_OPPORTUNITY, and no false-positive,
+  ambiguity, active-appeal, prior-reference, human-review or earlier-policy state. A stable UUID
+  modulo-ten QA holdout remains pending under the separate `Care lawfulness QA` triage bucket. Existing
+  lawfulness, condition, amendment, follow-up and ambiguous automation remains disabled; AI rejection
+  remains advisory and customer publication remains manual.
+- The post-deployment production preview evaluated all 154 pending CareProspect Planning records and
+  found zero eligible proposed-lawfulness records (all 154 were other subtypes), so the seven historical
+  human reviews were untouched and no deployment-time approval or QA marker was created. Separate
+  monitoring records the 7/7 narrow validation cohort and currently reports zero policy records, zero
+  auto-approvals and zero holdouts. Published inventory remains six. Deployment run `36645845647` for
+  commit `6f4f262` succeeded; API/database, CareProspect HTTPS and queue health pass. Active queues and
+  non-collector DLQs are empty, while the five previously retained collector-DLQ messages remain
+  untouched. Next gate: inspect future deterministic QA holdouts and keep the 10% rate until this small
+  policy has prospective production evidence; do not broaden into existing-lawfulness or follow-up
+  subtypes.
