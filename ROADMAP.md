@@ -707,3 +707,14 @@ Paid-pilot activation check (2026-09-28):
   further dry run; because CareProspect is a customer-facing multi-tenant product and the bounded seed can
   require more than 10,000 records, confirm the required commercial tier/allowance with Plota rather than
   assuming Starter is sufficient.
+- Plota Starter access is now confirmed and the historical Planning gate passed: the fixed 60-day range
+  returned 333 records and 213 vertical classifications on both runs, with unchanged database totals on
+  the idempotency repeat. The full 29 March 2025–29 September 2026 run completed all 79 weekly chunks from
+  its persisted checkpoint, fetching 3,268 records and producing 857 NurserySignal plus 1,320 CareProspect
+  classifications with zero collector errors. A repeatable SQS event-source stall was contained by
+  disabling the consumer, purging only the explicitly authorised Planning manual queue, and serially
+  pumping chunks 33–79; chunks 1–32 were not re-queried and all other queues/DLQs were left untouched.
+  The existing post-backfill recalculation then exposed a genuine 15-second backend timeout, so the
+  backend's bounded-admin-operation timeout is being raised to 60 seconds without changing matching
+  policy. Recruitment correlation, bounded organisation enrichment and final curation impact remain the
+  last operational gates for this backfill.

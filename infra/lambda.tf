@@ -23,8 +23,11 @@ resource "aws_lambda_function" "backend" {
   handler          = "app.handler.handler"
   filename         = data.archive_file.lambda.output_path
   source_code_hash = data.archive_file.lambda.output_base64sha256
-  timeout          = 15
-  memory_size      = 256
+  # Bounded admin recalculation can process recruitment plus both active
+  # verticals in one invocation. Keep enough headroom for that audited path;
+  # API list/detail requests remain independently bounded by their handlers.
+  timeout     = 60
+  memory_size = 256
 
   vpc_config {
     subnet_ids         = local.lambda_subnet_ids
