@@ -732,3 +732,23 @@ Paid-pilot activation check (2026-09-28):
   restored Planning consumer and the zero-drift Terraform plan all pass. All operational queues are empty;
   five retained shared collector DLQ messages were deliberately not purged under the operator's explicit
   safety constraint and require separate scoped triage if cleanup is desired.
+- The focused post-backfill review-hardening code is deployed at commit `d4f145e`. Explicit structured
+  council decisions of Refused/Rejected/Permission Refused/Application Refused now move only pending
+  Planning signals to rejected history through an idempotent audited policy; raw evidence, decision
+  dates, source links and later independent applications remain intact. Withdrawn, invalid, lapsed and
+  other ambiguous terminal states are deliberately not auto-rejected. SignalHub Review Inbox now shows
+  vertical-scoped risk buckets for deterministic/AI agreement, disagreement, uncertainty and manual
+  review. A bounded safe-agreement bulk action is present but execution remains disabled unless at least
+  20 existing human decisions show zero errors at a conservative threshold; AI rejection remains
+  advisory only and customer publication remains unchanged.
+- A read-only bounded Recruitment-to-Planning diagnostic now categorises up to 50 unmatched CareProspect
+  recruitment signals using concrete postcode, locality, operator/applicant and stale/non-material
+  evidence, without creating links or changing matching thresholds. The matching diagnostic, production
+  refusal cleanup, human-label evaluation and safe-approval preview are awaiting a normally authenticated
+  SignalHub admin invocation: direct Lambda invocation with fabricated claims was explicitly rejected as
+  an authentication bypass. Infrastructure and application health pass; Planning and Recruitment daily
+  schedules and the Planning manual-run consumer are enabled, primary queues and four non-collector DLQs
+  are empty. The five retained collector DLQ messages were inspected without deletion: two are obsolete
+  early dry-run first chunks, two are obsolete completed-backfill continuation chunks (17 and 33), and one
+  is an obsolete two-day manual run from the exhausted Demo-key period. Their safe cleanup recommendation
+  is purge/delete only those five known obsolete messages after separate operator approval.
