@@ -839,3 +839,13 @@ Paid-pilot activation check (2026-09-28):
   The six published customer opportunities remain unchanged. Next gate: explicit approval is required
   before executing any bounded existing-backlog fast-path approval; monitor QA holdouts before widening
   the policy, and keep proposed lawfulness/manual follow-up review conservative.
+- The explicitly authorised `care-planning-fastpath-v1` existing-backlog rollout completed on 2026-09-29
+  in three bounded batches (maximum 100): batch 1 approved 86 and marked 14 QA holdouts; batch 2
+  approved 77 and marked nine new holdouts, idempotently skipping 14 already marked holdouts; batch 3
+  approved the final 49 and marked four new holdouts, idempotently skipping 23 already marked holdouts.
+  Total authoritative outcomes are 212 deterministic explicit-new-home approvals and 27 stable QA
+  holdouts left pending. Final preview reports zero remaining auto-approval candidates, 27 holdouts and
+  519 other manual records. All calls succeeded, normal audit markers/history were retained, and the six
+  published customer opportunities were unchanged. Next step is manual review of the 27 QA holdouts and
+  monitoring for any rejected holdout before considering a policy change; no broader CareProspect AI
+  authority is approved.
