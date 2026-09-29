@@ -806,5 +806,12 @@ Paid-pilot activation check (2026-09-28):
 - Planning refusal policy v3 adds the exact normalized structured council decision `REFUSAL` to the
   existing conservative refusal set. It remains exact-field matching only: AI APPROVE cannot override
   the council refusal, while Withdrawn, Invalid, Returned, appeals, condition discharges and non-material
-  amendments remain outside this automatic policy. Deployment and the bounded audited production cleanup
-  are the only remaining gates for this small hardening change.
+  amendments remain outside this automatic policy. Commit `a7b75b4` deployed successfully through the
+  normal OIDC workflow. The bounded audited production cleanup inspected 1,444 pending Planning signals,
+  found and auto-rejected 21 newly recognised explicit refusals, and completed with zero errors. A
+  subsequent read-only triage evaluation found no explicit-refusal bucket remaining; 79 Withdrawn records
+  remain pending by policy. Evidence and review history were preserved, customer publication and
+  safe-approval thresholds were unchanged, API/database/Lambda health pass, primary ingestion/enrichment
+  queues and their DLQs are empty, and the five previously classified collector-DLQ messages remain
+  deliberately untouched. Post-deployment Terraform reports zero drift. This hardening gate is complete;
+  the next automation gate remains prospective NurserySignal QA-holdout monitoring.
