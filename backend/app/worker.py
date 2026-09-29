@@ -9,11 +9,13 @@ from app.logging import configure_logging
 from app.queueing import EnrichmentMessage
 from app.repository import (
     ai_review_exists,
+    auto_reject_refused_planning,
     correlate_signal,
     get_raw_signal,
     save_ai_review,
     save_enrichment,
 )
+from app.review_triage import planning_refusal_assessment
 from app.verticals import policy_for
 
 logger = configure_logging()
@@ -33,12 +35,24 @@ def process_message(settings: Settings, body: str) -> None:
     }
     created = save_enrichment(settings, candidate)
     opportunity = {"opportunity_id": "disabled", "linked": False}
-    if getattr(settings, "database_url", None) or getattr(settings, "db_secret_arn", None):
+    refused = False
+    if raw.get("source_type") == "planning":
+        refused = planning_refusal_assessment(raw.get("metadata")).refused
+        if refused:
+            auto_reject_refused_planning(
+                settings,
+                message.signal_id,
+                raw.get("metadata"),
+            )
+    if not refused and (
+        getattr(settings, "database_url", None) or getattr(settings, "db_secret_arn", None)
+    ):
         opportunity = correlate_signal(settings, message.signal_id, candidate)
     logger.info(
-        "enrichment signal_id=%s created=%s opportunity_id=%s linked=%s",
+        "enrichment signal_id=%s created=%s refused=%s opportunity_id=%s linked=%s",
         message.signal_id,
         created,
+        refused,
         opportunity["opportunity_id"],
         opportunity["linked"],
     )

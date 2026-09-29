@@ -952,6 +952,92 @@ def test_recruitment_reprocess_rejects_unbounded_id_lists() -> None:
     assert response["statusCode"] == 400
 
 
+def test_review_triage_is_admin_only_and_vertical_scoped(monkeypatch) -> None:
+    captured = {}
+
+    def fake_summary(settings, **kwargs):
+        captured.update(kwargs)
+        return {"vertical": kwargs["vertical"], "pending_buckets": {}}
+
+    monkeypatch.setattr("app.handler.review_triage_summary", fake_summary)
+    denied = handler(
+        event(
+            "/admin/review-triage",
+            claims={"sub": "staff", "cognito:groups": ["Other"]},
+        ),
+        None,
+    )
+    assert denied["statusCode"] == 403
+    response = handler(
+        event(
+            "/admin/review-triage",
+            query={"vertical": "CHILDRENS_HOME"},
+        ),
+        None,
+    )
+    assert response["statusCode"] == 200
+    assert captured["vertical"] == "CHILDRENS_HOME"
+
+
+def test_refusal_cleanup_and_safe_approve_are_bounded_admin_actions(monkeypatch) -> None:
+    cleanup_args = {}
+    approve_args = {}
+    monkeypatch.setattr(
+        "app.handler.cleanup_refused_planning_signals",
+        lambda settings, **kwargs: cleanup_args.update(kwargs) or {"auto_rejected": 2},
+    )
+    monkeypatch.setattr(
+        "app.handler.safe_agreement_bulk_approve",
+        lambda settings, **kwargs: approve_args.update(kwargs) or {"preview": True},
+    )
+    cleanup = handler(
+        event(
+            "/admin/review-triage/refusals",
+            "POST",
+            body=json.dumps({"limit": 99999}),
+        ),
+        None,
+    )
+    preview = handler(
+        event(
+            "/admin/review-triage/safe-approve",
+            "POST",
+            body=json.dumps(
+                {
+                    "preview": True,
+                    "limit": 999,
+                    "threshold": 0.97,
+                    "vertical": "CHILDRENS_HOME",
+                }
+            ),
+        ),
+        None,
+    )
+    assert cleanup["statusCode"] == 200
+    assert cleanup_args["limit"] == 2500
+    assert preview["statusCode"] == 200
+    assert approve_args["limit"] == 100
+    assert approve_args["preview"] is True
+    assert approve_args["vertical"] == "CHILDRENS_HOME"
+
+
+def test_recruitment_planning_diagnostic_is_bounded_and_read_only(monkeypatch) -> None:
+    captured = {}
+    monkeypatch.setattr(
+        "app.handler.recruitment_planning_diagnostic",
+        lambda settings, **kwargs: captured.update(kwargs) or {"read_only": True},
+    )
+    response = handler(
+        event(
+            "/admin/recruitment/planning-diagnostic",
+            query={"limit": "500"},
+        ),
+        None,
+    )
+    assert response["statusCode"] == 200
+    assert captured["limit"] == 50
+
+
 def test_opportunity_views_and_corrections_are_admin_only(monkeypatch) -> None:
     denied = handler(
         event(

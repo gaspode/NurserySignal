@@ -53,6 +53,7 @@ from app.logging import configure_logging
 from app.organisation_lookup import ManualCompanyLookupError, lookup_manual_company_candidate
 from app.planning_backfill import PlanningBackfillBounds, chunk_payload
 from app.repository import (
+    cleanup_refused_planning_signals,
     create_opportunity_from_signal,
     link_signal_to_opportunity,
     list_match_reviews,
@@ -67,6 +68,7 @@ from app.repository import (
     organisation_detail,
     recalculate_opportunity_creation,
     record_admin_audit,
+    recruitment_planning_diagnostic,
     release_organisation_review_ofsted_enrichment_request,
     reprocess_planning_signals,
     reprocess_recruitment_signals,
@@ -75,6 +77,8 @@ from app.repository import (
     resolve_organisation_match_review,
     review_signal,
     review_signals_bulk,
+    review_triage_summary,
+    safe_agreement_bulk_approve,
     signal_detail,
     split_opportunity,
     unlink_signal_from_opportunity,
@@ -297,6 +301,14 @@ def _admin_path(path: str) -> tuple[str, str | None]:
         return "reprocess", None
     if path == "/admin/recruitment/reprocess":
         return "recruitment-reprocess", None
+    if path == "/admin/recruitment/planning-diagnostic":
+        return "recruitment-planning-diagnostic", None
+    if path == "/admin/review-triage":
+        return "review-triage", None
+    if path == "/admin/review-triage/refusals":
+        return "review-triage-refusals", None
+    if path == "/admin/review-triage/safe-approve":
+        return "review-triage-safe-approve", None
     if path == "/admin/verticals/CHILDRENS_HOME/backfill":
         return "care-backfill", None
     if path == "/admin/opportunities":
@@ -823,11 +835,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                         payload.get("company_number"),
                     ),
                 )
-            if (
-                action == "organisation-review-enrich-ofsted"
-                and method == "POST"
-                and signal_id
-            ):
+            if action == "organisation-review-enrich-ofsted" and method == "POST" and signal_id:
                 admin_error = _require_admin(claims, settings)
                 if admin_error:
                     return admin_error
@@ -858,9 +866,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                     if not response.get("MessageId"):
                         raise RuntimeError("Ofsted enrichment command was not accepted")
                 except Exception as exc:
-                    release_organisation_review_ofsted_enrichment_request(
-                        settings, signal_id, urn
-                    )
+                    release_organisation_review_ofsted_enrichment_request(settings, signal_id, urn)
                     logger.error(
                         "organisation_review_ofsted_enrichment_failed error_type=%s",
                         type(exc).__name__,
@@ -975,9 +981,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                         details={"run_id": run_id, **bounds.parameters(), "bounded": True},
                     )
                 except Exception:
-                    logger.exception(
-                        "planning_historical_backfill_audit_failed run_id=%s", run_id
-                    )
+                    logger.exception("planning_historical_backfill_audit_failed run_id=%s", run_id)
                 return _response(
                     202,
                     {
@@ -1052,9 +1056,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 )
                 actor = str(claims.get("sub") or claims.get("username") or "unknown")
                 try:
-                    recruitment = reprocess_recruitment_signals(
-                        settings, actor=actor, limit=100
-                    )
+                    recruitment = reprocess_recruitment_signals(settings, actor=actor, limit=100)
                     totals: dict[str, int] = {}
                     for vertical in parent.get("parameters", {}).get(
                         "verticals", ["NURSERY", "CHILDRENS_HOME"]
@@ -1263,6 +1265,50 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                     200,
                     reprocess_recruitment_signals(
                         settings, actor=actor, limit=limit, signal_ids=signal_ids
+                    ),
+                )
+            if action == "recruitment-planning-diagnostic" and method == "GET":
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                limit = min(max(int(_query(event, "limit") or "40"), 1), 50)
+                return _response(200, recruitment_planning_diagnostic(settings, limit=limit))
+            if action == "review-triage" and method == "GET":
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                vertical = validate_vertical_filter(_query(event, "vertical") or "ALL")
+                return _response(200, review_triage_summary(settings, vertical=vertical))
+            if action == "review-triage-refusals" and method == "POST":
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                payload = parse_json_payload(_raw_body(event))
+                actor = str(claims.get("sub") or claims.get("username") or "unknown")
+                return _response(
+                    200,
+                    cleanup_refused_planning_signals(
+                        settings,
+                        actor=actor,
+                        limit=min(max(int(payload.get("limit", 2000)), 1), 2500),
+                    ),
+                )
+            if action == "review-triage-safe-approve" and method == "POST":
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                payload = parse_json_payload(_raw_body(event))
+                actor = str(claims.get("sub") or claims.get("username") or "unknown")
+                vertical = validate_vertical_filter(str(payload.get("vertical") or "ALL"))
+                return _response(
+                    200,
+                    safe_agreement_bulk_approve(
+                        settings,
+                        actor=actor,
+                        preview=bool(payload.get("preview", True)),
+                        limit=min(max(int(payload.get("limit", 100)), 1), 100),
+                        threshold=float(payload.get("threshold", 0.95)),
+                        vertical=vertical,
                     ),
                 )
             if action == "care-backfill" and method == "POST":

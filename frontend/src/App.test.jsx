@@ -52,6 +52,18 @@ function listResult(items = [pendingItem], total = items.length) {
   return { items, total, limit: 10, offset: 0 };
 }
 
+const triageResult = {
+  vertical: "NURSERY",
+  pending_buckets: {
+    EXPLICIT_PLANNING_REFUSAL: 2,
+    SAFE_APPROVE_AGREEMENT: 7,
+    DETERMINISTIC_AI_DISAGREE: 3,
+    AI_UNCERTAIN: 4,
+    MANUAL_REVIEW_REQUIRED: 5,
+  },
+  safe_bulk_approval_recommended: false,
+};
+
 describe("admin frontend", () => {
   afterEach(() => cleanup());
 
@@ -109,8 +121,10 @@ describe("admin frontend", () => {
     const nativeConfirm = vi.spyOn(window, "confirm");
     const apiClient = vi.fn()
       .mockResolvedValueOnce(listResult())
+      .mockResolvedValueOnce(triageResult)
       .mockResolvedValueOnce({ signal_id: "signal-1", review_status: "APPROVED" })
-      .mockResolvedValueOnce(listResult([], 0));
+      .mockResolvedValueOnce(listResult([], 0))
+      .mockResolvedValueOnce(triageResult);
     render(<ReviewInboxPage apiClient={apiClient} onNavigate={vi.fn()} />);
     await screen.findByText(pendingItem.title);
     await userEvent.click(screen.getByRole("button", { name: `Actions for ${pendingItem.title}` }));
@@ -177,8 +191,10 @@ describe("admin frontend", () => {
     const second = { ...pendingItem, id: "signal-2", title: "Second pending signal" };
     const apiClient = vi.fn()
       .mockResolvedValueOnce(listResult([pendingItem, second], 2))
+      .mockResolvedValueOnce(triageResult)
       .mockResolvedValueOnce({ updated: 2 })
-      .mockResolvedValueOnce(listResult([], 0));
+      .mockResolvedValueOnce(listResult([], 0))
+      .mockResolvedValueOnce(triageResult);
     render(<ReviewInboxPage apiClient={apiClient} onNavigate={vi.fn()} />);
     await screen.findByText(second.title);
     await userEvent.click(screen.getByRole("checkbox", { name: `Select ${pendingItem.title}` }));
@@ -218,6 +234,53 @@ describe("admin frontend", () => {
     render(<ReviewInboxPage apiClient={apiClient} onNavigate={vi.fn()} />);
     expect(await screen.findByText("Inbox clear")).toBeInTheDocument();
     expect(screen.getByText("There are no pending signals waiting for review.")).toBeInTheDocument();
+  });
+
+  it("shows risk-first review triage buckets without enabling AI rejection", async () => {
+    const apiClient = vi.fn()
+      .mockResolvedValueOnce(listResult())
+      .mockResolvedValueOnce(triageResult);
+    render(<ReviewInboxPage apiClient={apiClient} onNavigate={vi.fn()} />);
+    expect(await screen.findByRole("heading", { name: "Review triage" })).toBeInTheDocument();
+    expect(screen.getByText(/AI rejection remains advisory/)).toBeInTheDocument();
+    expect(screen.getByText(/Rule\/AI disagree/)).toHaveTextContent("3");
+    expect(screen.queryByRole("button", { name: "Approve safe agreement set" })).not.toBeInTheDocument();
+  });
+
+  it("previews and confirms a bounded safe agreement approval", async () => {
+    const evaluatedTriage = {
+      ...triageResult,
+      recommended_safe_threshold: 0.97,
+      safe_bulk_approval_recommended: true,
+    };
+    const apiClient = vi.fn()
+      .mockResolvedValueOnce(listResult())
+      .mockResolvedValueOnce(evaluatedTriage)
+      .mockResolvedValueOnce({ preview: true, batch_count: 12, eligible_total: 19 })
+      .mockResolvedValueOnce({ preview: false, updated: 12 })
+      .mockResolvedValueOnce(listResult([], 0))
+      .mockResolvedValueOnce(evaluatedTriage);
+    render(<ReviewInboxPage apiClient={apiClient} onNavigate={vi.fn()} />);
+    await screen.findByRole("heading", { name: "Review triage" });
+
+    await userEvent.click(screen.getByRole("button", { name: "Preview safe agreement set" }));
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "12 of 19 safe-agreement signals fit the bounded preview."
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Approve safe agreement set" }));
+    expect(screen.getByRole("dialog")).toHaveTextContent("97% threshold");
+    await userEvent.click(
+      within(screen.getByRole("dialog")).getByRole("button", {
+        name: "Approve safe agreement set",
+      })
+    );
+    await waitFor(() => expect(apiClient).toHaveBeenCalledWith(
+      "/admin/review-triage/safe-approve",
+      {
+        method: "POST",
+        body: JSON.stringify({ preview: false, limit: 100, threshold: 0.97, vertical: "NURSERY" }),
+      }
+    ));
   });
 
   it("reviews a signal directly from detail and opens the next pending signal", async () => {
@@ -620,6 +683,7 @@ describe("admin frontend", () => {
     expect(verticalScopedPath("/admin/signals?review_status=PENDING", "NURSERY")).toContain("vertical=NURSERY");
     expect(verticalScopedPath("/admin/opportunities?limit=10", "ALL")).toContain("vertical=ALL");
     expect(verticalScopedPath("/admin/opportunities/recalculate", "CHILDRENS_HOME")).toContain("vertical=CHILDRENS_HOME");
+    expect(verticalScopedPath("/admin/review-triage", "CHILDRENS_HOME")).toContain("vertical=CHILDRENS_HOME");
   });
 
   it("refreshes the pending inbox without changing its pagination state or navigation", async () => {
@@ -628,8 +692,8 @@ describe("admin frontend", () => {
     render(<ReviewInboxPage apiClient={apiClient} onNavigate={onNavigate} />);
     await screen.findByText(pendingItem.title);
     await userEvent.click(screen.getByRole("button", { name: "Refresh data" }));
-    await waitFor(() => expect(apiClient).toHaveBeenCalledTimes(2));
-    expect(apiClient).toHaveBeenLastCalledWith(expect.stringContaining("review_status=PENDING"));
+    await waitFor(() => expect(apiClient).toHaveBeenCalledTimes(4));
+    expect(apiClient).toHaveBeenCalledWith(expect.stringContaining("review_status=PENDING"));
     expect(onNavigate).not.toHaveBeenCalled();
   });
 

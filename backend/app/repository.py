@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -16,6 +17,7 @@ from app.companies_house import (
 from app.config import Settings
 from app.correlation import (
     classify_match,
+    compatible_names,
     normalize_identity,
     preferred_match_reason,
     recruitment_evidence_strength,
@@ -24,6 +26,14 @@ from app.db import connection
 from app.ingestion import NormalizedSignal
 from app.queueing import EnrichmentMessage, send_enrichment_message
 from app.recruitment import recruitment_record_from_signal
+from app.review_triage import (
+    REFUSAL_POLICY_VERSION,
+    SAFE_APPROVAL_MIN_CONFIDENCE,
+    deterministic_review_recommendation,
+    planning_refusal_assessment,
+    review_triage_bucket,
+    safe_approval_candidate,
+)
 from app.verticals import (
     ALL_VERTICALS,
     NURSERY,
@@ -74,9 +84,10 @@ def _resolve_operator_id(conn: Any, name: Any, metadata: dict[str, Any]) -> Any 
     display_name = str(name or "").strip()
     if not display_name:
         return None
-    company_number = str(
-        metadata.get("companies_house_number") or metadata.get("company_number") or ""
-    ).strip() or None
+    company_number = (
+        str(metadata.get("companies_house_number") or metadata.get("company_number") or "").strip()
+        or None
+    )
     website = str(metadata.get("website") or metadata.get("website_url") or "").strip() or None
     identity = normalize_identity(display_name)
     conn.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (f"operator:{identity}",))
@@ -110,9 +121,7 @@ def store_ofsted_urn_enrichment(
     retrieved_at: str,
 ) -> bool:
     """Persist immutable provider-level Ofsted evidence without changing site identity."""
-    database_value = {
-        key: _postgres_text(item) for key, item in value.items()
-    }
+    database_value = {key: _postgres_text(item) for key, item in value.items()}
     with connection(settings) as conn:
         signal = conn.execute(
             """SELECT vertical, source_type, organisation_hint
@@ -124,9 +133,7 @@ def store_ofsted_urn_enrichment(
         if signal[0] != "CHILDRENS_HOME" or signal[1] != "ofsted":
             raise ValueError("Ofsted enrichment references an incompatible signal")
         observed_name = str(signal[2] or "").strip()
-        provider_name = _validated_organisation_name(
-            database_value.get("registered_provider_name")
-        )
+        provider_name = _validated_organisation_name(database_value.get("registered_provider_name"))
         operator_id = _resolve_operator_id(conn, observed_name or provider_name, {})
         if operator_id:
             for alias, source in (
@@ -1322,6 +1329,712 @@ def review_signals_bulk(
     }
 
 
+def _auto_reject_refused_planning_with_connection(
+    conn: Any,
+    signal_id: str,
+    metadata: dict[str, Any] | None,
+    *,
+    actor: str,
+) -> bool:
+    assessment = planning_refusal_assessment(metadata)
+    if not assessment.refused:
+        return False
+    reason = "Automatically rejected — planning permission refused by council."
+    review_facts = {
+        "automatic_review": {
+            "status": "REJECTED",
+            "reason": reason,
+            "policy_version": REFUSAL_POLICY_VERSION,
+            "planning_decision": assessment.value,
+            "decision_date": assessment.decision_date,
+        }
+    }
+    row = conn.execute(
+        """
+        UPDATE signal_enrichments se
+        SET review_status = 'REJECTED', reviewed_by = %s, reviewed_at = now(),
+            extracted_facts = se.extracted_facts || %s, updated_at = now()
+        FROM raw_signals rs
+        WHERE se.raw_signal_id = rs.id AND rs.id = %s
+          AND rs.source_type = 'planning' AND se.review_status = 'PENDING'
+        RETURNING rs.vertical
+        """,
+        (actor, Jsonb(review_facts), signal_id),
+    ).fetchone()
+    if row:
+        conn.execute(
+            """
+            INSERT INTO admin_audit_events
+                (action, actor, target_type, target_count, details, vertical)
+            VALUES ('PLANNING_REFUSAL_AUTO_REJECT', %s, 'signal', 1, %s, %s)
+            """,
+            (
+                actor,
+                Jsonb(
+                    {
+                        "signal_id": signal_id,
+                        "reason": reason,
+                        "policy_version": REFUSAL_POLICY_VERSION,
+                        "planning_decision": assessment.value,
+                        "decision_date": assessment.decision_date,
+                    }
+                ),
+                row[0],
+            ),
+        )
+    return row is not None
+
+
+def auto_reject_refused_planning(
+    settings: Settings,
+    signal_id: str,
+    metadata: dict[str, Any] | None,
+    *,
+    actor: str = "system:planning-refusal-policy-v1",
+) -> bool:
+    """Reject one pending signal from an explicit structured council refusal only."""
+    with connection(settings) as conn:
+        updated = _auto_reject_refused_planning_with_connection(
+            conn, signal_id, metadata, actor=actor
+        )
+        conn.commit()
+    return updated
+
+
+def cleanup_refused_planning_signals(
+    settings: Settings, *, actor: str, limit: int = 2000
+) -> dict[str, Any]:
+    """Boundedly remove explicit structured refusals from the pending review inbox."""
+    bounded_limit = min(max(int(limit), 1), 2500)
+    with connection(settings) as conn:
+        rows = conn.execute(
+            """
+            SELECT rs.id, rs.metadata, rs.vertical, se.review_status
+            FROM raw_signals rs
+            JOIN signal_enrichments se ON se.raw_signal_id = rs.id
+            WHERE rs.source_type = 'planning' AND se.review_status = 'PENDING'
+            ORDER BY rs.discovered_at DESC, rs.id DESC
+            LIMIT %s
+            """,
+            (bounded_limit,),
+        ).fetchall()
+        reviewed_rows = conn.execute(
+            """
+            SELECT rs.metadata
+            FROM raw_signals rs
+            JOIN signal_enrichments se ON se.raw_signal_id = rs.id
+            WHERE rs.source_type = 'planning'
+              AND se.review_status IN ('APPROVED', 'REJECTED')
+            """
+        ).fetchall()
+    refused = [
+        (str(row[0]), row[1] or {}, str(row[2]))
+        for row in rows
+        if planning_refusal_assessment(row[1]).refused
+    ]
+    ambiguous_counts: dict[str, int] = {}
+    terminal_terms = {"WITHDRAWN", "INVALID", "RETURNED", "LAPSED", "EXPIRED"}
+    for _, raw_metadata, *_ in rows:
+        metadata = raw_metadata if isinstance(raw_metadata, dict) else {}
+        provider_record = metadata.get("provider_record")
+        provider_record = provider_record if isinstance(provider_record, dict) else {}
+        provider_decision = provider_record.get("decision")
+        provider_decision = provider_decision if isinstance(provider_decision, dict) else {}
+        values = [
+            metadata.get("decision"),
+            metadata.get("planning_status"),
+            provider_record.get("status"),
+            provider_decision.get("outcome"),
+        ]
+        for value in values:
+            normalized = str(value or "").upper().strip(" .:-")
+            if normalized in terminal_terms:
+                ambiguous_counts[normalized] = ambiguous_counts.get(normalized, 0) + 1
+                break
+    updated = 0
+    errors = 0
+    with connection(settings) as conn:
+        for signal_id, metadata, _vertical in refused:
+            try:
+                with conn.transaction():
+                    updated += int(
+                        _auto_reject_refused_planning_with_connection(
+                            conn,
+                            signal_id,
+                            metadata,
+                            actor="system:planning-refusal-policy-v1",
+                        )
+                    )
+            except Exception:
+                errors += 1
+        conn.execute(
+            """
+            INSERT INTO admin_audit_events
+                (action, actor, target_type, target_count, details)
+            VALUES ('PLANNING_REFUSAL_CLEANUP', %s, 'signal', %s, %s)
+            """,
+            (
+                actor,
+                updated,
+                Jsonb(
+                    {
+                        "policy_version": REFUSAL_POLICY_VERSION,
+                        "inspected": len(rows),
+                        "explicit_refusals_found": len(refused),
+                        "auto_rejected": updated,
+                        "errors": errors,
+                    }
+                ),
+            ),
+        )
+        conn.commit()
+    refused_ids = [item[0] for item in refused]
+    associated_drafts = unsupported_drafts = 0
+    if refused_ids:
+        with connection(settings) as conn:
+            associated_drafts = conn.execute(
+                """
+                SELECT count(DISTINCT o.id)
+                FROM opportunities o
+                JOIN opportunity_signals os ON os.opportunity_id = o.id
+                WHERE os.raw_signal_id = ANY(%s::uuid[]) AND os.status = 'ACTIVE'
+                  AND o.publication_status = 'DRAFT'
+                """,
+                (refused_ids,),
+            ).fetchone()[0]
+            unsupported_drafts = conn.execute(
+                """
+                SELECT count(DISTINCT o.id)
+                FROM opportunities o
+                JOIN opportunity_signals refused_os ON refused_os.opportunity_id = o.id
+                WHERE refused_os.raw_signal_id = ANY(%s::uuid[])
+                  AND refused_os.status = 'ACTIVE' AND o.publication_status = 'DRAFT'
+                  AND NOT EXISTS (
+                      SELECT 1 FROM opportunity_signals support_os
+                      JOIN signal_enrichments support_se
+                        ON support_se.raw_signal_id = support_os.raw_signal_id
+                      WHERE support_os.opportunity_id = o.id
+                        AND support_os.status = 'ACTIVE'
+                        AND support_se.review_status <> 'REJECTED'
+                  )
+                """,
+                (refused_ids,),
+            ).fetchone()[0]
+    return {
+        "policy_version": REFUSAL_POLICY_VERSION,
+        "pending_planning_inspected": len(rows),
+        "inspection_limit": bounded_limit,
+        "explicit_refusals_found": len(refused),
+        "auto_rejected": updated,
+        "skipped_ambiguous": sum(ambiguous_counts.values()),
+        "ambiguous_statuses": ambiguous_counts,
+        "already_reviewed": sum(
+            1 for row in reviewed_rows if planning_refusal_assessment(row[0]).refused
+        ),
+        "associated_draft_opportunities": associated_drafts,
+        "unsupported_draft_opportunities": unsupported_drafts,
+        "errors": errors,
+    }
+
+
+def _review_triage_rows(
+    conn: Any, review_status: str, vertical: str = "ALL"
+) -> list[dict[str, Any]]:
+    vertical = validate_vertical_filter(vertical)
+    vertical_clause = "" if vertical == "ALL" else " AND rs.vertical = %s"
+    params: list[Any] = [review_status]
+    if vertical != "ALL":
+        params.append(vertical)
+    rows = conn.execute(
+        f"""
+        SELECT rs.id, rs.vertical, rs.source_type, rs.metadata, se.review_status,
+               se.extracted_facts, ai.status, ai.recommendation, ai.confidence,
+               se.reviewed_by, se.reviewed_at
+        FROM raw_signals rs
+        JOIN signal_enrichments se ON se.raw_signal_id = rs.id
+        LEFT JOIN LATERAL (
+            SELECT status, recommendation, confidence
+            FROM signal_ai_reviews
+            WHERE raw_signal_id = rs.id
+            ORDER BY created_at DESC LIMIT 1
+        ) ai ON TRUE
+        WHERE rs.source_type = 'planning'
+          AND se.review_status = %s
+          {vertical_clause}
+        ORDER BY rs.discovered_at DESC, rs.id DESC
+        LIMIT 5000
+        """,
+        params,
+    ).fetchall()
+    fields = (
+        "id",
+        "vertical",
+        "source_type",
+        "metadata",
+        "review_status",
+        "extracted_facts",
+        "ai_status",
+        "ai_recommendation",
+        "ai_confidence",
+        "reviewed_by",
+        "reviewed_at",
+    )
+    return [dict(zip(fields, row)) for row in rows]
+
+
+def review_triage_summary(settings: Settings, *, vertical: str = "ALL") -> dict[str, Any]:
+    """Evaluate human labels and return bounded pending review buckets."""
+    vertical = validate_vertical_filter(vertical)
+    with connection(settings) as conn:
+        reviewed_all = _review_triage_rows(conn, "APPROVED", vertical) + _review_triage_rows(
+            conn, "REJECTED", vertical
+        )
+        pending = _review_triage_rows(conn, "PENDING", vertical)
+    reviewed = [
+        item
+        for item in reviewed_all
+        if not str(item.get("reviewed_by") or "").startswith("system:")
+    ]
+
+    def metrics_for(vertical: str) -> dict[str, Any]:
+        items = [item for item in reviewed if item["vertical"] == vertical]
+        ai_items = [
+            item
+            for item in items
+            if item["ai_status"] == "SUCCEEDED"
+            and item["ai_recommendation"] in {"APPROVE", "REJECT"}
+        ]
+        deterministic_items = [
+            item
+            for item in items
+            if deterministic_review_recommendation(item["extracted_facts"]) in {"APPROVE", "REJECT"}
+        ]
+        ai_agree = sum(
+            (item["ai_recommendation"] == "APPROVE") == (item["review_status"] == "APPROVED")
+            for item in ai_items
+        )
+        deterministic_agree = sum(
+            (deterministic_review_recommendation(item["extracted_facts"]) == "APPROVE")
+            == (item["review_status"] == "APPROVED")
+            for item in deterministic_items
+        )
+        ai_deterministic = [
+            item
+            for item in ai_items
+            if deterministic_review_recommendation(item["extracted_facts"]) in {"APPROVE", "REJECT"}
+        ]
+        threshold_tradeoff = []
+        for threshold in (0.9, 0.95, 0.97, 0.99):
+            cohort = [
+                item
+                for item in ai_items
+                if item["ai_recommendation"] == "APPROVE"
+                and deterministic_review_recommendation(item["extracted_facts"]) == "APPROVE"
+                and not planning_refusal_assessment(item["metadata"]).refused
+                and float(item["ai_confidence"] or 0) >= threshold
+            ]
+            errors = sum(item["review_status"] != "APPROVED" for item in cohort)
+            threshold_tradeoff.append(
+                {"threshold": threshold, "cohort_size": len(cohort), "errors": errors}
+            )
+        return {
+            "human_reviewed": len(items),
+            "ai_evaluated": len(ai_items),
+            "ai_agreement_count": ai_agree,
+            "ai_agreement_rate": ai_agree / len(ai_items) if ai_items else None,
+            "deterministic_evaluated": len(deterministic_items),
+            "deterministic_agreement_count": deterministic_agree,
+            "deterministic_agreement_rate": (
+                deterministic_agree / len(deterministic_items) if deterministic_items else None
+            ),
+            "ai_deterministic_agreement_rate": (
+                sum(
+                    item["ai_recommendation"]
+                    == deterministic_review_recommendation(item["extracted_facts"])
+                    for item in ai_deterministic
+                )
+                / len(ai_deterministic)
+                if ai_deterministic
+                else None
+            ),
+            "false_approve_count": sum(
+                item["ai_recommendation"] == "APPROVE" and item["review_status"] == "REJECTED"
+                for item in ai_items
+            ),
+            "false_reject_count": sum(
+                item["ai_recommendation"] == "REJECT" and item["review_status"] == "APPROVED"
+                for item in ai_items
+            ),
+            "disagreement_count": sum(
+                item["ai_recommendation"]
+                != deterministic_review_recommendation(item["extracted_facts"])
+                for item in ai_deterministic
+            ),
+            "threshold_tradeoff": threshold_tradeoff,
+        }
+
+    combined_tradeoff = []
+    reviewed_ai = [
+        item
+        for item in reviewed
+        if item["ai_status"] == "SUCCEEDED" and item["ai_recommendation"] in {"APPROVE", "REJECT"}
+    ]
+    for threshold in (0.95, 0.97, 0.99):
+        cohort = [
+            item
+            for item in reviewed_ai
+            if item["ai_recommendation"] == "APPROVE"
+            and deterministic_review_recommendation(item["extracted_facts"]) == "APPROVE"
+            and not planning_refusal_assessment(item["metadata"]).refused
+            and float(item["ai_confidence"] or 0) >= threshold
+        ]
+        errors = sum(item["review_status"] != "APPROVED" for item in cohort)
+        combined_tradeoff.append(
+            {"threshold": threshold, "cohort_size": len(cohort), "errors": errors}
+        )
+    safe_threshold = next(
+        (
+            item["threshold"]
+            for item in combined_tradeoff
+            if item["cohort_size"] >= 20 and item["errors"] == 0
+        ),
+        None,
+    )
+    threshold = float(safe_threshold or SAFE_APPROVAL_MIN_CONFIDENCE)
+    buckets: dict[str, int] = {}
+    safe_ids: list[str] = []
+    for item in pending:
+        bucket = review_triage_bucket(
+            source_type=item["source_type"],
+            review_status=item["review_status"],
+            metadata=item["metadata"],
+            extracted_facts=item["extracted_facts"],
+            ai_status=item["ai_status"],
+            ai_recommendation=item["ai_recommendation"],
+            ai_confidence=(float(item["ai_confidence"]) if item["ai_confidence"] else None),
+            threshold=threshold,
+        )
+        buckets[bucket] = buckets.get(bucket, 0) + 1
+        if bucket == "SAFE_APPROVE_AGREEMENT":
+            safe_ids.append(str(item["id"]))
+    return {
+        "policy_version": "review-triage-v1",
+        "vertical": vertical,
+        "reviewed_sample_size": len(reviewed),
+        "automatic_reviewed_excluded": len(reviewed_all) - len(reviewed),
+        "verticals": {
+            "NURSERY": metrics_for("NURSERY"),
+            "CHILDRENS_HOME": metrics_for("CHILDRENS_HOME"),
+        },
+        "combined_threshold_tradeoff": combined_tradeoff,
+        "recommended_safe_threshold": safe_threshold,
+        "safe_bulk_approval_recommended": safe_threshold is not None,
+        "pending_planning_evaluated": len(pending),
+        "pending_buckets": buckets,
+        "safe_pending_count": len(safe_ids),
+    }
+
+
+def safe_agreement_bulk_approve(
+    settings: Settings,
+    *,
+    actor: str,
+    preview: bool,
+    limit: int = 100,
+    threshold: float = SAFE_APPROVAL_MIN_CONFIDENCE,
+    vertical: str = "ALL",
+) -> dict[str, Any]:
+    """Preview or apply a bounded, evaluated deterministic+AI agreement cohort."""
+    bounded_limit = min(max(int(limit), 1), 100)
+    vertical = validate_vertical_filter(vertical)
+    summary = review_triage_summary(settings, vertical=vertical)
+    recommended = summary.get("recommended_safe_threshold")
+    if threshold < SAFE_APPROVAL_MIN_CONFIDENCE:
+        raise ValueError("safe approval threshold is below the policy minimum")
+    if not preview and recommended is None:
+        raise ValueError("reviewed labels do not justify safe bulk approval")
+    if not preview and threshold < float(recommended):
+        raise ValueError("threshold is below the evaluated safe threshold")
+    with connection(settings) as conn:
+        pending = _review_triage_rows(conn, "PENDING", vertical)
+        candidates = [
+            item
+            for item in pending
+            if safe_approval_candidate(
+                source_type=item["source_type"],
+                review_status=item["review_status"],
+                metadata=item["metadata"],
+                extracted_facts=item["extracted_facts"],
+                ai_status=item["ai_status"],
+                ai_recommendation=item["ai_recommendation"],
+                ai_confidence=(float(item["ai_confidence"]) if item["ai_confidence"] else None),
+                threshold=threshold,
+            )
+        ][:bounded_limit]
+        candidate_ids = [str(item["id"]) for item in candidates]
+        if preview:
+            return {
+                "preview": True,
+                "eligible_total": summary["safe_pending_count"],
+                "batch_count": len(candidate_ids),
+                "limit": bounded_limit,
+                "threshold": threshold,
+                "signal_ids": candidate_ids,
+                "execution_allowed": recommended is not None,
+                "recommended_safe_threshold": recommended,
+                "vertical": vertical,
+            }
+        rows = conn.execute(
+            """
+            UPDATE signal_enrichments
+            SET review_status = 'APPROVED', reviewed_by = %s, reviewed_at = now(),
+                extracted_facts = extracted_facts || %s, updated_at = now()
+            WHERE raw_signal_id = ANY(%s::uuid[]) AND review_status = 'PENDING'
+            RETURNING raw_signal_id
+            """,
+            (
+                actor,
+                Jsonb(
+                    {
+                        "automatic_review": {
+                            "status": "APPROVED",
+                            "reason": (
+                                "Admin-approved deterministic and high-confidence AI agreement set."
+                            ),
+                            "policy_version": "safe-agreement-v1",
+                            "threshold": threshold,
+                        }
+                    }
+                ),
+                candidate_ids,
+            ),
+        ).fetchall()
+        updated_ids = [str(row[0]) for row in rows]
+        conn.execute(
+            """
+            INSERT INTO admin_audit_events (action, actor, target_type, target_count, details)
+            VALUES ('SAFE_AGREEMENT_BULK_APPROVE', %s, 'signal', %s, %s)
+            """,
+            (
+                actor,
+                len(updated_ids),
+                Jsonb(
+                    {
+                        "threshold": threshold,
+                        "requested_count": len(candidate_ids),
+                        "updated_count": len(updated_ids),
+                        "signal_ids": updated_ids,
+                        "vertical": vertical,
+                    }
+                ),
+            ),
+        )
+        conn.commit()
+    return {
+        "preview": False,
+        "threshold": threshold,
+        "requested": len(candidate_ids),
+        "updated": len(updated_ids),
+        "signal_ids": updated_ids,
+        "vertical": vertical,
+    }
+
+
+def recruitment_planning_diagnostic(settings: Settings, *, limit: int = 40) -> dict[str, Any]:
+    """Explain, without linking, why relevant Care recruitment remains unmatched."""
+    bounded_limit = min(max(int(limit), 1), 50)
+    with connection(settings) as conn:
+        recruitment_rows = conn.execute(
+            """
+            SELECT rs.id, rs.title, rs.raw_text, rs.location_hint, rs.organisation_hint,
+                   rs.metadata, rs.discovered_at, se.extracted_facts
+            FROM raw_signals rs
+            JOIN signal_enrichments se ON se.raw_signal_id = rs.id
+            WHERE rs.vertical = 'CHILDRENS_HOME' AND rs.source_type = 'recruitment'
+              AND se.review_status <> 'REJECTED'
+              AND COALESCE(se.extracted_facts->>'recruitment_relevance', '')
+                  IN ('RELEVANT_CHANGE', 'RELEVANT_ROUTINE')
+              AND NOT EXISTS (
+                  SELECT 1 FROM opportunity_signals os
+                  WHERE os.raw_signal_id = rs.id AND os.status = 'ACTIVE'
+              )
+            ORDER BY rs.discovered_at DESC, rs.id DESC
+            LIMIT %s
+            """,
+            (bounded_limit,),
+        ).fetchall()
+        planning_rows = conn.execute(
+            """
+            SELECT rs.id, rs.title, rs.location_hint, rs.organisation_hint,
+                   rs.metadata, rs.discovered_at, se.extracted_facts, rs.source_url
+            FROM raw_signals rs
+            JOIN signal_enrichments se ON se.raw_signal_id = rs.id
+            WHERE rs.vertical = 'CHILDRENS_HOME' AND rs.source_type = 'planning'
+              AND se.review_status <> 'REJECTED'
+            ORDER BY rs.discovered_at DESC, rs.id DESC
+            LIMIT 2500
+            """
+        ).fetchall()
+
+    recruitment_fields = (
+        "id",
+        "title",
+        "raw_text",
+        "location_hint",
+        "organisation_hint",
+        "metadata",
+        "discovered_at",
+        "extracted_facts",
+    )
+    planning_fields = (
+        "id",
+        "title",
+        "location_hint",
+        "organisation_hint",
+        "metadata",
+        "discovered_at",
+        "extracted_facts",
+        "source_url",
+    )
+    recruitment = [dict(zip(recruitment_fields, row)) for row in recruitment_rows]
+    planning = [dict(zip(planning_fields, row)) for row in planning_rows]
+
+    def postcode(item: dict[str, Any]) -> str:
+        metadata = item.get("metadata") or {}
+        value = metadata.get("postcode") or ""
+        if not value:
+            match = re.search(
+                r"\b[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2}\b",
+                str(item.get("location_hint") or "").upper(),
+            )
+            value = match.group(0) if match else ""
+        return str(value).upper().replace(" ", "")
+
+    def locality(item: dict[str, Any]) -> str:
+        metadata = item.get("metadata") or {}
+        authority = metadata.get("authority")
+        authority_name = authority.get("name") if isinstance(authority, dict) else None
+        return normalize_identity(
+            metadata.get("locality")
+            or metadata.get("town")
+            or metadata.get("council")
+            or authority_name
+        )
+
+    results = []
+    counts: dict[str, int] = {}
+    for job in recruitment:
+        job_postcode = postcode(job)
+        job_outward = job_postcode[:-3] if len(job_postcode) > 3 else job_postcode
+        job_locality = locality(job)
+        job_name = job.get("organisation_hint") or job.get("title")
+        candidates = []
+        for plan in planning:
+            plan_postcode = postcode(plan)
+            plan_outward = plan_postcode[:-3] if len(plan_postcode) > 3 else plan_postcode
+            plan_locality = locality(plan)
+            plan_name = (
+                plan.get("organisation_hint")
+                or (plan.get("metadata") or {}).get("applicant")
+                or plan.get("title")
+            )
+            exact_postcode = bool(job_postcode and plan_postcode == job_postcode)
+            outward_match = bool(job_outward and plan_outward == job_outward)
+            locality_match = bool(job_locality and plan_locality == job_locality)
+            name_match = compatible_names(job_name, plan_name)
+            if (
+                exact_postcode
+                or (outward_match and (locality_match or name_match))
+                or (locality_match and name_match)
+            ):
+                candidates.append(
+                    {
+                        **plan,
+                        "postcode": plan_postcode,
+                        "exact_postcode": exact_postcode,
+                        "outward_match": outward_match,
+                        "locality_match": locality_match,
+                        "name_match": name_match,
+                        "candidate_name": plan_name,
+                    }
+                )
+        exact = [item for item in candidates if item["exact_postcode"]]
+        stale = [
+            item
+            for item in candidates
+            if any(
+                term
+                in normalize_identity(
+                    f"{item.get('title')} {(item.get('metadata') or {}).get('procedure')}"
+                )
+                for term in (
+                    "non material amendment",
+                    "condition discharge",
+                    "discharge of condition",
+                )
+            )
+        ]
+        if not candidates:
+            category = (
+                "POSTCODE_MISSING_OR_MISMATCHED"
+                if not job_postcode and job_locality
+                else "NO_RELEVANT_PLANNING_FOUND"
+            )
+        elif stale and len(stale) == len(candidates):
+            category = "PLANNING_EXISTS_BUT_NON_MATERIAL/STALE"
+        elif len(candidates) > 1 and not exact:
+            category = "MULTIPLE_POSSIBLE_SITES"
+        elif exact and any(item["name_match"] for item in exact):
+            category = "SAME_PROJECT_CLEAR_TO_HUMAN_BUT_MATCHER_MISSED"
+        elif exact:
+            plan_applicant = (exact[0].get("metadata") or {}).get("applicant")
+            category = (
+                "APPLICANT_IS_DIFFERENT_ENTITY"
+                if plan_applicant and job.get("organisation_hint")
+                else "OPERATOR_NAME_MISMATCH"
+            )
+        elif not job_postcode:
+            category = "LOCATION_TOO_COARSE"
+        elif candidates:
+            category = "POSSIBLE_PROJECT_BUT_IDENTITY_TOO_WEAK"
+        else:
+            category = "OTHER"
+        counts[category] = counts.get(category, 0) + 1
+        results.append(
+            {
+                "recruitment_signal_id": str(job["id"]),
+                "title": job["title"],
+                "operator": job.get("organisation_hint"),
+                "location": job.get("location_hint"),
+                "postcode": job_postcode or None,
+                "relevance": (job.get("extracted_facts") or {}).get("recruitment_relevance"),
+                "diagnostic_outcome": category,
+                "candidate_count": len(candidates),
+                "planning_candidates": [
+                    {
+                        "signal_id": str(item["id"]),
+                        "title": item["title"],
+                        "location": item.get("location_hint"),
+                        "postcode": item["postcode"] or None,
+                        "applicant": (item.get("metadata") or {}).get("applicant"),
+                        "exact_postcode": item["exact_postcode"],
+                        "locality_match": item["locality_match"],
+                        "name_match": item["name_match"],
+                        "source_url": item.get("source_url"),
+                    }
+                    for item in candidates[:5]
+                ],
+            }
+        )
+    return {
+        "sample_size": len(results),
+        "requested_limit": bounded_limit,
+        "category_counts": counts,
+        "items": results,
+        "read_only": True,
+    }
+
+
 def save_enrichment(settings: Settings, candidate: dict[str, Any]) -> bool:
     with connection(settings) as conn:
         row = conn.execute(
@@ -1460,8 +2173,9 @@ def correlate_signal(
                ) linked ON TRUE
                  WHERE o.review_status NOT IN ('MERGED', 'REJECTED')
                    AND o.vertical = %s
-                 ORDER BY o.updated_at DESC"""
-            , (signal_vertical,)).fetchall()
+                 ORDER BY o.updated_at DESC""",
+            (signal_vertical,),
+        ).fetchall()
         match = None
         match_reason = None
         uncertain_matches: list[tuple[Any, float, str]] = []
@@ -1494,14 +2208,9 @@ def correlate_signal(
             for row in existing:
                 comparison = classify_match(postcode, name, row[6], row[7] or row[1])
                 operator_comparison = classify_match(postcode, operator, row[6], row[7])
-                if (
-                    comparison.outcome == "UNCERTAIN"
-                    or operator_comparison.outcome == "UNCERTAIN"
-                ):
+                if comparison.outcome == "UNCERTAIN" or operator_comparison.outcome == "UNCERTAIN":
                     uncertain = (
-                        comparison
-                        if comparison.outcome == "UNCERTAIN"
-                        else operator_comparison
+                        comparison if comparison.outcome == "UNCERTAIN" else operator_comparison
                     )
                     uncertain_matches.append((row[0], uncertain.confidence, uncertain.reason))
                 if comparison.outcome == "EXACT" or operator_comparison.outcome == "EXACT":
@@ -2115,7 +2824,11 @@ def recalculate_opportunity_creation(
 
 
 def list_opportunities(
-    settings: Settings, *, limit: int, offset: int, search: str | None = None,
+    settings: Settings,
+    *,
+    limit: int,
+    offset: int,
+    search: str | None = None,
     vertical: str | None = None,
 ) -> dict[str, Any]:
     vertical = validate_vertical_filter(vertical)
@@ -2407,9 +3120,7 @@ def list_organisation_enrichment_candidates(
                         else None
                     ),
                     "aliases": [
-                        str(alias[0]).strip()
-                        for alias in aliases
-                        if str(alias[0] or "").strip()
+                        str(alias[0]).strip() for alias in aliases if str(alias[0] or "").strip()
                     ],
                 }
             )
@@ -2464,10 +3175,21 @@ def organisation_detail(settings: Settings, operator_id: str) -> dict[str, Any] 
             (operator_id,),
         ).fetchall()
     fields = (
-        "id", "name", "legal_name", "companies_house_number", "website_url",
-        "company_status", "incorporation_date", "company_type", "registered_office",
-        "sic_codes", "companies_house_url", "companies_house_refreshed_at",
-        "resolution_outcome", "resolution_confidence", "enrichment_provenance",
+        "id",
+        "name",
+        "legal_name",
+        "companies_house_number",
+        "website_url",
+        "company_status",
+        "incorporation_date",
+        "company_type",
+        "registered_office",
+        "sic_codes",
+        "companies_house_url",
+        "companies_house_refreshed_at",
+        "resolution_outcome",
+        "resolution_confidence",
+        "enrichment_provenance",
     )
     result = dict(zip(fields, operator))
     result["aliases"] = [
@@ -2475,16 +3197,24 @@ def organisation_detail(settings: Settings, operator_id: str) -> dict[str, Any] 
     ]
     result["opportunities"] = [
         {
-            "id": row[0], "name": row[1], "vertical": row[2],
-            "change_type": row[3], "lifecycle_stage": row[4], "confidence": row[5],
+            "id": row[0],
+            "name": row[1],
+            "vertical": row[2],
+            "change_type": row[3],
+            "lifecycle_stage": row[4],
+            "confidence": row[5],
         }
         for row in opportunities
     ]
     result["evidence"] = [
         {
-            "provider": row[0], "external_id": row[1], "status": row[2],
-            "resolution_outcome": row[3], "resolution_confidence": row[4],
-            "reason": row[5], "retrieved_at": row[6],
+            "provider": row[0],
+            "external_id": row[1],
+            "status": row[2],
+            "resolution_outcome": row[3],
+            "resolution_confidence": row[4],
+            "reason": row[5],
+            "retrieved_at": row[6],
         }
         for row in evidence
     ]
@@ -2515,9 +3245,7 @@ def organisation_detail(settings: Settings, operator_id: str) -> dict[str, Any] 
     return result
 
 
-def list_organisation_match_reviews(
-    settings: Settings, *, limit: int = 25
-) -> list[dict[str, Any]]:
+def list_organisation_match_reviews(settings: Settings, *, limit: int = 25) -> list[dict[str, Any]]:
     with connection(settings) as conn:
         rows = conn.execute(
             """SELECT r.id, r.operator_id, o.name, r.provider, r.query_name,
@@ -2618,8 +3346,7 @@ def list_organisation_match_reviews(
             source_urns = {
                 str((signal[7] or {}).get("ofsted_urn") or "").strip().upper()
                 for signal in signals
-                if signal[3] == "ofsted"
-                and str((signal[7] or {}).get("ofsted_urn") or "").strip()
+                if signal[3] == "ofsted" and str((signal[7] or {}).get("ofsted_urn") or "").strip()
             }
             candidates = row[5] or []
             if ofsted_items:
@@ -2628,38 +3355,28 @@ def list_organisation_match_reviews(
                 comparison_context = OrganisationCandidate(
                     operator_id=str(row[1]),
                     name=str(row[4] or row[2]),
-                    locality=(source_signal[7] or {}).get("town")
-                    if source_signal
-                    else None,
-                    postcode=(source_signal[7] or {}).get("postcode")
-                    if source_signal
-                    else None,
+                    locality=(source_signal[7] or {}).get("town") if source_signal else None,
+                    postcode=(source_signal[7] or {}).get("postcode") if source_signal else None,
                     provider_registered_name=evidence.get("registered_provider_name"),
-                    provider_registered_locality=evidence.get(
-                        "provider_registered_locality"
-                    ),
-                    provider_registered_postcode=evidence.get(
-                        "provider_registered_postcode"
-                    ),
-                    provider_registered_address=evidence.get(
-                        "provider_registered_address"
-                    ),
+                    provider_registered_locality=evidence.get("provider_registered_locality"),
+                    provider_registered_postcode=evidence.get("provider_registered_postcode"),
+                    provider_registered_address=evidence.get("provider_registered_address"),
                     provider_registration_date=(
                         str(evidence["registration_date"])
                         if evidence.get("registration_date")
                         else None
                     ),
                 )
-                candidates = rank_company_candidates([
-                    {
-                        **compare_company_candidate(comparison_context, candidate),
-                        "selection_source": candidate.get(
-                            "selection_source", "SUGGESTED"
-                        ),
-                    }
-                    for candidate in candidates
-                    if isinstance(candidate, dict)
-                ])
+                candidates = rank_company_candidates(
+                    [
+                        {
+                            **compare_company_candidate(comparison_context, candidate),
+                            "selection_source": candidate.get("selection_source", "SUGGESTED"),
+                        }
+                        for candidate in candidates
+                        if isinstance(candidate, dict)
+                    ]
+                )
             results.append(
                 {
                     "id": row[0],
@@ -2673,9 +3390,7 @@ def list_organisation_match_reviews(
                     "source_context": {
                         "observed_name": row[4],
                         "website": operator[2] if operator else None,
-                        "aliases": [
-                            {"alias": alias[0], "source": alias[1]} for alias in aliases
-                        ],
+                        "aliases": [{"alias": alias[0], "source": alias[1]} for alias in aliases],
                         "verticals": sorted(
                             {signal[2] for signal in signals}
                             | {opportunity[2] for opportunity in opportunities}
@@ -3055,18 +3770,20 @@ def opportunity_detail(settings: Settings, opportunity_id: str) -> dict[str, Any
         "signals": [dict(zip(fields, row)) for row in rows],
         "organisation_evidence": [
             {
-                "provider": row[0], "external_id": row[1], "status": row[2],
-                "resolution_outcome": row[3], "resolution_confidence": row[4],
-                "reason": row[5], "retrieved_at": row[6],
+                "provider": row[0],
+                "external_id": row[1],
+                "status": row[2],
+                "resolution_outcome": row[3],
+                "resolution_confidence": row[4],
+                "reason": row[5],
+                "retrieved_at": row[6],
             }
             for row in organisation_evidence
         ],
     }
 
 
-def _cleanup_match_reviews(
-    settings: Settings, *, limit: int, actor: str
-) -> dict[str, int]:
+def _cleanup_match_reviews(settings: Settings, *, limit: int, actor: str) -> dict[str, int]:
     """Close bounded review suggestions invalidated by consolidation or linking."""
     closed_superseded = 0
     closed_linked = 0

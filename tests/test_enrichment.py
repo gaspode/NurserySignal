@@ -187,3 +187,38 @@ def test_worker_processes_valid_message(monkeypatch) -> None:
     result = handler({"Records": [{"messageId": "good-1", "body": json.dumps(message)}]}, None)
     assert result == {"batchItemFailures": []}
     assert saved[0]["raw_signal_id"] == raw["id"]
+
+
+def test_worker_auto_rejects_structured_refusal_without_correlation(monkeypatch) -> None:
+    raw = raw_signal("Change of use to a children's home.")
+    raw["metadata"] = {
+        "decision": "Permission refused",
+        "decision_date": "2026-09-12",
+    }
+    message = {
+        "message_version": "1.0",
+        "signal_id": str(raw["id"]),
+        "schema_version": "1.0",
+        "evidence_bucket": "evidence",
+        "evidence_key": "signals/test/refused.json",
+        "queued_at": "2026-09-24T08:00:00Z",
+    }
+    settings = type("Settings", (), {"database_url": "configured", "db_secret_arn": None})()
+    rejected = []
+    monkeypatch.setattr("app.worker.Settings.from_env", lambda: settings)
+    monkeypatch.setattr("app.worker.get_raw_signal", lambda *_: raw)
+    monkeypatch.setattr("app.worker.save_enrichment", lambda *_: True)
+    monkeypatch.setattr(
+        "app.worker.auto_reject_refused_planning",
+        lambda _, signal_id, metadata: rejected.append((signal_id, metadata)) or True,
+    )
+
+    def unexpected_correlation(*args):
+        raise AssertionError("refused planning signal must not be correlated")
+
+    monkeypatch.setattr("app.worker.correlate_signal", unexpected_correlation)
+
+    result = handler({"Records": [{"messageId": "refused-1", "body": json.dumps(message)}]}, None)
+
+    assert result == {"batchItemFailures": []}
+    assert rejected == [(str(raw["id"]), raw["metadata"])]
