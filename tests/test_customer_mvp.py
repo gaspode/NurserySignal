@@ -393,6 +393,41 @@ def test_pilot_inventory_returns_customer_preview_without_raw_evidence(monkeypat
     assert "raw_text" not in json.dumps(result)
 
 
+def test_pilot_inventory_publication_filter_is_bounded_and_site_safe(monkeypatch) -> None:
+    executed = []
+
+    class Cursor:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def fetchall(self):
+            return self.rows
+
+    class Connection:
+        def execute(self, sql, params=None):
+            executed.append((sql, params))
+            return Cursor([])
+
+    @contextmanager
+    def fake_connection(_settings):
+        yield Connection()
+
+    monkeypatch.setattr("app.customer.connection", fake_connection)
+    result = pilot_curation_inventory(
+        SimpleNamespace(), limit=999, publication_status="published"
+    )
+    assert result == {"count": 0, "limit": 100, "items": []}
+    assert "o.publication_status = %s" in executed[0][0]
+    assert executed[0][1] == ("PUBLISHED", 100)
+
+
+def test_pilot_inventory_rejects_unknown_publication_filter() -> None:
+    with __import__("pytest").raises(ValueError, match="invalid publication status"):
+        pilot_curation_inventory(
+            SimpleNamespace(), publication_status="anything-that-is-not-a-state"
+        )
+
+
 def test_internal_pilot_operations_are_not_exposed_through_http(monkeypatch) -> None:
     monkeypatch.setattr(
         "app.handler.pilot_curation_inventory", lambda *_args, **_kwargs: {"count": 0}

@@ -392,7 +392,11 @@ def _admin_path(path: str) -> tuple[str, str | None]:
 def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     settings = Settings.from_env()
     if event.get("operation") == "customer_pilot_inventory" and not event.get("requestContext"):
-        return pilot_curation_inventory(settings, limit=int(event.get("limit") or 100))
+        return pilot_curation_inventory(
+            settings,
+            limit=int(event.get("limit") or 100),
+            publication_status=event.get("publication_status"),
+        )
     if event.get("operation") == "customer_pilot_publish" and not event.get("requestContext"):
         return apply_pilot_publications(
             settings,

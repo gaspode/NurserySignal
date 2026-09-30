@@ -942,16 +942,23 @@ def customer_readiness(settings: Settings) -> dict[str, Any]:
     }
 
 
-def pilot_curation_inventory(settings: Settings, *, limit: int = 100) -> dict[str, Any]:
+def pilot_curation_inventory(
+    settings: Settings, *, limit: int = 100, publication_status: str | None = None
+) -> dict[str, Any]:
     """Return a bounded internal-only inventory for the paid-pilot quality gate.
 
     This deliberately returns source summaries rather than raw evidence documents. It is invoked
     through the IAM-protected Lambda operational path, not exposed as a customer or admin HTTP API.
     """
     bounded_limit = min(max(int(limit), 1), 100)
+    status = str(publication_status or "").strip().upper()
+    if status and status not in {"DRAFT", "PUBLISHED", "WITHDRAWN"}:
+        raise ValueError("invalid publication status")
+    publication_clause = "AND o.publication_status = %s" if status else ""
+    params: tuple[Any, ...] = (status, bounded_limit) if status else (bounded_limit,)
     with connection(settings) as conn:
         opportunity_rows = conn.execute(
-            """SELECT o.id, o.name, o.customer_title, o.customer_summary,
+            f"""SELECT o.id, o.name, o.customer_title, o.customer_summary,
                       o.operator_name, o.town, o.postcode, o.change_type,
                       o.lifecycle_stage, o.confidence, o.review_status,
                       o.publication_status, o.first_seen_at, o.latest_update_at,
@@ -961,9 +968,10 @@ def pilot_curation_inventory(settings: Settings, *, limit: int = 100) -> dict[st
                WHERE o.vertical = 'CHILDRENS_HOME'
                  AND o.review_status NOT IN ('REJECTED', 'MERGED')
                  AND o.merged_into_opportunity_id IS NULL
+                 {publication_clause}
                ORDER BY o.latest_update_at DESC, o.id
                LIMIT %s""",
-            (bounded_limit,),
+            params,
         ).fetchall()
         evidence_rows = (
             conn.execute(
@@ -997,7 +1005,7 @@ def pilot_curation_inventory(settings: Settings, *, limit: int = 100) -> dict[st
                 if str(row[5] or "").startswith(("https://", "http://"))
                 else None,
                 "external_id": row[6],
-                "region": metadata.get("region") or metadata.get("provider_region"),
+                "region": metadata.get("region"),
                 "local_authority": (
                     metadata.get("local_authority")
                     or metadata.get("council")
