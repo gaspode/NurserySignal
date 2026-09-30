@@ -1127,3 +1127,26 @@ Paid-pilot activation check (2026-09-28):
   with Ruff, frontend build and Terraform format/validation. HTTPS and API/database health pass, active
   queues and non-collector DLQs are empty, and the five retained collector-manual-run DLQ messages remain
   untouched. No customer opportunity was published, unpublished or otherwise mutated.
+- Public-authority organisation identity is now first-class via additive `organisation_type` provenance.
+  Conservative structural council/local-authority names are classified as `PUBLIC_AUTHORITY`, retain
+  their existing operator ID, aliases, signals, opportunities, Ofsted and procurement relationships,
+  and bypass Companies House candidate discovery/review. Admin organisation list/detail views now show
+  `Public authority — Companies House match not applicable`, suppress normal company controls, preserve
+  and warn on conflicting historical mappings, and provide audited type override/revert controls.
+  Provider/authority office metadata remains organisation identity evidence only and is never promoted
+  to opportunity/site geography.
+- The bounded production preview inspected 45 canonical organisations and found one obvious authority:
+  Lancashire County Council, with no company mapping, one system-created pending Companies House review,
+  one linked signal, no linked opportunity and no manual conflict. The safe correction classified that
+  existing organisation and superseded the pending review; no mapping was removed and no relationship
+  changed. An immediate repeat made zero changes, confirming idempotency. No ambiguous names, system-
+  mapped conflicts or manually confirmed conflicts were present. Current published CareProspect inventory
+  is ten following independent normal curation; this operation did not touch publication state.
+  Commit `2ce3e65` deployed successfully in run `36746523549`; 444 backend tests and 84 frontend tests
+  pass with Ruff, frontend build and Terraform format/validation. API/database and HTTPS health pass,
+  all active queues and non-collector DLQs are empty, all event-source mappings including procurement
+  remain enabled, and the five retained collector-manual-run DLQ messages remain untouched. The reviewed
+  post-deployment plan contains only locally regenerated Lambda/frontend artefact hashes, with no
+  infrastructure configuration change. Exact next step: use the admin conflict warning for any future
+  manually mapped authority and expand aliases only from evidenced production variants; no further
+  backfill is currently required.
