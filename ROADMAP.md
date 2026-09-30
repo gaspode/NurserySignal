@@ -1230,3 +1230,13 @@ Paid-pilot activation check (2026-09-28):
   provider retries, and recovered applications still enter through normal idempotent ingestion. Exact next step:
   deploy, retry only the Ashburton lookup, verify its terminal result and normal ingestion/family reconciliation,
   and leave the unrelated retained collector DLQ messages untouched.
+- Commit `42edf2c` deployed successfully in run `36765618717`. A single forced retry was queued only for the
+  Ashburton signal; the collector completed its exact Croydon `24/03385/FUL` lookup in roughly 26 seconds and the
+  enrichment worker persisted `NOT_FOUND` at 2026-09-30 19:30:47 UTC. Opportunity Detail now projects the terminal
+  result instead of stale `QUEUED`, so Retry is available after the normal cooldown semantics. The family remains
+  correctly unresolved with zero foundational and one supporting signal; no evidence, review, opportunity or
+  publication state changed. The Planning, ingestion and enrichment queues drained to zero, their mappings remain
+  enabled, and API/database health passes. The shared collector DLQ now retains six messages: the prior five plus
+  the obsolete pre-fix Ashburton delivery. None were purged or redriven. Exact next step: no code work is required;
+  retry later only if Plota coverage is expected to have changed, or verify the origin directly through the council
+  source before spending another provider request.
