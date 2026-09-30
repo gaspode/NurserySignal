@@ -1213,3 +1213,12 @@ Paid-pilot activation check (2026-09-28):
   API/database and HTTPS health pass, active queues and non-collector DLQs are empty, and the five retained
   collector-manual-run DLQ messages remain untouched. Exact next step: manually exercise Find referenced
   application on Ashburton before considering any bounded historical provider recovery.
+- Live Ashburton origin-recovery validation exposed a deployment blocker before any Plota request was made. The
+  manual action queued correctly at 2026-09-30 19:15 UTC, but the Planning collector failed before changing the
+  attempt from `QUEUED` because that Lambda has neither `DB_SECRET_ARN`/`DATABASE_URL` nor VPC database access.
+  The SQS mapping remains enabled; its 240-second visibility timeout and max receive count of three will retry the
+  message and then send it to the shared collector DLQ, while the UI remains disabled because the persisted attempt
+  cannot leave `QUEUED`. Exact next step: give the Planning collector the existing least-privilege database secret
+  and VPC connectivity (or move recovery-status database work to an already database-enabled worker), deploy, then
+  safely redrive only this failed origin-recovery message and verify FOUND/NOT_FOUND handling. No provider request
+  or record quota was consumed by this failed attempt.
