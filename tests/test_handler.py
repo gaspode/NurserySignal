@@ -33,3 +33,36 @@ def test_iam_foundational_evidence_diagnostic_is_read_only(monkeypatch) -> None:
     result = handler({"operation": "care_foundational_evidence_diagnostic"}, None)
 
     assert result == diagnostic
+
+
+def test_iam_evidence_support_verification_is_bounded_and_read_only(monkeypatch) -> None:
+    opportunity_id = "1d043a74-dca2-4830-92dd-96aeb9c4f3fe"
+    monkeypatch.setattr("app.handler.Settings.from_env", lambda: object())
+    monkeypatch.setattr(
+        "app.handler.opportunity_detail",
+        lambda settings, value: {
+            "id": value,
+            "evidence_support": {"foundational": 1, "supporting_followups": 0},
+            "publication_status": "DRAFT",
+        },
+    )
+
+    result = handler(
+        {
+            "operation": "care_evidence_support_verify",
+            "opportunity_ids": [opportunity_id],
+        },
+        None,
+    )
+
+    assert result == {
+        "items": [
+            {
+                "opportunity_id": opportunity_id,
+                "found": True,
+                "evidence_support": {"foundational": 1, "supporting_followups": 0},
+                "publication_status": "DRAFT",
+            }
+        ],
+        "read_only": True,
+    }

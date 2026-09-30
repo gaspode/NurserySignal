@@ -420,6 +420,24 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     ):
         report = care_opportunity_hygiene_audit(settings, limit=1)
         return report["support_semantics_diagnostic"]
+    if event.get("operation") == "care_evidence_support_verify" and not event.get(
+        "requestContext"
+    ):
+        opportunity_ids = event.get("opportunity_ids")
+        if not isinstance(opportunity_ids, list) or not 1 <= len(opportunity_ids) <= 10:
+            raise ValueError("opportunity_ids must contain between 1 and 10 IDs")
+        results = []
+        for opportunity_id in opportunity_ids:
+            detail = opportunity_detail(settings, str(UUID(str(opportunity_id))))
+            results.append(
+                {
+                    "opportunity_id": str(opportunity_id),
+                    "found": detail is not None,
+                    "evidence_support": detail.get("evidence_support") if detail else None,
+                    "publication_status": detail.get("publication_status") if detail else None,
+                }
+            )
+        return {"items": results, "read_only": True}
     if event.get("operation") == "public_authority_backfill" and not event.get("requestContext"):
         return public_authority_backfill(
             settings,
