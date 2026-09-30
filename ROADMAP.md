@@ -1270,3 +1270,23 @@ Paid-pilot activation check (2026-09-28):
   dedupe or historical recovery was run. Commits `2d4f741` and `3716657` deployed successfully in runs
   `36771927297` and `36772934270`; 472 backend tests and Ruff pass, API/database health is green, active Planning,
   ingestion and enrichment queues are empty, and the six retained collector DLQ messages remain untouched.
+- CareProspect evidence support now uses one shared read-only classifier in Opportunity Detail and opportunity
+  hygiene. An active Planning relationship is foundational only with authoritative APPROVED review, positive
+  non-terminal outcome and `CREATE_OPPORTUNITY` semantics; current support-only/procedural/lifecycle semantics
+  win, AI is ignored, and `REFERENCES_APPLICATION` remains supporting. For older reviewed rows whose current
+  enrichment is stale `AMBIGUOUS/REVIEW`, immutable relationship-time `CREATE_OPPORTUNITY` is accepted as a
+  fallback only after positive human review. This fixes ordinary openings without requiring planning-family
+  membership while keeping rejected Croston-style capacity evidence non-supporting.
+- The production read-only comparison covered 1,145 CareProspect opportunities. Detail projection gains
+  foundational evidence on 270 opportunities and removes it from ten; eleven published opportunities gain the
+  correct foundational projection, with publication state unchanged. Hygiene moves 21 records from
+  NEEDS_INVESTIGATION to VALID_SUPPORTED: before 750 valid / 348 unsupported / 25 manual preserve / 22
+  investigation; after 771 / 348 / 25 / 1. Lambourne, Castledene, both matched Cockington records, Moss Road,
+  Butler Street and Armitage now project `1 foundational · 0 supporting`; rejected Croston remains `0 · 0`.
+  The semantic-drift preview found eight OPENING opportunities needing separate review: six carry
+  LAWFULNESS_EXISTING support-only evidence and two carry rejected cessation evidence. No opportunity, review,
+  relationship, AI assessment or publication state was mutated. Commits `452206d`, `207d9b6`, `e93df20`,
+  `b668187` and `5804680` deployed successfully through run `36778842426`; 502 backend tests and Ruff pass,
+  the deployment frontend build/Terraform plan pass, API/database health is green and active queues are empty.
+  Exact next step: inspect the eight stale opportunity-semantic cases and design a separately previewed bounded
+  recalculation; do not rewrite them as part of evidence projection.
