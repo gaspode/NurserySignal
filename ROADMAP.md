@@ -1006,6 +1006,7 @@ Paid-pilot activation check (2026-09-28):
   auto-approvals and zero holdouts. Published inventory remains six. Deployment run `36645845647` for
   commit `6f4f262` succeeded; API/database, CareProspect HTTPS and queue health pass. Active queues and
   non-collector DLQs are empty, while the five previously retained collector-DLQ messages remain
-  untouched. Next gate: inspect future deterministic QA holdouts and keep the 10% rate until this small
+  untouched. The deferred post-deployment Terraform refresh completed after SSO renewal and reports no
+  changes or infrastructure drift. Next gate: inspect future deterministic QA holdouts and keep the 10% rate until this small
   policy has prospective production evidence; do not broaden into existing-lawfulness or follow-up
   subtypes.
