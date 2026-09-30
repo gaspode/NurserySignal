@@ -1092,3 +1092,22 @@ Paid-pilot activation check (2026-09-28):
   five retained collector-manual-run DLQ messages remain untouched. Exact next step: review the 30
   unresolved cases and a bounded sample of each orphan root-cause cohort before authorising any
   lifecycle mutation; customer publication remains manual.
+- The admin-only `Opportunity hygiene` workspace is deployed as a read-only navigation layer over the
+  authoritative CareProspect audit. It provides clickable hygiene-category counts, unsupported
+  root-cause filtering, change/publication filters, bounded server-side search, 25-row server-side
+  pagination, a direct NEEDS_INVESTIGATION workflow, and a separately paginated publication-candidate
+  view. Rows expose evidence count/source mix, lifecycle, location, confidence, hygiene reason,
+  publication warning and admin-touch context, then link to the existing opportunity detail route.
+  The hygiene page contains no merge, split, unlink, retire, deactivate, delete, supersede, publish or
+  bulk action; publication remains available only through the normal detail workflow.
+- Post-deployment read-only verification reports 1,143 CareProspect opportunities: 752 valid supported,
+  347 unsupported/orphan, 30 needing investigation, 14 manual/admin preserve, and zero unresolved
+  duplicate or superseded candidates. The two-record movement from the preceding audit is natural
+  production evidence-state change: TAXONOMY_RECLASSIFIED is now six and the bounded publication-review
+  pool is 747. NEEDS_INVESTIGATION returns 30 across two pages, SIGNAL_REJECTED filtering returns 295,
+  publication-candidate pagination returns distinct 25-record pages, and server search returns bounded
+  matches. Published inventory remains six. Commit `b2d664f` deployed successfully in run
+  `36722501140`; 388 backend tests and 80 frontend tests pass with Ruff, frontend build and Terraform
+  validation. API/database health passes, the deployed frontend bundle contains the new route/view,
+  ingestion/enrichment queues and DLQs are empty, and the five retained collector DLQ messages remain
+  untouched. No opportunity state or customer publication was changed.
