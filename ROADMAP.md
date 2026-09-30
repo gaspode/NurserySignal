@@ -1042,3 +1042,23 @@ Paid-pilot activation check (2026-09-28):
   Exact next step: manually inspect the nine remaining AMBIGUOUS records and the non-opening disagreement
   buckets, then separately decide whether to process the 29 existing-policy candidates; no historical
   backlog auto-approval occurred in this taxonomy task.
+- Taxonomy-v2 historical policy catch-up tooling is deployed at commit `2ddb1d0` with an explicit
+  `taxonomy_catchup_only` selector, a bounded proposed-lawfulness backlog action and unchanged live
+  eligibility/holdout functions. The production recomputation no longer matches the earlier 6/23
+  snapshot: intervening human review reduced pending Planning from 74 to 49 and increased CareProspect
+  human-reviewed history by 25, while policy-monitoring totals remained unchanged. Current catch-up
+  eligibility is zero explicit-new-home records and nine LAWFULNESS_PROPOSED records; all nine are
+  current-v2 APPROVE at 0.95, canonically APPROVED and CREATE_OPPORTUNITY, with stable policy assignment
+  yielding nine approvals and zero holdouts. After explicit confirmation of the revised cohort, the
+  bounded catch-up selected and approved all nine lawfulness records with zero failures or QA holdouts;
+  the explicit-new-home action selected zero because those records had already been manually reviewed.
+  Four existing opportunities and four active relationships were reused; none were created, no match
+  review or duplicate opportunity appeared, and published inventory remained six. Immediate repeat
+  execution selected zero records for both policies, confirming idempotency. Concurrent manual review
+  left 38 CareProspect Planning records pending: 38 rule/AI disagreements, zero AI-uncertain, zero
+  manual-agreement and zero policy QA holdouts. The remaining subtype mix is 12 condition discharges,
+  eight ambiguous, four condition variations, three change-of-use openings, three existing-use
+  lawfulness, three other follow-ups, two non-material amendments, two cessations and one mixed-use new
+  home. No policy scope, holdout rate, unsupported draft opportunity or customer publication rule
+  changed. Exact next step: manually review the remaining semantic disagreement categories; no further
+  catch-up data work is required.
