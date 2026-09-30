@@ -1045,8 +1045,8 @@ describe("admin frontend", () => {
       change_type: "OPENING",
       confidence: 0.95,
       signals: [
-        { id: "approved", source_type: "planning", title: "C3 to C2 change", relationship_status: "ACTIVE", planning_outcome: "APPROVED", planning_decision_raw: "Grant Permission Subject To Conditions", planning_status_raw: "Decided", planning_subtype: "NEW_HOME_CHANGE_OF_USE", opportunity_creation_decision: "CREATE_OPPORTUNITY" },
-        { id: "followup", source_type: "planning", title: "Condition details", relationship_status: "ACTIVE", planning_outcome: "APPROVED", planning_subtype: "CONDITION_DISCHARGE", opportunity_creation_decision: "SUPPORT_EXISTING_ONLY" },
+        { id: "approved", source_type: "planning", title: "C3 to C2 change", relationship_status: "ACTIVE", match_reason: "merged from 380399bb-example", source_url: "https://planning.example/approved", planning_outcome: "APPROVED", planning_decision_raw: "Grant Permission Subject To Conditions", planning_status_raw: "Decided", planning_subtype: "NEW_HOME_CHANGE_OF_USE", opportunity_creation_decision: "CREATE_OPPORTUNITY", planning_families: [{ id: "family-approved", relationship_type: "PRIMARY_APPLICATION", planning_authority: "Example Council", raw_reference: "24/001/FUL", origin_status: "FOUND" }] },
+        { id: "followup", source_type: "planning", title: "Condition details", relationship_status: "ACTIVE", planning_outcome: "APPROVED", planning_subtype: "CONDITION_DISCHARGE", opportunity_creation_decision: "SUPPORT_EXISTING_ONLY", planning_families: [{ id: "family-followup", relationship_type: "REFERENCES_APPLICATION", planning_authority: "Example Council", raw_reference: "24/001/FUL", origin_status: "FOUND" }] },
         { id: "refused", source_type: "planning", title: "Refused opening", relationship_status: "ACTIVE", planning_outcome: "REFUSED", planning_decision_raw: "Refused LUC", planning_subtype: "NEW_HOME_OTHER_EXPLICIT", opportunity_creation_decision: "CREATE_OPPORTUNITY", planning_consistency_warning: true },
         { id: "withdrawn", source_type: "planning", title: "Withdrawn application", relationship_status: "ACTIVE", planning_outcome: "WITHDRAWN", planning_subtype: "AMBIGUOUS", opportunity_creation_decision: "REVIEW" },
         { id: "pending", source_type: "planning", title: "Pending lawfulness", relationship_status: "ACTIVE", planning_outcome: "PENDING", planning_subtype: "LAWFULNESS_PROPOSED", opportunity_creation_decision: "CREATE_OPPORTUNITY" },
@@ -1061,16 +1061,23 @@ describe("admin frontend", () => {
     expect(approved).toHaveTextContent("Decision: Approved");
     expect(approved).toHaveTextContent("Explicit new home — change of use");
     expect(approved).toHaveTextContent("Opportunity action: Create opportunity");
-    expect(approved).toHaveTextContent("Council decision: Grant Permission Subject To Conditions");
-    expect(approved).toHaveTextContent("Council status: Decided");
+    expect(approved).toHaveTextContent("Foundational application");
+    expect(approved).toHaveTextContent("Raw council decision: Grant Permission Subject To Conditions");
+    expect(approved).toHaveTextContent("Raw council status: Decided");
+    expect(within(approved).getByText("Relationship provenance")).toBeInTheDocument();
+    expect(approved).toHaveTextContent("merged from 380399bb-example");
+    expect(within(approved).getByRole("button", { name: "Open signal" })).toBeInTheDocument();
+    expect(within(approved).getByRole("link", { name: "Open source" })).toBeInTheDocument();
+    expect(within(approved).getByRole("button", { name: "Unlink" })).toBeInTheDocument();
     expect(within(approved).getByText("Approved")).toHaveClass("badge-approved");
 
     const followup = screen.getByText("Condition details").closest("article");
+    expect(followup).toHaveTextContent("Supporting follow-up");
     expect(followup).toHaveTextContent("Condition discharge");
     expect(followup).toHaveTextContent("Support existing only");
     const refused = screen.getByText("Refused opening").closest("article");
     expect(within(refused).getByText("Refused")).toHaveClass("badge-rejected");
-    expect(refused).toHaveTextContent("Council decision: Refused LUC");
+    expect(refused).toHaveTextContent("Raw council decision: Refused LUC");
     expect(refused).toHaveTextContent("Negative Planning outcome on active opportunity evidence");
     expect(within(screen.getByText("Withdrawn application").closest("article")).getByText("Withdrawn")).toHaveClass("badge-rejected");
     expect(within(screen.getByText("Pending lawfulness").closest("article")).getByText("Pending")).toHaveClass("badge-pending");
@@ -1102,6 +1109,7 @@ describe("admin frontend", () => {
     const onBack = vi.fn(); const onNavigate = vi.fn();
     render(<OpportunityDetail opportunityId="opp-2" apiClient={apiClient} onBack={onBack} onNavigate={onNavigate} contextQuery="from=opportunity-hygiene&category=NEEDS_INVESTIGATION&hygiene_offset=4&hygiene_total=8" />);
     expect(await screen.findByText("0 foundational signals · 1 supporting follow-up signal")).toBeInTheDocument();
+    expect(screen.getByText("Supporting follow-up")).toBeInTheDocument();
     expect(screen.getByText("Originating planning application has not yet been resolved.")).toBeInTheDocument();
     await waitFor(() => expect(screen.getByRole("button", { name: "Next →" })).toBeEnabled());
     await userEvent.click(screen.getByRole("button", { name: "Next →" }));

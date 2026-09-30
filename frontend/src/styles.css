@@ -106,19 +106,23 @@ h2 { color: #102a43; font-size: 1rem; margin-bottom: 1rem; }
 .source-context-item { border-top: 1px solid #e4e7eb; padding: 0.7rem 0; }
 .source-context-links, .candidate-actions { display: flex; flex-wrap: wrap; gap: 0.75rem; }
 .timeline-item { display: flex; flex-direction: column; }
-.timeline-item > div:first-child { order: 1; }
-.timeline-item > .planning-evidence-block { order: 2; }
-.timeline-item > .planning-family-meta { order: 3; }
-.timeline-item > p.muted { order: 4; }
-.timeline-item > .timeline-actions { order: 5; }
-.timeline-item > .cell-subtitle { order: 6; }
-.timeline-actions { align-items: center; display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.timeline-heading { align-items: center; display: flex; flex-wrap: wrap; gap: .35rem; }
+.timeline-heading strong { margin-left: .15rem; }
+.timeline-facts, .timeline-ai { color: #829ab1; display: block; font-size: .75rem; margin-top: .45rem; }
+.timeline-actions { align-items: center; display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: .65rem; }
 .review-sequence { align-items: center; display: flex; gap: .75rem; justify-content: flex-end; margin-bottom: .75rem; }
-.planning-family-meta { display: grid; gap: .4rem; margin-top: .65rem; }
+.planning-family-role { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .55rem; }
+.planning-family-role .badge { font-weight: 800; }
+.planning-family-meta { display: grid; gap: .4rem; margin-top: .55rem; }
 .planning-family-meta > div { align-items: center; display: flex; flex-wrap: wrap; gap: .45rem; }
-.planning-evidence-block { margin-top: .65rem; }
-.planning-evidence-meta { align-items: center; color: #52606d; display: flex; flex-wrap: wrap; font-size: .78rem; gap: .4rem .7rem; }
+.planning-evidence-meta { align-items: center; color: #52606d; display: flex; flex-wrap: wrap; font-size: .78rem; gap: .4rem .7rem; margin-top: .55rem; }
 .planning-evidence-meta > span + span::before { color: #bcccdc; content: "·"; margin-right: .7rem; }
+.planning-evidence-meta .hygiene-warning { flex-basis: 100%; margin-top: .15rem; }
+.planning-evidence-meta .hygiene-warning::before { content: none; }
+.planning-raw-meta { color: #829ab1; display: flex; flex-wrap: wrap; font-size: .75rem; gap: .35rem .8rem; margin-top: .45rem; }
+.timeline-provenance { color: #829ab1; font-size: .72rem; margin-top: .55rem; }
+.timeline-provenance summary { cursor: pointer; font-weight: 700; width: max-content; }
+.timeline-provenance p { margin: .35rem 0 0; }
 .candidate-grid { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); margin: 1rem 0; }
 .company-candidate { border: 1px solid #d9e2ec; border-radius: 9px; display: flex; flex-direction: column; min-width: 0; padding: 1rem; }
 .candidate-facts { display: grid; font-size: 0.78rem; gap: 0.35rem 0.75rem; grid-template-columns: 95px minmax(0, 1fr); margin: 0.6rem 0 1rem; }
