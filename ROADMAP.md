@@ -1150,3 +1150,19 @@ Paid-pilot activation check (2026-09-28):
   infrastructure configuration change. Exact next step: use the admin conflict warning for any future
   manually mapped authority and expand aliases only from evidenced production variants; no further
   backfill is currently required.
+- Opportunity Detail evidence timelines now retain the internal `Open signal` workflow and add a direct
+  `Open source` action for every canonical HTTP(S) signal source URL. External evidence opens in a new
+  tab with `noreferrer`, so hygiene/list context and the publication/next workflow stay in the original
+  tab; missing or unsafe schemes are omitted. The existing admin opportunity-detail projection already
+  supplied canonical signal `source_url`, so no backend or customer API field changed and private S3
+  evidence remains separate behind its authenticated Signal Detail action.
+- Production verification sampled 100 current CareProspect opportunities and found 107 usable Planning
+  source links, including six multi-signal opportunities; all 107 were canonical HTTP(S) links and a
+  representative Hillingdon council target returned HTTP 200. No non-Planning linked evidence or missing
+  source URL appeared in that bounded current sample, while regression coverage verifies independent
+  Planning/procurement links plus omitted missing and unsafe URLs. Commit `970b3e6` deployed successfully
+  in run `36749996568`; 444 backend and 85 frontend tests pass with Ruff, frontend build and Terraform
+  format/validation. API/database and HTTPS health pass, active queues and non-collector DLQs are empty,
+  and the five retained collector-manual-run DLQ messages remain untouched. No review, opportunity,
+  publication or customer visibility state changed. Exact next step: use the direct links during hygiene
+  publication review and retain Signal Detail for internal classification/provenance inspection.
