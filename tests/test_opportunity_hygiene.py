@@ -109,6 +109,17 @@ def test_merged_opportunity_is_preserved_as_admin_touched() -> None:
     assert report["items"][0]["admin_touch_types"] == ["merge"]
 
 
+def test_system_semantic_drift_audit_is_not_a_manual_touch() -> None:
+    corrected = opportunity(
+        relationships=[relation(review_status="REJECTED")],
+        audit_actions=["opportunity_semantic_drift_corrected"],
+        change_type="OTHER_CHANGE",
+    )
+    report = audit_opportunities([corrected])
+    assert report["items"][0]["category"] == "UNSUPPORTED_ORPHAN_CANDIDATE"
+    assert report["items"][0]["admin_touch_types"] == []
+
+
 def test_hygiene_filters_and_publication_candidate_view_are_read_only() -> None:
     supported = opportunity(
         name="New children's home — Bristol BS1",

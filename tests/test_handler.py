@@ -66,3 +66,25 @@ def test_iam_evidence_support_verification_is_bounded_and_read_only(monkeypatch)
         ],
         "read_only": True,
     }
+
+
+def test_iam_semantic_drift_operation_is_bounded(monkeypatch) -> None:
+    monkeypatch.setattr("app.handler.Settings.from_env", lambda: object())
+    calls = []
+    monkeypatch.setattr(
+        "app.handler.care_opportunity_semantic_drift_cleanup",
+        lambda settings, **kwargs: calls.append(kwargs) or {"corrected": 2},
+    )
+
+    result = handler(
+        {
+            "operation": "care_opportunity_semantic_drift",
+            "apply": True,
+            "limit": 999,
+            "actor": "test-admin",
+        },
+        None,
+    )
+
+    assert result == {"corrected": 2}
+    assert calls == [{"apply": True, "actor": "test-admin", "limit": 25}]

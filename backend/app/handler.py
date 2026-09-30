@@ -66,6 +66,7 @@ from app.planning_backfill import PlanningBackfillBounds, chunk_payload
 from app.repository import (
     backfill_historical_planning_family_metadata,
     care_opportunity_hygiene_audit,
+    care_opportunity_semantic_drift_cleanup,
     care_planning_ai_approval_backlog,
     care_planning_fastpath_backlog,
     care_planning_lawfulness_backlog,
@@ -438,6 +439,15 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 }
             )
         return {"items": results, "read_only": True}
+    if event.get("operation") == "care_opportunity_semantic_drift" and not event.get(
+        "requestContext"
+    ):
+        return care_opportunity_semantic_drift_cleanup(
+            settings,
+            apply=bool(event.get("apply")),
+            actor=str(event.get("actor") or "iam-care-opportunity-semantic-drift")[:200],
+            limit=min(max(int(event.get("limit") or 25), 1), 25),
+        )
     if event.get("operation") == "public_authority_backfill" and not event.get("requestContext"):
         return public_authority_backfill(
             settings,

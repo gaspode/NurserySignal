@@ -73,6 +73,10 @@ def _touch_types(opportunity: dict[str, Any]) -> list[str]:
             touches.add("manual_link")
     for action in opportunity.get("audit_actions") or []:
         action = str(action).lower()
+        if action == "opportunity_semantic_drift_corrected":
+            # This bounded system correction is provenance, not evidence that a
+            # human deliberately curated or overrode the opportunity.
+            continue
         if "merged" in action:
             touches.add("merge")
         elif "split" in action:
@@ -93,6 +97,11 @@ def _touch_types(opportunity: dict[str, Any]) -> list[str]:
     ):
         touches.add("other_correction")
     return sorted(touches)
+
+
+def opportunity_admin_touch_types(opportunity: dict[str, Any]) -> list[str]:
+    """Expose the audit's conservative manual/admin-touch semantics."""
+    return _touch_types(opportunity)
 
 
 def legacy_relation_support_state(relation: dict[str, Any]) -> str:

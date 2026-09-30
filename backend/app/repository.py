@@ -33,6 +33,7 @@ from app.care_planning_review import (
     care_planning_lawfulness_exclusion,
     care_planning_lawfulness_outcome,
     care_planning_lawfulness_qa_bucket,
+    classify_care_planning_subtype,
     planning_withdrawal_assessment,
     validate_care_planning_subtype,
 )
@@ -59,6 +60,13 @@ from app.opportunity_hygiene import (
     ORPHAN_ROOT_CAUSES,
     audit_opportunities,
     filter_hygiene_items,
+    opportunity_admin_touch_types,
+)
+from app.opportunity_semantic_drift import (
+    POLICY_VERSION as OPPORTUNITY_SEMANTIC_DRIFT_POLICY_VERSION,
+)
+from app.opportunity_semantic_drift import (
+    plan_opportunity_semantic_drift,
 )
 from app.organisation_types import (
     ORGANISATION_TYPES,
@@ -6564,6 +6572,221 @@ def care_opportunity_hygiene_audit(
         }
     )
     return report
+
+
+def _care_semantic_drift_inventory(conn: Any) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        """
+        SELECT o.id, o.name, o.event_type, o.lifecycle_stage, o.review_status,
+               o.publication_status, o.vertical, o.change_type, o.stage_reason,
+               o.creation_reason, o.updated_at,
+               COALESCE(rel.relationships, '[]'::jsonb),
+               COALESCE(hist.actions, ARRAY[]::text[]),
+               COALESCE(audit.actions, ARRAY[]::text[])
+        FROM opportunities o
+        LEFT JOIN LATERAL (
+            SELECT jsonb_agg(jsonb_build_object(
+                'signal_id', os.raw_signal_id,
+                'status', os.status,
+                'relationship_type', os.relationship_type,
+                'created_by', os.created_by,
+                'admin_override_by', os.admin_override_by,
+                'source_type', rs.source_type,
+                'title', rs.title,
+                'raw_text', rs.raw_text,
+                'metadata', rs.metadata,
+                'review_status', se.review_status,
+                'extracted_facts', se.extracted_facts,
+                'relationship_extracted_facts', os.extracted_facts,
+                'planning_family_relationship_types', COALESCE(
+                    (SELECT jsonb_agg(DISTINCT family_rel.relationship_type)
+                     FROM planning_signal_family_relationships family_rel
+                     WHERE family_rel.raw_signal_id = rs.id),
+                    '[]'::jsonb
+                )
+            ) ORDER BY rs.discovered_at, rs.id) AS relationships
+            FROM opportunity_signals os
+            JOIN raw_signals rs ON rs.id = os.raw_signal_id
+            LEFT JOIN signal_enrichments se ON se.raw_signal_id = rs.id
+            WHERE os.opportunity_id = o.id
+        ) rel ON TRUE
+        LEFT JOIN LATERAL (
+            SELECT array_agg(DISTINCT h.action) AS actions
+            FROM opportunity_signal_history h WHERE h.opportunity_id = o.id
+        ) hist ON TRUE
+        LEFT JOIN LATERAL (
+            SELECT array_agg(DISTINCT a.action) AS actions
+            FROM admin_audit_events a
+            WHERE a.target_type IN ('opportunity', 'opportunity_match')
+              AND (
+                a.details->>'opportunity_id' = o.id::text
+                OR a.details->>'source_opportunity_id' = o.id::text
+                OR a.details->>'target_opportunity_id' = o.id::text
+                OR a.details->>'new_opportunity_id' = o.id::text
+              )
+        ) audit ON TRUE
+        WHERE o.vertical = 'CHILDRENS_HOME' AND o.change_type = 'OPENING'
+        ORDER BY o.created_at, o.id
+        LIMIT 5000
+        """
+    ).fetchall()
+    fields = (
+        "id",
+        "name",
+        "event_type",
+        "lifecycle_stage",
+        "review_status",
+        "publication_status",
+        "vertical",
+        "change_type",
+        "stage_reason",
+        "creation_reason",
+        "updated_at",
+        "relationships",
+        "history_actions",
+        "audit_actions",
+    )
+    opportunities = [dict(zip(fields, row)) for row in rows]
+    for opportunity in opportunities:
+        opportunity["admin_touch_types"] = opportunity_admin_touch_types(opportunity)
+        for relation in opportunity["relationships"]:
+            if str(relation.get("source_type") or "").lower() != "planning":
+                continue
+            assessment = classify_care_planning_subtype(
+                {
+                    "title": relation.get("title"),
+                    "raw_text": relation.get("raw_text"),
+                    "metadata": relation.get("metadata"),
+                }
+            )
+            relation["recomputed_planning_subtype"] = assessment.subtype
+    return opportunities
+
+
+def care_opportunity_semantic_drift_cleanup(
+    settings: Settings,
+    *,
+    apply: bool = False,
+    actor: str = "iam-care-opportunity-semantic-drift",
+    limit: int = 25,
+) -> dict[str, Any]:
+    """Preview or apply the narrow audited CareProspect semantic-drift correction."""
+    bounded_limit = min(max(int(limit), 1), 25)
+    hygiene_before = care_opportunity_hygiene_audit(settings, limit=1)
+    with connection(settings) as conn:
+        opportunities = _care_semantic_drift_inventory(conn)
+    plans = [
+        plan
+        for opportunity in opportunities
+        if (plan := plan_opportunity_semantic_drift(opportunity)) is not None
+    ]
+    safe_plans = [plan for plan in plans if plan["safe_to_apply"]]
+    result: dict[str, Any] = {
+        "policy_version": OPPORTUNITY_SEMANTIC_DRIFT_POLICY_VERSION,
+        "apply": apply,
+        "opening_opportunities_inspected": len(opportunities),
+        "drift_candidates": len(plans),
+        "drift_type_counts": dict(
+            sorted(Counter(reason for plan in plans for reason in plan["drift_types"]).items())
+        ),
+        "published_candidates": sum(
+            plan["current"]["publication_status"] == "PUBLISHED" for plan in plans
+        ),
+        "admin_touched_candidates": sum(bool(plan["admin_touch_types"]) for plan in plans),
+        "safe_to_apply": len(safe_plans),
+        "manual_review": len(plans) - len(safe_plans),
+        "items": plans,
+        "selected": 0,
+        "corrected": 0,
+        "skipped": 0,
+        "errors": 0,
+        "audit_event_ids": [],
+        "hygiene_before": {
+            "category_counts": hygiene_before["category_counts"],
+            "customer_readiness_total": hygiene_before["customer_readiness_total"],
+            "publication_counts": hygiene_before["publication_counts"],
+        },
+    }
+    if apply and safe_plans:
+        selected = safe_plans[:bounded_limit]
+        result["selected"] = len(selected)
+        selected_ids = [UUID(plan["opportunity_id"]) for plan in selected]
+        with connection(settings) as conn:
+            conn.execute(
+                "SELECT id FROM opportunities WHERE id = ANY(%s) FOR UPDATE",
+                (selected_ids,),
+            ).fetchall()
+            conn.execute(
+                """SELECT se.raw_signal_id
+                   FROM signal_enrichments se
+                   JOIN opportunity_signals os ON os.raw_signal_id = se.raw_signal_id
+                   WHERE os.opportunity_id = ANY(%s) FOR UPDATE""",
+                (selected_ids,),
+            ).fetchall()
+            current_by_id = {
+                str(item["id"]): item for item in _care_semantic_drift_inventory(conn)
+            }
+            for original in selected:
+                opportunity_id = original["opportunity_id"]
+                current = current_by_id.get(opportunity_id)
+                current_plan = (
+                    plan_opportunity_semantic_drift(current) if current is not None else None
+                )
+                if not current_plan or not current_plan["safe_to_apply"]:
+                    result["skipped"] += 1
+                    continue
+                proposed = current_plan["proposed"]
+                updated = conn.execute(
+                    """UPDATE opportunities
+                       SET name = %s, change_type = %s, event_type = %s,
+                           stage_reason = %s, latest_update_at = now(), updated_at = now()
+                       WHERE id = %s AND vertical = 'CHILDRENS_HOME'
+                         AND change_type = 'OPENING' AND publication_status = 'DRAFT'
+                       RETURNING id""",
+                    (
+                        proposed["name"],
+                        proposed["change_type"],
+                        proposed["event_type"],
+                        proposed["stage_reason"],
+                        opportunity_id,
+                    ),
+                ).fetchone()
+                if not updated:
+                    result["skipped"] += 1
+                    continue
+                audit = conn.execute(
+                    """INSERT INTO admin_audit_events
+                       (action, actor, target_type, details)
+                       VALUES ('opportunity_semantic_drift_corrected', %s,
+                               'opportunity', %s) RETURNING id""",
+                    (
+                        actor[:200],
+                        Jsonb(
+                            {
+                                "opportunity_id": opportunity_id,
+                                "policy_version": OPPORTUNITY_SEMANTIC_DRIFT_POLICY_VERSION,
+                                "drift_types": current_plan["drift_types"],
+                                "signal_ids": current_plan["drift_signal_ids"],
+                                "before": current_plan["current"],
+                                "after": proposed,
+                                "creation_reason_preserved": True,
+                                "publication_unchanged": True,
+                            }
+                        ),
+                    ),
+                ).fetchone()
+                result["audit_event_ids"].append(str(audit[0]))
+                result["corrected"] += 1
+            conn.commit()
+
+    hygiene_after = care_opportunity_hygiene_audit(settings, limit=1)
+    result["hygiene_after"] = {
+        "category_counts": hygiene_after["category_counts"],
+        "customer_readiness_total": hygiene_after["customer_readiness_total"],
+        "publication_counts": hygiene_after["publication_counts"],
+    }
+    result["bounded_limit"] = bounded_limit
+    return result
 
 
 def list_organisations(
