@@ -434,7 +434,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             if detail:
                 planning_timeline = [
                     {
-                        "signal_id": signal.get("id"),
+                        "signal_id": str(signal["id"]) if signal.get("id") else None,
                         "planning_outcome": signal.get("planning_outcome"),
                         "planning_decision_raw": signal.get("planning_decision_raw"),
                         "planning_status_raw": signal.get("planning_status_raw"),
