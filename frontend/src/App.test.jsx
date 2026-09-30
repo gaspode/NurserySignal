@@ -327,6 +327,11 @@ describe("admin frontend", () => {
     });
     render(<ReviewInboxPage apiClient={apiClient} onNavigate={vi.fn()} />);
     await screen.findByRole("heading", { name: "Review triage" });
+    expect(screen.getByRole("option", { name: "New home — mixed-use development" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Expansion / capacity change" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("option", { name: "Cessation / change away from care" })
+    ).toBeInTheDocument();
     await userEvent.selectOptions(
       screen.getByLabelText("Planning subtype"),
       "NEW_HOME_CHANGE_OF_USE"

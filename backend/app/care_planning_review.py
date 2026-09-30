@@ -23,6 +23,7 @@ CARE_PLANNING_LAWFULNESS_POLICY_VERSION = "care-planning-lawfulness-proposed-v1"
 CARE_PLANNING_LAWFULNESS_PROMPT_VERSION = "care-planning-shadow-v2"
 CARE_PLANNING_LAWFULNESS_MIN_CONFIDENCE = 0.95
 CARE_PLANNING_LAWFULNESS_QA_MODULUS = 10
+CARE_PLANNING_TAXONOMY_VERSION = "care-planning-taxonomy-v2"
 WITHDRAWAL_POLICY_VERSION = "planning-withdrawal-v2"
 
 CARE_PLANNING_AI_APPROVAL_SUBTYPES = frozenset(
@@ -41,12 +42,15 @@ CARE_PLANNING_SUBTYPES = frozenset(
     {
         "NEW_HOME_CHANGE_OF_USE",
         "NEW_HOME_OTHER_EXPLICIT",
+        "NEW_HOME_MIXED_USE",
         "LAWFULNESS_PROPOSED",
         "LAWFULNESS_EXISTING",
+        "EXPANSION_OR_CAPACITY_CHANGE",
         "CONDITION_VARIATION",
         "CONDITION_DISCHARGE",
         "NON_MATERIAL_AMENDMENT",
         "FOLLOW_UP_OTHER",
+        "CESSATION_OR_CHANGE_AWAY_FROM_CARE",
         "REFUSED",
         "WITHDRAWN",
         "AMBIGUOUS",
@@ -56,37 +60,73 @@ CARE_PLANNING_FILTERS = CARE_PLANNING_SUBTYPES | {"EXPLICIT_NEW_HOME"}
 
 _HOME = re.compile(
     r"\b(?:children(?:['’]s|s)?\s+(?:residential\s+)?(?:care\s+)?home|"
-    r"residential\s+children(?:['’]s|s)?\s+home|children(?:['’]s|s)?\s+care\s+home)\b",
+    r"residential\s+children(?:['’]s|s)?\s+home|children(?:['’]s|s)?\s+care\s+home|"
+    r"children(?:\s*/\s*young\s+persons?|\s+and\s+young\s+people)(?:['’]s)?\s+(?:care\s+)?home|"
+    r"residential\s+(?:care\s+)?home\s+for\s+(?:up\s+to\s+\w+\s+)?children|"
+    r"residential\s+care\s+home.{0,50}\bchildren\b|"
+    r"care\s+home.{0,50}\b(?:children|young\s+people|young\s+persons?)\b)\b",
     re.IGNORECASE,
 )
-_CHANGE_OF_USE = re.compile(
-    r"\b(?:change\s+of\s+use|convert(?:ed|ing|s|ion)?|conversion)\b|"
-    r"\b(?:c3|dwelling\s*house)\b.{0,90}\b(?:c2|children(?:['’]s|s)?\s+(?:care\s+)?home)\b",
+_CHILD_CONTEXT = re.compile(
+    r"\b(?:children|child|young\s+people|young\s+persons?|under\s*18s?)\b", re.IGNORECASE
+)
+_CARE_USE_CONTEXT = re.compile(
+    r"\b(?:c2|residential\s+(?:care\s+)?home|care\s+home|residential\s+institution)\b",
+    re.IGNORECASE,
+)
+_CHANGE_TO_CARE = re.compile(
+    r"\b(?:change\s+of\s+use|conversion|convert(?:ed|ing)?)\b.{0,180}\b(?:from|of)\b"
+    r".{0,120}\b(?:c3a?|c4|dwelling\s*house|dwelling|house\s+in\s+multiple\s+occupation|"
+    r"hmo|education(?:al)?|school|pru|office|class\s+e|existing\s+(?:building|property|use))\b"
+    r".{0,180}\b(?:to|as|into)\b.{0,160}\b(?:c2|children|child|young\s+people|young\s+persons?)\b|"
+    r"\b(?:c3a?|c4|dwelling\s*house|dwelling|hmo|educational?|pru|class\s+e)\b"
+    r".{0,120}\b(?:to|into)\b.{0,120}\b(?:c2|children|child|young\s+people|young\s+persons?)\b|"
+    r"\buse\s+of\b.{0,100}\b(?:c3a?|dwelling\s*house|dwelling|property)\b"
+    r".{0,100}\bas\b.{0,100}\b(?:c2|children|child|young\s+people|young\s+persons?)\b|"
+    r"\bchange\s+of\s+use\b.{0,160}\bto\b.{0,120}"
+    r"\b(?:c2|children|child|young\s+people|young\s+persons?)\b",
+    re.IGNORECASE,
+)
+_CHANGE_AWAY_FROM_CARE = re.compile(
+    r"\b(?:change\s+of\s+use|conversion|convert(?:ed|ing)?)\b.{0,120}\bfrom\b"
+    r".{0,120}\b(?:c2|children(?:['’]s|s)?\s+(?:care\s+)?home|residential\s+care\s+home)\b"
+    r".{0,120}\bto\b.{0,100}\b(?:c3a?|c4|dwelling|hmo|class\s+e|office|education(?:al)?|"
+    r"non[- ]care|another\s+use)\b|"
+    r"\b(?:cessation|cease|removal)\b.{0,80}\b(?:children(?:['’]s|s)?\s+home|care\s+use|c2)\b",
     re.IGNORECASE,
 )
 _EXPLICIT_NEW = re.compile(
     r"\b(?:new|proposed|erect(?:ion|ed|ing)?|develop(?:ment|ed|ing)?|"
-    r"create|creation|provide|use\s+as|for\s+use\s+as)\b",
+    r"create|creation|provide|use\s+as|for\s+use\s+as|to\s+use\b.{0,80}\bas)\b",
     re.IGNORECASE,
 )
 _EXISTING = re.compile(
-    r"\b(?:existing|current|continued)\s+(?:use\s+)?(?:as\s+)?(?:a\s+)?"
-    r"(?:residential\s+)?children(?:['’]s|s)?\s+(?:care\s+)?home\b",
+    r"\b(?:existing|current|continued)\s+use\s+(?:of\s+\w+\s+)?(?:as\s+)?(?:a\s+)?"
+    r"(?:residential\s+)?children(?:['’]s|s)?\s+(?:care\s+)?home\b|"
+    r"\bcontinued\s+use\b.{0,100}\b(?:children|young\s+people)\b|"
+    r"\bexisting\s+(?:residential\s+)?children(?:['’]s|s)?\s+(?:care\s+)?home\b",
     re.IGNORECASE,
 )
 _LAWFULNESS = re.compile(
-    r"\b(?:certificate\s+of\s+lawful(?:ness|\s+use)|lawful\s+development\s+certificate|"
-    r"certificate\s+of\s+lawfulness)\b",
+    r"\b(?:certificate\s+of\s+lawful(?:ness|\s+use|\s+development)|"
+    r"lawful\s+development\s+certificate|application\s+for\s+(?:a\s+)?lawful\s+development\s+certificate|"
+    r"certificate\s+of\s+lawfulness|application\s+under\s+section\s*192)\b",
     re.IGNORECASE,
 )
-_LAWFULNESS_PROPOSED = re.compile(r"\bproposed\b", re.IGNORECASE)
-_LAWFULNESS_EXISTING = re.compile(r"\bexisting\b", re.IGNORECASE)
+_LAWFULNESS_PROPOSED = re.compile(
+    r"\bproposed\b|\bsection\s*192\b|\bproposed\s+(?:development|use)\b", re.IGNORECASE
+)
+_LAWFULNESS_EXISTING = re.compile(
+    r"\bexisting\s+use\b|\bcontinued\s+use\b|\blawful\s+use\s+existing\b|"
+    r"\bexisting\s+lawful\s+development\s+certificate\b",
+    re.IGNORECASE,
+)
 _CONDITION_VARIATION = re.compile(
     r"\b(?:variation|vary|removal)\s+of\s+condition\b|\bsection\s*73\b",
     re.IGNORECASE,
 )
 _CONDITION_DISCHARGE = re.compile(
-    r"\b(?:discharge\s+of\s+conditions?|approval\s+of\s+details\s+reserved\s+by\s+condition|"
+    r"\b(?:discharge\s+(?:of\s+)?conditions?|approval\s+of\s+details\s+reserved\s+by\s+condition|"
     r"details\s+pursuant\s+to\s+conditions?|compliance\s+with\s+conditions?)\b",
     re.IGNORECASE,
 )
@@ -98,7 +138,19 @@ _FOLLOW_UP = re.compile(
     re.IGNORECASE,
 )
 _MATERIAL_CAPACITY = re.compile(
-    r"\b(?:increase|additional|raise|extend)\b.{0,60}\b(?:capacity|occupancy|places?|beds?)\b",
+    r"\b(?:increase|increasing|increased|raise|extend)\b.{0,80}"
+    r"\b(?:capacity|occupancy|places?|beds?|children|young\s+people|residents?)\b|"
+    r"\b(?:addition|additional)\s+of\s+(?:one|two|three|four|\d+)\s+"
+    r"(?:children|young\s+people|young\s+persons?|young\s+person|residents?|beds?|places?)\b|"
+    r"\bfrom\s+\d+\s+(?:children|young\s+people|residents?|beds?|places?)\s+to\s+\d+\b",
+    re.IGNORECASE,
+)
+_RETROSPECTIVE = re.compile(
+    r"\b(?:retrospective|regularis(?:e|ation)|regulariz(?:e|ation))\b", re.IGNORECASE
+)
+_MIXED_USE = re.compile(
+    r"\b(?:mixed[- ]use|outline\s+application|masterplan|urban\s+extension|"
+    r"development\s+comprising|scheme\s+comprising)\b",
     re.IGNORECASE,
 )
 _REFERENCE = re.compile(
@@ -162,7 +214,14 @@ def _planning_text(raw: dict[str, Any]) -> str:
         provider.get("application_type"),
         provider.get("planning_route"),
     )
-    return " ".join(str(value or "") for value in values)
+    unique: list[str] = []
+    for value in values:
+        text = str(value or "").strip()
+        text = text.replace("", "'").replace("’", "'")
+        text = re.sub(r"\bchildren\?s\b", "children's", text, flags=re.IGNORECASE)
+        if text and text not in unique:
+            unique.append(text)
+    return " . ".join(unique)
 
 
 def extract_prior_planning_references(text: str) -> tuple[str, ...]:
@@ -209,7 +268,11 @@ def classify_care_planning_subtype(raw: dict[str, Any]) -> CarePlanningSubtypeAs
             ("appeal allowed lifecycle evidence",),
         )
     home = bool(_HOME.search(text))
+    child_context = bool(_CHILD_CONTEXT.search(text))
+    care_context = bool(_CARE_USE_CONTEXT.search(text))
     material_capacity = bool(_MATERIAL_CAPACITY.search(text))
+    # Current procedural purpose wins over quoted text describing the original
+    # permission. These checks deliberately precede all new-home semantics.
     if _NON_MATERIAL.search(text):
         return CarePlanningSubtypeAssessment(
             "NON_MATERIAL_AMENDMENT",
@@ -233,18 +296,18 @@ def classify_care_planning_subtype(raw: dict[str, Any]) -> CarePlanningSubtypeAs
         return CarePlanningSubtypeAssessment(
             "CONDITION_VARIATION", False, material_capacity, references, tuple(reasons)
         )
+    if _CHANGE_AWAY_FROM_CARE.search(text):
+        return CarePlanningSubtypeAssessment(
+            "CESSATION_OR_CHANGE_AWAY_FROM_CARE",
+            False,
+            False,
+            references,
+            ("direction of use change is away from children-care provision",),
+        )
     if _LAWFULNESS.search(text):
         proposed = bool(_LAWFULNESS_PROPOSED.search(text))
         existing = bool(_LAWFULNESS_EXISTING.search(text))
-        if proposed and not existing and home:
-            return CarePlanningSubtypeAssessment(
-                "LAWFULNESS_PROPOSED",
-                True,
-                False,
-                references,
-                ("proposed lawfulness route", "explicit children-home wording"),
-            )
-        if existing and not proposed and home:
+        if existing and home:
             return CarePlanningSubtypeAssessment(
                 "LAWFULNESS_EXISTING",
                 False,
@@ -252,14 +315,38 @@ def classify_care_planning_subtype(raw: dict[str, Any]) -> CarePlanningSubtypeAs
                 references,
                 ("existing-use lawfulness route", "explicit children-home wording"),
             )
+        if not existing and home and (proposed or _CHANGE_TO_CARE.search(text)):
+            return CarePlanningSubtypeAssessment(
+                "LAWFULNESS_PROPOSED",
+                True,
+                False,
+                references,
+                ("proposed lawfulness route", "explicit children-home wording"),
+            )
         return CarePlanningSubtypeAssessment(
             "AMBIGUOUS", False, False, references, ("ambiguous lawfulness wording",)
+        )
+    if home and _MIXED_USE.search(text):
+        return CarePlanningSubtypeAssessment(
+            "NEW_HOME_MIXED_USE",
+            True,
+            False,
+            references,
+            ("explicit children-home component in mixed-use development",),
+        )
+    if home and material_capacity and (_EXISTING.search(text) or _RETROSPECTIVE.search(text)):
+        return CarePlanningSubtypeAssessment(
+            "EXPANSION_OR_CAPACITY_CHANGE",
+            False,
+            True,
+            references,
+            ("existing children-home use", "material capacity-change wording"),
         )
     if _FOLLOW_UP.search(text):
         return CarePlanningSubtypeAssessment(
             "FOLLOW_UP_OTHER", False, material_capacity, references, ("follow-up planning wording",)
         )
-    if home and _EXISTING.search(text):
+    if home and (_EXISTING.search(text) or _RETROSPECTIVE.search(text)):
         return CarePlanningSubtypeAssessment(
             "FOLLOW_UP_OTHER",
             False,
@@ -267,7 +354,7 @@ def classify_care_planning_subtype(raw: dict[str, Any]) -> CarePlanningSubtypeAs
             references,
             ("existing children-home use wording",),
         )
-    if home and _CHANGE_OF_USE.search(text) and not _EXISTING.search(text):
+    if home and _CHANGE_TO_CARE.search(text):
         return CarePlanningSubtypeAssessment(
             "NEW_HOME_CHANGE_OF_USE",
             True,
@@ -275,9 +362,17 @@ def classify_care_planning_subtype(raw: dict[str, Any]) -> CarePlanningSubtypeAs
             references,
             ("explicit change of use", "explicit children-home wording"),
         )
-    if home and (_EXPLICIT_NEW.search(text) or not _EXISTING.search(text)):
+    if home and _EXPLICIT_NEW.search(text):
         return CarePlanningSubtypeAssessment(
             "NEW_HOME_OTHER_EXPLICIT", True, False, references, ("explicit children-home proposal",)
+        )
+    if child_context and care_context:
+        return CarePlanningSubtypeAssessment(
+            "AMBIGUOUS",
+            False,
+            material_capacity,
+            references,
+            ("child and care context present without clear current application direction",),
         )
     return CarePlanningSubtypeAssessment(
         "AMBIGUOUS", False, material_capacity, references, ("insufficient planning semantics",)

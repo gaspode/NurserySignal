@@ -25,6 +25,7 @@ from app.care_planning_review import (
 )
 from app.config import Settings
 from app.repository import (
+    _care_planning_taxonomy_evaluations,
     apply_care_planning_ai_approval_policy,
     apply_care_planning_fastpath_policy,
     apply_care_planning_lawfulness_policy,
@@ -95,10 +96,13 @@ def test_care_ai_approval_v1_exact_eligibility_and_exclusions() -> None:
     for subtype in (
         "LAWFULNESS_PROPOSED",
         "LAWFULNESS_EXISTING",
+        "NEW_HOME_MIXED_USE",
+        "EXPANSION_OR_CAPACITY_CHANGE",
         "CONDITION_VARIATION",
         "CONDITION_DISCHARGE",
         "NON_MATERIAL_AMENDMENT",
         "FOLLOW_UP_OTHER",
+        "CESSATION_OR_CHANGE_AWAY_FROM_CARE",
         "AMBIGUOUS",
     ):
         facts = {
@@ -317,6 +321,75 @@ def test_explicit_change_of_use_and_other_new_home_subtypes() -> None:
     assert other.subtype == "NEW_HOME_OTHER_EXPLICIT"
 
 
+def test_direction_aware_new_home_variants() -> None:
+    proposals = (
+        "Proposed change of use from dwelling (Class C3) to a residential home "
+        "for up to two children (Class C2)",
+        "Change of use from a C4 HMO to a C2 residential children's home",
+        "Conversion of former educational PRU building to a residential care home "
+        "for four children (C2)",
+        "Conversion of dwellinghouse to a children's care home",
+        "Change of use from C3 residential to Class C2 residential care home for young people",
+    )
+    for proposal in proposals:
+        candidate = enrich_care_signal(raw_planning(proposal))
+        assert candidate["extracted_facts"]["planning_subtype"] == "NEW_HOME_CHANGE_OF_USE"
+        assert candidate["extracted_facts"]["opportunity_creation_decision"] == (
+            "CREATE_OPPORTUNITY"
+        )
+
+
+def test_mixed_use_new_home_is_separate_and_not_in_existing_approval_scope() -> None:
+    candidate = enrich_care_signal(
+        raw_planning(
+            "Outline application for a mixed-use development comprising 256 dwellings, "
+            "housing with care, a new children's home and associated works"
+        )
+    )
+    facts = candidate["extracted_facts"]
+    assert facts["planning_subtype"] == "NEW_HOME_MIXED_USE"
+    assert facts["opportunity_creation_decision"] == "CREATE_OPPORTUNITY"
+    assert not care_planning_fastpath_eligible(
+        vertical="CHILDRENS_HOME",
+        source_type="planning",
+        review_status="PENDING",
+        extracted_facts=facts,
+    )
+    assert (
+        care_planning_ai_approval_exclusion(**ai_approval_kwargs(extracted_facts=facts))
+        == "SUBTYPE"
+    )
+
+    incidental = classify_care_planning_subtype(
+        raw_planning("Outline health campus with an adult care home and a children's day nursery")
+    )
+    assert incidental.subtype == "AMBIGUOUS"
+
+
+def test_change_away_from_children_care_is_not_an_opening() -> None:
+    for proposal in (
+        "Change of use from children's care home (C2) to single dwelling (C3)",
+        "Conversion from Class C2 children's home to Class E offices",
+        "Cessation of children's home use and return to a dwellinghouse",
+    ):
+        candidate = enrich_care_signal(raw_planning(proposal))
+        facts = candidate["extracted_facts"]
+        assert facts["planning_subtype"] == "CESSATION_OR_CHANGE_AWAY_FROM_CARE"
+        assert facts["opportunity_creation_decision"] == "IGNORE_FOR_OPPORTUNITY"
+
+
+def test_existing_home_capacity_change_is_expansion_not_opening() -> None:
+    for proposal in (
+        "Continued use as a children's care home with the addition of one young person",
+        "Extension to the existing children's home increasing capacity from 3 children to 4",
+    ):
+        candidate = enrich_care_signal(raw_planning(proposal))
+        facts = candidate["extracted_facts"]
+        assert facts["planning_subtype"] == "EXPANSION_OR_CAPACITY_CHANGE"
+        assert facts["opportunity_creation_decision"] == "SUPPORT_EXISTING_ONLY"
+        assert facts["opportunity_change_type"] == "EXPANSION"
+
+
 def test_granted_and_pending_explicit_home_remain_fastpath_candidates() -> None:
     for decision in ("Grant Conditionally", "Pending Consideration"):
         candidate = enrich_care_signal(
@@ -351,6 +424,26 @@ def test_lawfulness_proposed_existing_and_ambiguous_are_distinct() -> None:
     assert ambiguous["extracted_facts"]["opportunity_creation_decision"] == "REVIEW"
 
 
+def test_lawfulness_terminology_variants_follow_proposed_existing_direction() -> None:
+    proposed = (
+        "Certificate of lawful development for proposed change of use from dwellinghouse "
+        "to a residential care home for two children",
+        "Application for a Lawful Development Certificate under Section 192 for use of "
+        "a C3 dwelling as a children's home (C2)",
+        "Certificate of Lawfulness for change of use from C3 to a C2 residential children's home",
+    )
+    for proposal in proposed:
+        assert (
+            enrich_care_signal(raw_planning(proposal))["extracted_facts"]["planning_subtype"]
+            == "LAWFULNESS_PROPOSED"
+        )
+    existing = enrich_care_signal(
+        raw_planning("Certificate of lawfulness for existing use as a children's home")
+    )
+    assert existing["extracted_facts"]["planning_subtype"] == "LAWFULNESS_EXISTING"
+    assert existing["extracted_facts"]["opportunity_creation_decision"] == ("SUPPORT_EXISTING_ONLY")
+
+
 def test_follow_ups_do_not_create_duplicate_openings_and_retain_reference() -> None:
     cases = {
         "Variation of condition 2 of planning application 24/01234/FUL for a children's home": (
@@ -372,6 +465,61 @@ def test_follow_ups_do_not_create_duplicate_openings_and_retain_reference() -> N
         assert facts["planning_subtype"] == subtype
         assert facts["opportunity_creation_decision"] != "CREATE_OPPORTUNITY"
         assert facts["planning_prior_references"] == references
+
+
+def test_current_follow_up_purpose_beats_quoted_original_permission() -> None:
+    variation = enrich_care_signal(
+        raw_planning(
+            "Variation of condition 4 of permission 24/1234/FUL for change of use from "
+            "C3 dwelling to C2 children's home, to alter staff numbers"
+        )
+    )
+    discharge = enrich_care_signal(
+        raw_planning(
+            "Submission of details to discharge condition 3 imposed on permission "
+            "24/5678/FUL for change of use from C3 dwelling to C2 children's home"
+        )
+    )
+    assert variation["extracted_facts"]["planning_subtype"] == "CONDITION_VARIATION"
+    assert discharge["extracted_facts"]["planning_subtype"] == "CONDITION_DISCHARGE"
+    assert variation["extracted_facts"]["opportunity_creation_decision"] == (
+        "SUPPORT_EXISTING_ONLY"
+    )
+    assert discharge["extracted_facts"]["opportunity_creation_decision"] == (
+        "SUPPORT_EXISTING_ONLY"
+    )
+
+
+def test_taxonomy_preview_evaluation_does_not_mutate_review_or_ai_state() -> None:
+    signal_id = uuid4()
+    item = {
+        **raw_planning(
+            "Proposed change of use from dwelling (C3) to a residential care home "
+            "for two children (C2)",
+            signal_id=str(signal_id),
+            decision="Approved",
+        ),
+        "id": signal_id,
+        "review_status": "PENDING",
+        "reviewed_by": None,
+        "existing_facts": {
+            "planning_subtype": "AMBIGUOUS",
+            "opportunity_creation_decision": "REVIEW",
+            "opportunity_change_type": "OPENING",
+            "planning_ambiguity_markers": ["insufficient planning semantics"],
+        },
+        "ai_status": "SUCCEEDED",
+        "ai_recommendation": "APPROVE",
+        "ai_confidence": 0.95,
+        "ai_prompt_version": "care-planning-shadow-v2",
+    }
+    evaluation = _care_planning_taxonomy_evaluations([item])[0]
+    assert evaluation["old_subtype"] == "AMBIGUOUS"
+    assert evaluation["new_subtype"] == "NEW_HOME_CHANGE_OF_USE"
+    assert evaluation["changed"] is True
+    assert item["review_status"] == "PENDING"
+    assert item["ai_recommendation"] == "APPROVE"
+    assert item["existing_facts"]["planning_subtype"] == "AMBIGUOUS"
 
 
 def test_prior_reference_extraction_rejects_prose_after_application() -> None:

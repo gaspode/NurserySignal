@@ -20,6 +20,7 @@ from app.care_planning_review import (
     CARE_PLANNING_LAWFULNESS_MIN_CONFIDENCE,
     CARE_PLANNING_LAWFULNESS_POLICY_VERSION,
     CARE_PLANNING_LAWFULNESS_PROMPT_VERSION,
+    CARE_PLANNING_TAXONOMY_VERSION,
     WITHDRAWAL_POLICY_VERSION,
     care_planning_ai_approval_exclusion,
     care_planning_ai_approval_outcome,
@@ -1846,6 +1847,266 @@ def cleanup_withdrawn_care_planning_signals(
     }
 
 
+_CARE_PLANNING_CLASSIFICATION_KEYS = (
+    "planning_subtype",
+    "planning_subtype_reasons",
+    "explicit_new_home_proposal",
+    "planning_material_capacity_change",
+    "planning_prior_references",
+    "planning_ambiguity_markers",
+    "opportunity_creation_decision",
+    "opportunity_change_type",
+)
+
+_CARE_PLANNING_PRESERVED_MARKERS = (
+    "automatic_review",
+    "safe_approval",
+    "care_planning_fastpath",
+    "care_planning_ai_approval",
+    "care_planning_lawfulness_approval",
+)
+
+
+def _pending_care_planning_taxonomy_rows(
+    settings: Settings, limit: int = 2500
+) -> list[dict[str, Any]]:
+    bounded_limit = min(max(int(limit), 1), 2500)
+    with connection(settings) as conn:
+        rows = conn.execute(
+            """
+            SELECT rs.id, rs.schema_version, rs.source_type, rs.source_url,
+                   rs.external_id, rs.discovered_at, rs.title, rs.raw_text,
+                   rs.location_hint, rs.organisation_hint, rs.metadata, rs.vertical,
+                   se.review_status, se.reviewed_by, se.extracted_facts,
+                   ai.status, ai.recommendation, ai.confidence, ai.prompt_version
+            FROM raw_signals rs
+            JOIN signal_enrichments se ON se.raw_signal_id = rs.id
+            LEFT JOIN LATERAL (
+                SELECT status, recommendation, confidence, prompt_version
+                FROM signal_ai_reviews
+                WHERE raw_signal_id = rs.id
+                ORDER BY created_at DESC, id DESC LIMIT 1
+            ) ai ON TRUE
+            WHERE rs.vertical = 'CHILDRENS_HOME' AND rs.source_type = 'planning'
+              AND se.review_status = 'PENDING'
+            ORDER BY rs.discovered_at DESC, rs.id DESC
+            LIMIT %s
+            """,
+            (bounded_limit,),
+        ).fetchall()
+    fields = (
+        "id",
+        "schema_version",
+        "source_type",
+        "source_url",
+        "external_id",
+        "discovered_at",
+        "title",
+        "raw_text",
+        "location_hint",
+        "organisation_hint",
+        "metadata",
+        "vertical",
+        "review_status",
+        "reviewed_by",
+        "existing_facts",
+        "ai_status",
+        "ai_recommendation",
+        "ai_confidence",
+        "ai_prompt_version",
+    )
+    return [dict(zip(fields, row)) for row in rows]
+
+
+def _care_planning_taxonomy_evaluations(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    evaluations: list[dict[str, Any]] = []
+    for item in items:
+        candidate = policy_for("CHILDRENS_HOME").classify_signal(item)
+        facts = dict(candidate.get("extracted_facts") or {})
+        existing = item.get("existing_facts") or {}
+        for marker_name in _CARE_PLANNING_PRESERVED_MARKERS:
+            if marker_name in existing:
+                facts[marker_name] = existing[marker_name]
+        old_subtype = str(existing.get("planning_subtype") or "AMBIGUOUS")
+        new_subtype = str(facts.get("planning_subtype") or "AMBIGUOUS")
+        confidence = float(item["ai_confidence"]) if item.get("ai_confidence") is not None else None
+        before_bucket = review_triage_bucket(
+            signal_id=str(item["id"]),
+            vertical=item["vertical"],
+            source_type=item["source_type"],
+            review_status=item["review_status"],
+            metadata=item.get("metadata"),
+            extracted_facts=existing,
+            ai_status=item.get("ai_status"),
+            ai_recommendation=item.get("ai_recommendation"),
+            ai_confidence=confidence,
+        )
+        after_bucket = review_triage_bucket(
+            signal_id=str(item["id"]),
+            vertical=item["vertical"],
+            source_type=item["source_type"],
+            review_status=item["review_status"],
+            metadata=item.get("metadata"),
+            extracted_facts=facts,
+            ai_status=item.get("ai_status"),
+            ai_recommendation=item.get("ai_recommendation"),
+            ai_confidence=confidence,
+        )
+        evaluations.append(
+            {
+                "item": item,
+                "candidate": candidate,
+                "facts": facts,
+                "old_subtype": old_subtype,
+                "new_subtype": new_subtype,
+                "changed": any(
+                    existing.get(key) != facts.get(key)
+                    for key in _CARE_PLANNING_CLASSIFICATION_KEYS
+                ),
+                "before_bucket": before_bucket,
+                "after_bucket": after_bucket,
+            }
+        )
+    return evaluations
+
+
+def _increment(counter: dict[str, int], value: Any) -> None:
+    key = str(value if value not in (None, "") else "MISSING")
+    counter[key] = counter.get(key, 0) + 1
+
+
+def care_planning_taxonomy_preview(settings: Settings, *, limit: int = 2500) -> dict[str, Any]:
+    """Recompute the pending taxonomy in memory without changing review or evidence state."""
+    items = _pending_care_planning_taxonomy_rows(settings, limit)
+    evaluations = _care_planning_taxonomy_evaluations(items)
+    before_subtypes: dict[str, int] = {}
+    after_subtypes: dict[str, int] = {}
+    before_triage: dict[str, int] = {}
+    after_triage: dict[str, int] = {}
+    transitions: dict[str, dict[str, Any]] = {}
+    for evaluation in evaluations:
+        item = evaluation["item"]
+        facts = evaluation["facts"]
+        _increment(before_subtypes, evaluation["old_subtype"])
+        _increment(after_subtypes, evaluation["new_subtype"])
+        _increment(before_triage, evaluation["before_bucket"])
+        _increment(after_triage, evaluation["after_bucket"])
+        transition_key = f"{evaluation['old_subtype']} -> {evaluation['new_subtype']}"
+        transition = transitions.setdefault(
+            transition_key,
+            {
+                "count": 0,
+                "ai_recommendations": {},
+                "confidence_distribution": {},
+                "canonical_outcomes": {},
+                "opportunity_creation_decisions": {},
+                "examples": [],
+            },
+        )
+        transition["count"] += 1
+        _increment(transition["ai_recommendations"], item.get("ai_recommendation"))
+        _increment(
+            transition["confidence_distribution"],
+            f"{float(item['ai_confidence']):.2f}"
+            if item.get("ai_confidence") is not None
+            else None,
+        )
+        _increment(
+            transition["canonical_outcomes"],
+            canonical_planning_outcome(item.get("metadata")).outcome.value,
+        )
+        _increment(
+            transition["opportunity_creation_decisions"],
+            facts.get("opportunity_creation_decision"),
+        )
+        if evaluation["changed"] and len(transition["examples"]) < 3:
+            transition["examples"].append(
+                {
+                    "external_id": item.get("external_id"),
+                    "title": str(item.get("title") or "")[:500],
+                    "ai_recommendation": item.get("ai_recommendation"),
+                    "ai_confidence": item.get("ai_confidence"),
+                }
+            )
+
+    explicit_eligible: list[str] = []
+    explicit_holdouts = 0
+    lawfulness_eligible: list[str] = []
+    lawfulness_holdouts = 0
+    for evaluation in evaluations:
+        item = evaluation["item"]
+        facts = evaluation["facts"]
+        confidence = float(item["ai_confidence"]) if item.get("ai_confidence") is not None else None
+        policy_kwargs = {
+            "signal_id": str(item["id"]),
+            "vertical": item["vertical"],
+            "source_type": item["source_type"],
+            "review_status": item["review_status"],
+            "reviewed_by": item.get("reviewed_by"),
+            "metadata": item.get("metadata"),
+            "extracted_facts": facts,
+            "ai_status": item.get("ai_status"),
+            "ai_prompt_version": item.get("ai_prompt_version"),
+            "ai_recommendation": item.get("ai_recommendation"),
+            "ai_confidence": confidence,
+        }
+        explicit_outcome = care_planning_ai_approval_outcome(**policy_kwargs)
+        if explicit_outcome != "NOT_ELIGIBLE":
+            explicit_eligible.append(evaluation["new_subtype"])
+            explicit_holdouts += int(explicit_outcome == "QA_HOLDOUT")
+        lawfulness_outcome = care_planning_lawfulness_outcome(**policy_kwargs)
+        if lawfulness_outcome != "NOT_ELIGIBLE":
+            lawfulness_eligible.append(evaluation["new_subtype"])
+            lawfulness_holdouts += int(lawfulness_outcome == "QA_HOLDOUT")
+
+    changed_ids = [evaluation["item"]["id"] for evaluation in evaluations if evaluation["changed"]]
+    published_affected = 0
+    if changed_ids:
+        with connection(settings) as conn:
+            published_affected = int(
+                conn.execute(
+                    """
+                    SELECT count(DISTINCT o.id)
+                    FROM opportunities o
+                    JOIN opportunity_signals os ON os.opportunity_id = o.id
+                    WHERE o.vertical = 'CHILDRENS_HOME'
+                      AND o.publication_status = 'PUBLISHED'
+                      AND os.raw_signal_id = ANY(%s::uuid[])
+                    """,
+                    (changed_ids,),
+                ).fetchone()[0]
+            )
+    return {
+        "preview": True,
+        "policy_version": CARE_PLANNING_TAXONOMY_VERSION,
+        "pending_evaluated": len(evaluations),
+        "records_changed": len(changed_ids),
+        "before_subtypes": dict(sorted(before_subtypes.items())),
+        "after_subtypes": dict(sorted(after_subtypes.items())),
+        "before_triage": dict(sorted(before_triage.items())),
+        "after_triage": dict(sorted(after_triage.items())),
+        "transitions": dict(sorted(transitions.items())),
+        "policy_preview": {
+            "care_planning_ai_approval_v1_1": {
+                "eligible": len(explicit_eligible),
+                "would_auto_approve": len(explicit_eligible) - explicit_holdouts,
+                "qa_holdouts": explicit_holdouts,
+                "subtypes": dict(sorted(Counter(explicit_eligible).items())),
+            },
+            "care_planning_lawfulness_proposed_v1": {
+                "eligible": len(lawfulness_eligible),
+                "would_auto_approve": len(lawfulness_eligible) - lawfulness_holdouts,
+                "qa_holdouts": lawfulness_holdouts,
+                "subtypes": dict(sorted(Counter(lawfulness_eligible).items())),
+            },
+        },
+        "published_opportunities_affected": published_affected,
+        "customer_publication_unchanged": True,
+        "review_state_unchanged": True,
+        "ai_history_unchanged": True,
+    }
+
+
 def reclassify_pending_care_planning(
     settings: Settings,
     *,
@@ -1898,7 +2159,10 @@ def reclassify_pending_care_planning(
             "existing_facts",
         )
         counts: dict[str, int] = {}
+        transitions: dict[str, int] = {}
         updated = 0
+        records_changed = 0
+        idempotent_skips = 0
         errors = 0
         for row in rows:
             raw = dict(zip(fields, row))
@@ -1906,16 +2170,46 @@ def reclassify_pending_care_planning(
                 candidate = policy_for("CHILDRENS_HOME").classify_signal(raw)
                 facts = candidate["extracted_facts"]
                 existing = raw.get("existing_facts") or {}
-                for marker_name in (
-                    "automatic_review",
-                    "safe_approval",
-                    "care_planning_fastpath",
-                    "care_planning_ai_approval",
-                ):
+                for marker_name in _CARE_PLANNING_PRESERVED_MARKERS:
                     if marker_name in existing:
                         facts[marker_name] = existing[marker_name]
+                old_subtype = str(existing.get("planning_subtype") or "AMBIGUOUS")
                 subtype = str(facts.get("planning_subtype") or "AMBIGUOUS")
                 counts[subtype] = counts.get(subtype, 0) + 1
+                transition = f"{old_subtype} -> {subtype}"
+                transitions[transition] = transitions.get(transition, 0) + 1
+                semantic_change = any(
+                    existing.get(key) != facts.get(key)
+                    for key in _CARE_PLANNING_CLASSIFICATION_KEYS
+                )
+                if semantic_change:
+                    records_changed += 1
+                    history = list(existing.get("planning_classification_history") or [])
+                    history.append(
+                        {
+                            "taxonomy_version": existing.get("planning_taxonomy_version")
+                            or "legacy",
+                            "planning_subtype": existing.get("planning_subtype"),
+                            "planning_subtype_reasons": existing.get("planning_subtype_reasons")
+                            or [],
+                            "opportunity_creation_decision": existing.get(
+                                "opportunity_creation_decision"
+                            ),
+                            "opportunity_change_type": existing.get("opportunity_change_type"),
+                            "reclassified_at": datetime.now(UTC).isoformat(),
+                        }
+                    )
+                    facts["planning_classification_history"] = history[-10:]
+                elif existing.get("planning_classification_history"):
+                    facts["planning_classification_history"] = existing[
+                        "planning_classification_history"
+                    ]
+                if (
+                    not semantic_change
+                    and existing.get("planning_taxonomy_version") == CARE_PLANNING_TAXONOMY_VERSION
+                ):
+                    idempotent_skips += 1
+                    continue
                 changed = conn.execute(
                     """
                     UPDATE signal_enrichments
@@ -1944,35 +2238,42 @@ def reclassify_pending_care_planning(
                 updated += int(changed is not None)
             except Exception:
                 errors += 1
-        conn.execute(
-            """
-            INSERT INTO admin_audit_events
-                (action, actor, target_type, target_count, details, vertical)
-            VALUES ('CARE_PLANNING_SUBTYPE_RECLASSIFY', %s, 'signal', %s, %s,
-                    'CHILDRENS_HOME')
-            """,
-            (
-                actor,
-                updated,
-                Jsonb(
-                    {
-                        "policy_version": CARE_PLANNING_FASTPATH_POLICY_VERSION,
-                        "inspected": len(rows),
-                        "updated": updated,
-                        "subtypes": counts,
-                        "errors": errors,
-                        "targeted": bool(targeted_ids),
-                        "requested_signal_ids": targeted_ids,
-                    }
+        if updated:
+            conn.execute(
+                """
+                INSERT INTO admin_audit_events
+                    (action, actor, target_type, target_count, details, vertical)
+                VALUES ('CARE_PLANNING_SUBTYPE_RECLASSIFY', %s, 'signal', %s, %s,
+                        'CHILDRENS_HOME')
+                """,
+                (
+                    actor,
+                    updated,
+                    Jsonb(
+                        {
+                            "policy_version": CARE_PLANNING_TAXONOMY_VERSION,
+                            "inspected": len(rows),
+                            "updated": updated,
+                            "records_changed": records_changed,
+                            "idempotent_skips": idempotent_skips,
+                            "subtypes": counts,
+                            "transitions": transitions,
+                            "errors": errors,
+                            "targeted": bool(targeted_ids),
+                            "requested_signal_ids": targeted_ids,
+                        }
+                    ),
                 ),
-            ),
-        )
+            )
         conn.commit()
     return {
-        "policy_version": CARE_PLANNING_FASTPATH_POLICY_VERSION,
+        "policy_version": CARE_PLANNING_TAXONOMY_VERSION,
         "pending_inspected": len(rows),
         "updated": updated,
+        "records_changed": records_changed,
+        "idempotent_skips": idempotent_skips,
         "subtypes": counts,
+        "transitions": transitions,
         "errors": errors,
         "targeted": bool(targeted_ids),
         "requested_signal_ids": targeted_ids,
@@ -2735,10 +3036,10 @@ def apply_care_planning_lawfulness_policy(
                                 "Auto-approved — proposed new-home lawfulness evidence and "
                                 "high-confidence current AI assessment agreed."
                                 if outcome == "AUTO_APPROVE"
-                            else (
-                                "QA holdout — otherwise qualifies for "
-                                "proposed-lawfulness approval."
-                            )
+                                else (
+                                    "QA holdout — otherwise qualifies for "
+                                    "proposed-lawfulness approval."
+                                )
                             ),
                             **marker,
                         }
@@ -2752,12 +3053,15 @@ def apply_care_planning_lawfulness_policy(
 CARE_PLANNING_MANUAL_ANALYSIS_SUBTYPES = (
     "NEW_HOME_CHANGE_OF_USE",
     "NEW_HOME_OTHER_EXPLICIT",
+    "NEW_HOME_MIXED_USE",
     "LAWFULNESS_PROPOSED",
     "LAWFULNESS_EXISTING",
+    "EXPANSION_OR_CAPACITY_CHANGE",
     "CONDITION_VARIATION",
     "CONDITION_DISCHARGE",
     "NON_MATERIAL_AMENDMENT",
     "FOLLOW_UP_OTHER",
+    "CESSATION_OR_CHANGE_AWAY_FROM_CARE",
     "AMBIGUOUS",
 )
 

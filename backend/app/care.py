@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.care_planning_review import (
+    CARE_PLANNING_TAXONOMY_VERSION,
     care_planning_decision_allows_fastpath,
     classify_care_planning_subtype,
 )
@@ -339,6 +340,7 @@ def enrich_care_signal(raw: dict[str, Any]) -> dict[str, Any]:
         if planning_subtype.subtype in {"REFUSED", "WITHDRAWN"}:
             action = "IGNORE_FOR_OPPORTUNITY"
             commercial_change = "NONE"
+            change_type = "OTHER_CHANGE"
         elif planning_subtype.subtype in {
             "LAWFULNESS_EXISTING",
             "CONDITION_VARIATION",
@@ -353,10 +355,34 @@ def enrich_care_signal(raw: dict[str, Any]) -> dict[str, Any]:
                 and planning_subtype.subtype == "CONDITION_VARIATION"
                 else "NONE"
             )
+            change_type = (
+                "EXPANSION"
+                if planning_subtype.material_capacity_change
+                and planning_subtype.subtype == "CONDITION_VARIATION"
+                else "OTHER_CHANGE"
+            )
+        elif planning_subtype.subtype == "EXPANSION_OR_CAPACITY_CHANGE":
+            action = "SUPPORT_EXISTING_ONLY" if matched else "REVIEW"
+            commercial_change = "STRONG"
+            change_type = "EXPANSION"
+        elif planning_subtype.subtype == "CESSATION_OR_CHANGE_AWAY_FROM_CARE":
+            action = "IGNORE_FOR_OPPORTUNITY"
+            commercial_change = "NONE"
+            change_type = "OTHER_CHANGE"
         elif planning_subtype.subtype == "LAWFULNESS_PROPOSED":
             action = "CREATE_OPPORTUNITY" if matched else "REVIEW"
+            change_type = "OPENING"
+        elif planning_subtype.subtype in {
+            "NEW_HOME_CHANGE_OF_USE",
+            "NEW_HOME_OTHER_EXPLICIT",
+            "NEW_HOME_MIXED_USE",
+        }:
+            action = "CREATE_OPPORTUNITY" if matched else "REVIEW"
+            commercial_change = "STRONG" if matched else "NONE"
+            change_type = "OPENING"
         elif planning_subtype.subtype == "AMBIGUOUS":
             action = "REVIEW" if matched else "IGNORE_FOR_OPPORTUNITY"
+        material_planning_change = change_type != "OTHER_CHANGE"
     creation_reason = (
         "Planning evidence indicates expansion of an existing children's home"
         if source_type == "planning" and change_type == "EXPANSION"
@@ -393,6 +419,9 @@ def enrich_care_signal(raw: dict[str, Any]) -> dict[str, Any]:
             planning_outcome.matched_field if source_type == "planning" else None
         ),
         "planning_subtype": planning_subtype.subtype if source_type == "planning" else None,
+        "planning_taxonomy_version": (
+            CARE_PLANNING_TAXONOMY_VERSION if source_type == "planning" else None
+        ),
         "planning_subtype_reasons": (
             list(planning_subtype.reasons) if source_type == "planning" else []
         ),

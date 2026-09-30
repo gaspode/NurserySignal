@@ -31,7 +31,10 @@ from app.care_ai_validation import (
     run_care_planning_ai_validation,
 )
 from app.care_backfill import backfill_care_from_stored_evidence
-from app.care_planning_review import validate_care_planning_subtype
+from app.care_planning_review import (
+    CARE_PLANNING_TAXONOMY_VERSION,
+    validate_care_planning_subtype,
+)
 from app.config import Settings
 from app.customer import (
     apply_pilot_publications,
@@ -65,6 +68,7 @@ from app.repository import (
     care_planning_fastpath_backlog,
     care_planning_lawfulness_preview,
     care_planning_manual_cohort_analysis,
+    care_planning_taxonomy_preview,
     cleanup_refused_planning_signals,
     cleanup_withdrawn_care_planning_signals,
     create_opportunity_from_signal,
@@ -1331,6 +1335,8 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 if admin_error:
                     return admin_error
                 payload = parse_json_payload(_raw_body(event))
+                if payload.get("confirm_policy_version") != CARE_PLANNING_TAXONOMY_VERSION:
+                    raise ValueError("confirm_policy_version_required")
                 actor = str(claims.get("sub") or claims.get("username") or "unknown")
                 requested_ids = payload.get("signal_ids")
                 if requested_ids is not None:
@@ -1350,6 +1356,12 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                         signal_ids=requested_ids,
                     ),
                 )
+            if action == "care-planning-reclassify" and method == "GET":
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                limit = min(max(int(_query(event, "limit") or "2500"), 1), 2500)
+                return _response(200, care_planning_taxonomy_preview(settings, limit=limit))
             if action == "care-planning-withdrawn" and method == "POST":
                 admin_error = _require_admin(claims, settings)
                 if admin_error:

@@ -1119,6 +1119,7 @@ def test_care_planning_backlog_actions_are_admin_only_and_bounded(monkeypatch) -
     withdrawn_args = {}
     fastpath_args = {}
     ai_approval_args = {}
+    taxonomy_preview_args = {}
     monkeypatch.setattr(
         "app.handler.reclassify_pending_care_planning",
         lambda settings, **kwargs: reclassify_args.update(kwargs) or {"updated": 1},
@@ -1135,11 +1136,29 @@ def test_care_planning_backlog_actions_are_admin_only_and_bounded(monkeypatch) -
         "app.handler.care_planning_ai_approval_backlog",
         lambda settings, **kwargs: ai_approval_args.update(kwargs) or {"preview": True},
     )
+    monkeypatch.setattr(
+        "app.handler.care_planning_taxonomy_preview",
+        lambda settings, **kwargs: taxonomy_preview_args.update(kwargs) or {"preview": True},
+    )
     reclassified = handler(
         event(
             "/admin/review-triage/care-planning/reclassify",
             "POST",
-            body=json.dumps({"limit": 99999, "signal_ids": [str(uuid4())]}),
+            body=json.dumps(
+                {
+                    "limit": 99999,
+                    "signal_ids": [str(uuid4())],
+                    "confirm_policy_version": "care-planning-taxonomy-v2",
+                }
+            ),
+        ),
+        None,
+    )
+    taxonomy_preview = handler(
+        event(
+            "/admin/review-triage/care-planning/reclassify",
+            "GET",
+            query={"limit": "99999"},
         ),
         None,
     )
@@ -1169,6 +1188,17 @@ def test_care_planning_backlog_actions_are_admin_only_and_bounded(monkeypatch) -
     )
     assert reclassified["statusCode"] == 200 and reclassify_args["limit"] == 2500
     assert len(reclassify_args["signal_ids"]) == 1
+    assert taxonomy_preview["statusCode"] == 200
+    assert taxonomy_preview_args["limit"] == 2500
+    missing_confirmation = handler(
+        event(
+            "/admin/review-triage/care-planning/reclassify",
+            "POST",
+            body=json.dumps({"limit": 10}),
+        ),
+        None,
+    )
+    assert missing_confirmation["statusCode"] == 400
     assert withdrawn["statusCode"] == 200 and withdrawn_args["limit"] == 2500
     assert preview["statusCode"] == 200
     assert fastpath_args["preview"] is True and fastpath_args["limit"] == 100

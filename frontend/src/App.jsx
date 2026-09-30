@@ -55,12 +55,15 @@ function planningSubtypeLabel(value) {
   return {
     NEW_HOME_CHANGE_OF_USE: "Explicit new home — change of use",
     NEW_HOME_OTHER_EXPLICIT: "Explicit new home — other",
+    NEW_HOME_MIXED_USE: "New home — mixed-use development",
     LAWFULNESS_PROPOSED: "Lawfulness proposed",
     LAWFULNESS_EXISTING: "Lawfulness existing",
+    EXPANSION_OR_CAPACITY_CHANGE: "Expansion / capacity change",
     CONDITION_VARIATION: "Condition variation",
     CONDITION_DISCHARGE: "Condition discharge",
     NON_MATERIAL_AMENDMENT: "Non-material amendment",
     FOLLOW_UP_OTHER: "Follow-up",
+    CESSATION_OR_CHANGE_AWAY_FROM_CARE: "Cessation / change away from care",
     REFUSED: "Refused",
     WITHDRAWN: "Withdrawn",
     AMBIGUOUS: "Ambiguous",
@@ -810,7 +813,7 @@ function SignalListPage({ apiClient, onNavigate, initialQuery = "", mode, showVe
         {!inbox && <label>Search<input aria-label={unmatched ? "Search unmatched signals" : "Search reviewed signals"} type="search" placeholder="Proposal, reference, council…" value={filters.q} onChange={(event) => updateFilter("q", event.target.value)} /></label>}
         {unmatched && <><label>Opportunity decision<select aria-label="Opportunity decision" value={filters.opportunity_decision} onChange={(event) => updateFilter("opportunity_decision", event.target.value)}><option value="">All actionable</option><option value="CREATE_OPPORTUNITY">Create opportunity</option><option value="SUPPORT_EXISTING_ONLY">Support existing only</option><option value="REVIEW">Needs review</option></select></label><label className="checkbox-filter"><input type="checkbox" checked={filters.include_excluded === "true"} onChange={(event) => updateFilter("include_excluded", event.target.checked ? "true" : "")} /> Include rejected/false positives</label></>}
         <label>Source<select aria-label="Source type" value={filters.source_type} onChange={(event) => updateFilter("source_type", event.target.value)}><option value="">All sources</option><option value="planning">Planning</option><option value="recruitment">Recruitment</option><option value="ofsted">Ofsted</option><option value="operator_announcement">Operator announcement</option><option value="local_news">Local news</option></select></label>
-        <label>Planning subtype<select aria-label="Planning subtype" value={filters.planning_subtype} onChange={(event) => updateFilter("planning_subtype", event.target.value)}><option value="">All subtypes</option><option value="EXPLICIT_NEW_HOME">Explicit new home — all</option><option value="NEW_HOME_CHANGE_OF_USE">Explicit new home — change of use</option><option value="NEW_HOME_OTHER_EXPLICIT">Explicit new home — other</option><option value="LAWFULNESS_PROPOSED">Lawfulness proposed</option><option value="LAWFULNESS_EXISTING">Lawfulness existing</option><option value="CONDITION_VARIATION">Condition variation</option><option value="CONDITION_DISCHARGE">Condition discharge</option><option value="NON_MATERIAL_AMENDMENT">Non-material amendment</option><option value="FOLLOW_UP_OTHER">Follow-up</option><option value="WITHDRAWN">Withdrawn</option><option value="AMBIGUOUS">Ambiguous</option></select></label>
+        <label>Planning subtype<select aria-label="Planning subtype" value={filters.planning_subtype} onChange={(event) => updateFilter("planning_subtype", event.target.value)}><option value="">All subtypes</option><option value="EXPLICIT_NEW_HOME">Explicit new home — all</option><option value="NEW_HOME_CHANGE_OF_USE">Explicit new home — change of use</option><option value="NEW_HOME_OTHER_EXPLICIT">Explicit new home — other</option><option value="NEW_HOME_MIXED_USE">New home — mixed-use development</option><option value="LAWFULNESS_PROPOSED">Lawfulness proposed</option><option value="LAWFULNESS_EXISTING">Lawfulness existing</option><option value="EXPANSION_OR_CAPACITY_CHANGE">Expansion / capacity change</option><option value="CONDITION_VARIATION">Condition variation</option><option value="CONDITION_DISCHARGE">Condition discharge</option><option value="NON_MATERIAL_AMENDMENT">Non-material amendment</option><option value="FOLLOW_UP_OTHER">Follow-up</option><option value="CESSATION_OR_CHANGE_AWAY_FROM_CARE">Cessation / change away from care</option><option value="WITHDRAWN">Withdrawn</option><option value="AMBIGUOUS">Ambiguous</option></select></label>
         <label>From<input aria-label="Discovered from" type="date" value={filters.discovered_from} onChange={(event) => updateFilter("discovered_from", event.target.value)} /></label>
         <label>To<input aria-label="Discovered to" type="date" value={filters.discovered_to} onChange={(event) => updateFilter("discovered_to", event.target.value)} /></label>
         <button className="button secondary filter-reset" onClick={() => { setPage(0); setFilters(initialFilters("", mode)); }}>Reset</button>
