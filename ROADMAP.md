@@ -1256,3 +1256,17 @@ Paid-pilot activation check (2026-09-28):
   query, then uses the triggering Plota application ID for one bounded `/applications/{id}/associated` fallback,
   retaining only the exact requested reference before local authority/site resolution. This remains at most two
   provider requests for one manual recovery and does not broaden historical execution.
+- The live associated endpoint uses a distinct `{data: {principal, applications, conditions}}` envelope rather
+  than the collection endpoint's flat `data[]`; the endpoint-specific parser now validates that shape and caps the
+  application candidate set at ten. Ashburton's bounded retry used two requests, returned two associated records,
+  retained one exact `24/03385/FUL` candidate and selected the approved Croydon/Ashburton application as FOUND.
+  Normal ingestion created signal `7a916bea-07f5-4958-aed6-4e8437f01174`; no broad historical recovery ran.
+- That first successful ingestion exposed an ordering defect: generic opportunity correlation ran before family
+  reconciliation and created a separate system draft opportunity before the exact family identity was available.
+  The production workflow now reconciles before correlation, gives exact authority-scoped family identity priority
+  in matching, and reconciles again afterwards. New recovered origins therefore reuse the opportunity carrying the
+  follow-up rather than creating another shell. The one validation-created Ashburton shell still needs a bounded,
+  explicitly authorised admin merge into opportunity `6296e66f-fcf9-455d-9824-82907552cd2a`; no automatic broad
+  dedupe or historical recovery was run. Commits `2d4f741` and `3716657` deployed successfully in runs
+  `36771927297` and `36772934270`; 472 backend tests and Ruff pass, API/database health is green, active Planning,
+  ingestion and enrichment queues are empty, and the six retained collector DLQ messages remain untouched.
