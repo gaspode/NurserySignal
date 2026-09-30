@@ -38,7 +38,7 @@ resource "aws_iam_role_policy" "planning_collector_application" {
       {
         Effect   = "Allow"
         Action   = ["sqs:SendMessage"]
-        Resource = aws_sqs_queue.ingestion.arn
+        Resource = [aws_sqs_queue.ingestion.arn, aws_sqs_queue.enrichment.arn]
       },
       {
         Effect   = "Allow"
@@ -77,6 +77,7 @@ resource "aws_lambda_function" "planning_collector" {
       APP_ENV                       = var.environment
       SERVICE_NAME                  = "${local.name_prefix}-planning-collector"
       INGESTION_QUEUE_URL           = aws_sqs_queue.ingestion.url
+      ENRICHMENT_QUEUE_URL          = aws_sqs_queue.enrichment.url
       PLANNING_PROVIDER_SECRET_ARN  = aws_secretsmanager_secret.planning_provider.arn
       PLANNING_PROVIDER_BASE_URL    = "https://api.plota.co.uk/v1"
       SOURCE_RUNS_TABLE_NAME        = aws_dynamodb_table.source_runs.name

@@ -7,7 +7,7 @@ from app.ai_shadow import SUPPORTED_SHADOW_SOURCE_TYPES, evaluate_shadow, prompt
 from app.care_planning_review import planning_withdrawal_assessment
 from app.config import Settings
 from app.logging import configure_logging
-from app.queueing import EnrichmentMessage
+from app.queueing import EnrichmentMessage, PlanningOriginRecoveryResultMessage
 from app.repository import (
     ai_review_exists,
     apply_care_planning_ai_approval_policy,
@@ -21,6 +21,7 @@ from app.repository import (
     reconcile_planning_family_signal,
     save_ai_review,
     save_enrichment,
+    update_planning_origin_recovery,
 )
 from app.review_triage import planning_refusal_assessment
 from app.verticals import policy_for
@@ -30,6 +31,20 @@ logger = configure_logging()
 
 def process_message(settings: Settings, body: str) -> None:
     payload = json.loads(body)
+    if payload.get("message_type") == "planning_origin_recovery_result":
+        result = PlanningOriginRecoveryResultMessage.from_dict(payload)
+        update_planning_origin_recovery(
+            settings,
+            attempt_id=result.attempt_id,
+            status=result.status,
+            details=result.details,
+        )
+        logger.info(
+            "planning_origin_recovery_result attempt_id=%s status=%s",
+            result.attempt_id,
+            result.status,
+        )
+        return
     message = EnrichmentMessage.from_dict(payload)
     raw = get_raw_signal(settings, message.signal_id)
     if raw is None:

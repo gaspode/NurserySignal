@@ -168,6 +168,54 @@ def test_poison_message_is_reported_for_dlq(monkeypatch) -> None:
     assert result == {"batchItemFailures": [{"itemIdentifier": "poison-1"}]}
 
 
+def test_worker_persists_planning_origin_recovery_result(monkeypatch) -> None:
+    updates = []
+    message = {
+        "message_version": "1.0",
+        "message_type": "planning_origin_recovery_result",
+        "attempt_id": "attempt-1",
+        "status": "NOT_FOUND",
+        "details": {"requests": 1, "records_returned": 0},
+    }
+    monkeypatch.setattr("app.worker.Settings.from_env", lambda: object())
+    monkeypatch.setattr(
+        "app.worker.update_planning_origin_recovery",
+        lambda *args, **kwargs: updates.append(kwargs),
+    )
+
+    result = handler(
+        {"Records": [{"messageId": "origin-result-1", "body": json.dumps(message)}]},
+        None,
+    )
+
+    assert result == {"batchItemFailures": []}
+    assert updates == [
+        {
+            "attempt_id": "attempt-1",
+            "status": "NOT_FOUND",
+            "details": {"requests": 1, "records_returned": 0},
+        }
+    ]
+
+
+def test_worker_rejects_invalid_planning_origin_recovery_result(monkeypatch) -> None:
+    message = {
+        "message_version": "1.0",
+        "message_type": "planning_origin_recovery_result",
+        "attempt_id": "attempt-1",
+        "status": "RUNNING",
+        "details": {},
+    }
+    monkeypatch.setattr("app.worker.Settings.from_env", lambda: object())
+
+    result = handler(
+        {"Records": [{"messageId": "origin-result-1", "body": json.dumps(message)}]},
+        None,
+    )
+
+    assert result == {"batchItemFailures": [{"itemIdentifier": "origin-result-1"}]}
+
+
 def test_worker_processes_valid_message(monkeypatch) -> None:
     raw = raw_signal("A new nursery is proposed.")
     message = {

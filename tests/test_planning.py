@@ -409,7 +409,7 @@ def test_plota_provider_reference_lookup_is_single_bounded_exact_query() -> None
 
 
 def test_targeted_origin_recovery_uses_normal_ingestion_queue(monkeypatch) -> None:
-    updates = []
+    results = []
     queued = []
 
     class ExactProvider:
@@ -420,8 +420,8 @@ def test_targeted_origin_recovery_uses_normal_ingestion_queue(monkeypatch) -> No
     monkeypatch.setattr("app.collector.provider_api_key_from_secret", lambda arn: "secret")
     monkeypatch.setattr("app.collector.PlotaProvider", lambda *args, **kwargs: ExactProvider())
     monkeypatch.setattr(
-        "app.collector.update_planning_origin_recovery",
-        lambda *args, **kwargs: updates.append(kwargs),
+        "app.collector.send_planning_origin_recovery_result",
+        lambda settings, message: results.append(message),
     )
     monkeypatch.setattr(
         "app.collector.send_ingestion_message", lambda settings, message: queued.append(message)
@@ -430,6 +430,7 @@ def test_targeted_origin_recovery_uses_normal_ingestion_queue(monkeypatch) -> No
         Settings(
             planning_provider_secret_arn="arn:example",
             ingestion_queue_url="https://sqs.example/ingestion",
+            enrichment_queue_url="https://sqs.example/enrichment",
         ),
         {
             "attempt_id": "attempt-1",
@@ -438,12 +439,12 @@ def test_targeted_origin_recovery_uses_normal_ingestion_queue(monkeypatch) -> No
         },
     )
     assert result == {"requests": 1, "records_fetched": 1, "signals_queued": 1}
-    assert [update["status"] for update in updates] == ["RUNNING", "FOUND"]
+    assert [message.status for message in results] == ["FOUND"]
     assert queued[0].signal["vertical"] == "CHILDRENS_HOME"
 
 
 def test_targeted_origin_recovery_cools_down_not_found(monkeypatch) -> None:
-    updates = []
+    results = []
 
     class EmptyProvider:
         def applications_by_reference(self, reference, *, council, limit):
@@ -452,11 +453,14 @@ def test_targeted_origin_recovery_cools_down_not_found(monkeypatch) -> None:
     monkeypatch.setattr("app.collector.provider_api_key_from_secret", lambda arn: "secret")
     monkeypatch.setattr("app.collector.PlotaProvider", lambda *args, **kwargs: EmptyProvider())
     monkeypatch.setattr(
-        "app.collector.update_planning_origin_recovery",
-        lambda *args, **kwargs: updates.append(kwargs),
+        "app.collector.send_planning_origin_recovery_result",
+        lambda settings, message: results.append(message),
     )
     result = recover_planning_origin(
-        Settings(planning_provider_secret_arn="arn:example"),
+        Settings(
+            planning_provider_secret_arn="arn:example",
+            enrichment_queue_url="https://sqs.example/enrichment",
+        ),
         {
             "attempt_id": "attempt-2",
             "normalized_reference": "24/03385/FUL",
@@ -464,7 +468,7 @@ def test_targeted_origin_recovery_cools_down_not_found(monkeypatch) -> None:
         },
     )
     assert result == {"requests": 1, "records_fetched": 0, "signals_queued": 0}
-    assert [update["status"] for update in updates] == ["RUNNING", "NOT_FOUND"]
+    assert [message.status for message in results] == ["NOT_FOUND"]
 
 
 def test_planning_signal_maps_metadata_and_stable_identity() -> None:

@@ -20,8 +20,12 @@ from app.planning import (
     planning_signal,
 )
 from app.planning_backfill import add_counts, bounds_from_chunk, chunk_payload
-from app.queueing import SignalIngestionMessage, send_ingestion_message
-from app.repository import update_planning_origin_recovery
+from app.queueing import (
+    PlanningOriginRecoveryResultMessage,
+    SignalIngestionMessage,
+    send_ingestion_message,
+    send_planning_origin_recovery_result,
+)
 from app.secrets import provider_api_key_from_secret
 from app.source_runs import (
     finish_run,
@@ -40,58 +44,75 @@ def recover_planning_origin(settings: Settings, payload: dict[str, Any]) -> dict
     attempt_id = str(payload["attempt_id"])
     reference = str(payload["normalized_reference"])
     authority = str(payload["planning_authority"])
-    update_planning_origin_recovery(settings, attempt_id=attempt_id, status="RUNNING")
+
+    def report(status: str, details: dict[str, Any]) -> None:
+        send_planning_origin_recovery_result(
+            settings,
+            PlanningOriginRecoveryResultMessage(
+                message_version="1.0",
+                message_type="planning_origin_recovery_result",
+                attempt_id=attempt_id,
+                status=status,
+                details=details,
+            ),
+        )
+
     try:
         api_key = provider_api_key_from_secret(settings.planning_provider_secret_arn)
         provider = PlotaProvider(api_key, base_url=settings.planning_provider_base_url)
         matches = provider.applications_by_reference(reference, council=authority, limit=10)
         if not matches:
-            update_planning_origin_recovery(
-                settings,
-                attempt_id=attempt_id,
-                status="NOT_FOUND",
-                details={"requests": 1, "records_returned": 0},
-            )
-            return {"requests": 1, "records_fetched": 0, "signals_queued": 0}
-        if len(matches) > 1:
-            update_planning_origin_recovery(
-                settings,
-                attempt_id=attempt_id,
-                status="AMBIGUOUS",
-                details={"requests": 1, "records_returned": len(matches)},
-            )
-            return {"requests": 1, "records_fetched": len(matches), "signals_queued": 0}
-        record = matches[0]
-        decision = classify_care_planning(record)
-        if not decision.matched:
-            update_planning_origin_recovery(
-                settings,
-                attempt_id=attempt_id,
-                status="NOT_FOUND",
-                details={"requests": 1, "records_returned": 1, "candidate_excluded": True},
-            )
-            return {"requests": 1, "records_fetched": 1, "signals_queued": 0}
-        signal = care_planning_signal(record, decision, historical_source_date=True)
-        body = json.dumps(
-            {"message_version": "1.0", "signal": signal, "raw_provider_record": record.raw},
-            separators=(",", ":"), sort_keys=True,
-        ).encode()
-        send_ingestion_message(settings, SignalIngestionMessage.from_json(body))
-        update_planning_origin_recovery(
-            settings,
-            attempt_id=attempt_id,
-            status="FOUND",
-            details={"requests": 1, "records_returned": 1, "external_id": signal["external_id"]},
-        )
-        return {"requests": 1, "records_fetched": 1, "signals_queued": 1}
+            status = "NOT_FOUND"
+            details = {"requests": 1, "records_returned": 0}
+            result = {"requests": 1, "records_fetched": 0, "signals_queued": 0}
+        elif len(matches) > 1:
+            status = "AMBIGUOUS"
+            details = {"requests": 1, "records_returned": len(matches)}
+            result = {
+                "requests": 1,
+                "records_fetched": len(matches),
+                "signals_queued": 0,
+            }
+        else:
+            record = matches[0]
+            decision = classify_care_planning(record)
+            if not decision.matched:
+                status = "NOT_FOUND"
+                details = {
+                    "requests": 1,
+                    "records_returned": 1,
+                    "candidate_excluded": True,
+                }
+                result = {"requests": 1, "records_fetched": 1, "signals_queued": 0}
+            else:
+                signal = care_planning_signal(record, decision, historical_source_date=True)
+                body = json.dumps(
+                    {
+                        "message_version": "1.0",
+                        "signal": signal,
+                        "raw_provider_record": record.raw,
+                    },
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ).encode()
+                send_ingestion_message(settings, SignalIngestionMessage.from_json(body))
+                status = "FOUND"
+                details = {
+                    "requests": 1,
+                    "records_returned": 1,
+                    "external_id": signal["external_id"],
+                }
+                result = {"requests": 1, "records_fetched": 1, "signals_queued": 1}
     except Exception as exc:
-        update_planning_origin_recovery(
-            settings,
-            attempt_id=attempt_id,
-            status="PROVIDER_ERROR",
-            details={"error_type": type(exc).__name__},
-        )
-        raise
+        logger.exception("planning_origin_recovery_failed attempt_id=%s", attempt_id)
+        status = "PROVIDER_ERROR"
+        details = {"error_type": type(exc).__name__}
+        result = {"requests": 1, "records_fetched": 0, "signals_queued": 0}
+    # Keep callback delivery outside the provider/ingestion try block: if SQS
+    # delivery fails, the manual-run message must retry instead of being
+    # incorrectly converted into a provider error.
+    report(status, details)
+    return result
 
 
 def _requested_verticals(event: dict[str, Any]) -> tuple[str, ...]:

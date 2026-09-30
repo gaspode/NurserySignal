@@ -1222,3 +1222,11 @@ Paid-pilot activation check (2026-09-28):
   and VPC connectivity (or move recovery-status database work to an already database-enabled worker), deploy, then
   safely redrive only this failed origin-recovery message and verify FOUND/NOT_FOUND handling. No provider request
   or record quota was consumed by this failed attempt.
+- Planning origin recovery now keeps the internet-facing Plota collector outside the database VPC and reports
+  terminal FOUND/NOT_FOUND/AMBIGUOUS/PROVIDER_ERROR outcomes through the existing enrichment queue. The
+  database-enabled enrichment worker applies those result messages to the audited recovery attempt. This avoids
+  both the missing-database failure and a VPC change that would remove provider connectivity without NAT. Result
+  messages are typed and validated, provider failures become retryable admin states without uncontrolled SQS
+  provider retries, and recovered applications still enter through normal idempotent ingestion. Exact next step:
+  deploy, retry only the Ashburton lookup, verify its terminal result and normal ingestion/family reconciliation,
+  and leave the unrelated retained collector DLQ messages untouched.

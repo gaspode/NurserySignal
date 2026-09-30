@@ -46,6 +46,37 @@ class EnrichmentMessage:
 
 
 @dataclass(frozen=True)
+class PlanningOriginRecoveryResultMessage:
+    """Collector-to-enrichment callback for a targeted Planning origin lookup."""
+
+    message_version: str
+    message_type: str
+    attempt_id: str
+    status: str
+    details: dict[str, Any]
+
+    def to_json(self) -> str:
+        return json.dumps(asdict(self), separators=(",", ":"), sort_keys=True)
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, object]) -> PlanningOriginRecoveryResultMessage:
+        if payload.get("message_version") != "1.0":
+            raise ValueError("unsupported Planning origin result message version")
+        if payload.get("message_type") != "planning_origin_recovery_result":
+            raise ValueError("unsupported Planning origin result message type")
+        attempt_id = str(payload.get("attempt_id") or "").strip()
+        status = str(payload.get("status") or "").strip()
+        if not attempt_id:
+            raise ValueError("missing Planning origin recovery attempt ID")
+        if status not in {"FOUND", "NOT_FOUND", "AMBIGUOUS", "PROVIDER_ERROR"}:
+            raise ValueError("invalid Planning origin recovery result status")
+        details = payload.get("details") or {}
+        if not isinstance(details, dict):
+            raise ValueError("invalid Planning origin recovery result details")
+        return cls("1.0", "planning_origin_recovery_result", attempt_id, status, details)
+
+
+@dataclass(frozen=True)
 class SignalIngestionMessage:
     """Small, versioned collector-to-ingestion contract."""
 
@@ -80,6 +111,18 @@ def send_ingestion_message(settings: Settings, message: SignalIngestionMessage) 
 
 
 def send_enrichment_message(settings: Settings, message: EnrichmentMessage) -> str:
+    if not settings.enrichment_queue_url:
+        raise RuntimeError("ENRICHMENT_QUEUE_URL is not configured")
+    response = boto3.client("sqs").send_message(
+        QueueUrl=settings.enrichment_queue_url,
+        MessageBody=message.to_json(),
+    )
+    return str(response["MessageId"])
+
+
+def send_planning_origin_recovery_result(
+    settings: Settings, message: PlanningOriginRecoveryResultMessage
+) -> str:
     if not settings.enrichment_queue_url:
         raise RuntimeError("ENRICHMENT_QUEUE_URL is not configured")
     response = boto3.client("sqs").send_message(
