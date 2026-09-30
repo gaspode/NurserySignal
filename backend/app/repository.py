@@ -6243,6 +6243,7 @@ def care_opportunity_hygiene_audit(
                     'metadata', rs.metadata,
                     'review_status', se.review_status,
                     'extracted_facts', se.extracted_facts,
+                    'relationship_extracted_facts', os.extracted_facts,
                     'planning_family_relationship_types', COALESCE(
                         (SELECT jsonb_agg(DISTINCT family_rel.relationship_type)
                          FROM planning_signal_family_relationships family_rel
@@ -6453,6 +6454,14 @@ def care_opportunity_hygiene_audit(
                                     relation.get("metadata")
                                 ).outcome.value,
                                 "support_state": classify_evidence_support(relation).value,
+                                "relationship_planning_subtype": (
+                                    relation.get("relationship_extracted_facts") or {}
+                                ).get("planning_subtype"),
+                                "relationship_opportunity_creation_decision": (
+                                    relation.get("relationship_extracted_facts") or {}
+                                ).get("opportunity_creation_decision"),
+                                "match_reason": relation.get("match_reason"),
+                                "relationship_created_by": relation.get("created_by"),
                             }
                             for relation in active_planning
                         ],
