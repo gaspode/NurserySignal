@@ -1111,3 +1111,19 @@ Paid-pilot activation check (2026-09-28):
   validation. API/database health passes, the deployed frontend bundle contains the new route/view,
   ingestion/enrichment queues and DLQs are empty, and the five retained collector DLQ messages remain
   untouched. No opportunity state or customer publication was changed.
+- CareProspect customer publication now uses one privacy-safe projection for generated titles,
+  publication previews, customer feed/detail responses and the internal pilot preview. Blank customer
+  titles resolve to change-aware wording plus the best site locality and UK postcode district (for
+  example `New children’s home — Rugby, CV23`); full street addresses, inward postcode units and
+  provider-office geography are excluded. Existing explicit customer-title and summary overrides remain
+  authoritative, exact source/site evidence remains available in SignalHub admin, and publication is
+  still manual. The admin publication panel now displays the generated title and evidence-summary
+  defaults before publishing.
+- Production verification found all six published customer projections at `AREA_ONLY` precision, with
+  zero full-postcode matches and zero address fields; a separate bounded 100-opportunity preview sample
+  also had zero such leaks. Published examples include Wolverhampton/WV1, Sandwell/B43 and
+  Liverpool/L19, and published inventory remains six. Commits `d117e90` and `eba9764` deployed
+  successfully in runs `36727771733` and `36729202309`; 413 backend tests and 82 frontend tests pass
+  with Ruff, frontend build and Terraform format/validation. HTTPS and API/database health pass, active
+  queues and non-collector DLQs are empty, and the five retained collector-manual-run DLQ messages remain
+  untouched. No customer opportunity was published, unpublished or otherwise mutated.
