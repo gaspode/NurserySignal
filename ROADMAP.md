@@ -1166,14 +1166,31 @@ Paid-pilot activation check (2026-09-28):
   and the five retained collector-manual-run DLQ messages remain untouched. No review, opportunity,
   publication or customer visibility state changed. Exact next step: use the direct links during hygiene
   publication review and retain Signal Detail for internal classification/provenance inspection.
-- Planning application-family recovery is in implementation under `planning-family-v1`. The model uses
-  CareProspect vertical + normalized planning authority + conservatively normalized application reference,
-  with immutable signal memberships distinguishing primary applications from referenced/follow-up evidence.
-  Review decisions remain signal-specific. Stored evidence is always searched before a bounded exact Plota
-  lookup; external recovery runs asynchronously through the existing serial Planning queue, is capped at 25
-  records per admin invocation, and records FOUND/NOT_FOUND/AMBIGUOUS/PROVIDER_ERROR provenance with cooldowns.
-  Opportunity Detail now distinguishes foundational from supporting evidence, exposes unresolved-origin state
-  and manual lookup/retry, while hygiene review context is URL-backed with correct return, Previous/Next,
-  nested-signal return and publish-and-advance behaviour. Historical rollout gate remains: deploy, run the
-  read-only stored-origin preview, reconcile exact stored matches only, recompute hygiene, and report estimated
-  Plota quota before authorising any historical external recovery. Customer publication remains manual.
+- Planning application-family recovery is deployed under `planning-family-v1`. Identity is scoped by
+  CareProspect vertical + normalized planning authority + conservatively normalized application reference;
+  immutable family memberships distinguish primary applications from referenced/follow-up evidence and never
+  copy review decisions. Stored evidence is searched first. Missing exact origins can use the existing serial
+  Planning queue for a single-reference Plota query, with FOUND/NOT_FOUND/AMBIGUOUS/PROVIDER_ERROR provenance,
+  cooldowns, normal ingestion and a maximum admin batch of 25. Future exact-reference follow-ups queue this
+  targeted path asynchronously; historical external recovery remains an explicit bounded admin operation.
+- The production read-only preview inspected 1,322 CareProspect Planning signals: 59 follow-ups have usable
+  prior references, one has an exact same-authority stored origin, 58 have no stored origin, none are ambiguous
+  or lack authority/reference context, and 41 opportunities are currently follow-up-only. The sole stored family
+  was reconciled using an explicit two-signal selection: two signals inspected, zero errors/conflicts, zero Plota
+  requests and no new opportunity relationships because both records were already consistently attached. It
+  therefore added family provenance without changing support state. Historical Plota recovery was not run; the
+  unresolved cohort would require up to 58 exact provider requests, each capped at ten returned candidates, so
+  quota use must be approved separately after considering that bound and the expected low stored-match yield.
+- Opportunity hygiene context is now URL-backed end to end: filtered view/search/category/page, exact list
+  position, Back to Opportunity hygiene, server-side Previous/Next across page boundaries, nested Signal Detail
+  return, and publish-and-advance. Opportunity Detail labels foundational versus follow-up support, warns when
+  an origin is unresolved, shows family reference/relationship provenance and offers Find/Retry controls while
+  retaining Open signal and Open source. Current post-reconciliation hygiene is 1,144 opportunities: 750 valid,
+  347 unsupported, 24 manual/admin preserve and 23 needing investigation; 15 are published and publication was
+  untouched. Commits `e8f32db` and `01a057c` deployed successfully in runs `36756339741` and `36757746409`.
+  Backend tests pass (452), frontend tests pass (86), Ruff/build/Terraform validation pass, API/database and HTTPS
+  health pass, all active queues are empty, and the five retained collector DLQ messages remain untouched. The
+  post-deployment plan has no infrastructure configuration drift; local package regeneration only changes
+  deployable artefact hashes. Exact next step: manually inspect the 58 unresolved families and approve a small
+  (for example <=25) historical Plota recovery batch only if its expected quota cost is acceptable. Customer
+  publication remains manual.
