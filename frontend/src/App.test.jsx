@@ -978,6 +978,59 @@ describe("admin frontend", () => {
     expect(screen.getAllByText("same postcode and compatible operator/nursery name").length).toBeGreaterThan(0);
   });
 
+  it("previews a privacy-safe generated CareProspect title when the override is blank", async () => {
+    const apiClient = vi.fn().mockResolvedValue({
+      id: "care-opp-1",
+      name: "New children's home — 10 Kingswood Road Nottingham NG8 1LD",
+      address: "10 Kingswood Road",
+      postcode: "NG8 1LD",
+      town: "Nottingham",
+      vertical: "CHILDRENS_HOME",
+      lifecycle_stage: "PLANNING",
+      change_type: "OPENING",
+      confidence: 0.95,
+      publication_status: "DRAFT",
+      customer_title: null,
+      customer_summary: null,
+      default_customer_title: "New children’s home — Nottingham, NG8",
+      default_customer_summary: "A planning application explicitly proposes material children’s-home provision.",
+      signals: [],
+    });
+    render(<OpportunityDetail opportunityId="care-opp-1" apiClient={apiClient} onBack={vi.fn()} />);
+    const preview = await screen.findByText(/Default customer title:/);
+    expect(preview).toHaveTextContent("New children’s home — Nottingham, NG8");
+    expect(preview).not.toHaveTextContent("Kingswood Road");
+    expect(preview).not.toHaveTextContent("NG8 1LD");
+    expect(screen.getByText(/Default summary:/)).toHaveTextContent(
+      "A planning application explicitly proposes material children’s-home provision."
+    );
+  });
+
+  it("preserves an explicit CareProspect customer title override", async () => {
+    const apiClient = vi.fn().mockResolvedValue({
+      id: "care-opp-2",
+      name: "Internal opportunity name",
+      vertical: "CHILDRENS_HOME",
+      lifecycle_stage: "PLANNING",
+      change_type: "OPENING",
+      confidence: 0.95,
+      publication_status: "PUBLISHED",
+      customer_title: "Manually curated customer title",
+      customer_summary: "Manually curated customer summary",
+      default_customer_title: "New children’s home — Liverpool, L5",
+      signals: [],
+    });
+    render(<OpportunityDetail opportunityId="care-opp-2" apiClient={apiClient} onBack={vi.fn()} />);
+    expect(await screen.findByLabelText("Customer title")).toHaveValue(
+      "Manually curated customer title"
+    );
+    expect(screen.queryByText(/Default customer title:/)).not.toBeInTheDocument();
+    await userEvent.clear(screen.getByLabelText("Customer title"));
+    expect(screen.getByText(/Default customer title:/)).toHaveTextContent(
+      "New children’s home — Liverpool, L5"
+    );
+  });
+
   it("refreshes opportunity data after recalculation succeeds", async () => {
     const apiClient = vi.fn()
       .mockResolvedValueOnce({ items: [], total: 0 })

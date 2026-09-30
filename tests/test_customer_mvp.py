@@ -120,7 +120,7 @@ def test_customer_projection_redacts_internal_exact_location() -> None:
         saved=False,
     )
     assert item["postcode"] == "CV1"
-    assert item["title"] == "Example Care Ltd — new children’s home, Coventry CV1"
+    assert item["title"] == "New children’s home — Coventry, CV1"
     assert item["location_precision"] == "AREA_ONLY"
     assert "address" not in item
     assert "confidence" not in item
@@ -128,6 +128,48 @@ def test_customer_projection_redacts_internal_exact_location() -> None:
     assert "provider_registered_address" not in item
     assert "provider_registered_postcode" not in item
     assert "internal_match_reason" not in item
+
+
+def test_customer_projection_always_redacts_full_postcode() -> None:
+    item = _project_opportunity(
+        {
+            "id": uuid4(),
+            "town": "Liverpool",
+            "postcode": "L5 4TN",
+            "location_sensitivity": "PUBLISHED_LOCATION",
+            "change_type": "OPENING",
+            "lifecycle_stage": "PLANNING",
+            "source_types": ["planning"],
+            "first_seen_at": datetime(2026, 1, 1, tzinfo=UTC),
+            "latest_update_at": datetime(2026, 2, 1, tzinfo=UTC),
+        },
+        saved=False,
+    )
+    assert item["postcode"] == "L5"
+    assert item["title"] == "New children’s home — Liverpool, L5"
+    assert "L5 4TN" not in json.dumps(item, default=str)
+    assert "address" not in item
+
+
+def test_customer_projection_does_not_return_address_like_town() -> None:
+    item = _project_opportunity(
+        {
+            "id": uuid4(),
+            "town": "10 Kingswood Road Nottingham",
+            "local_authority": "Nottingham City Council",
+            "postcode": "NG8 1LD",
+            "change_type": "OPENING",
+            "lifecycle_stage": "PLANNING",
+            "source_types": ["planning"],
+            "first_seen_at": datetime(2026, 1, 1, tzinfo=UTC),
+            "latest_update_at": datetime(2026, 2, 1, tzinfo=UTC),
+        },
+        saved=False,
+    )
+    assert item["town"] is None
+    assert item["local_authority"] == "Nottingham"
+    assert item["postcode"] == "NG8"
+    assert "Kingswood" not in json.dumps(item, default=str)
 
 
 def test_customer_eligibility_excludes_rejected_and_procurement_only() -> None:

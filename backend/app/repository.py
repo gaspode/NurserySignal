@@ -48,6 +48,7 @@ from app.correlation import (
     preferred_match_reason,
     recruitment_evidence_strength,
 )
+from app.customer_projection import generated_customer_summary, generated_customer_title
 from app.db import connection
 from app.ingestion import NormalizedSignal
 from app.opportunity_hygiene import (
@@ -6230,6 +6231,46 @@ def opportunity_detail(settings: Settings, opportunity_id: str) -> dict[str, Any
         "ai_confidence",
         "ai_status",
     )
+    signals = [dict(zip(fields, row)) for row in rows]
+    approved_customer_signals = [
+        signal
+        for signal in signals
+        if signal.get("relationship_status") == "ACTIVE"
+        and signal.get("review_status") == "APPROVED"
+        and signal.get("source_type") != "procurement"
+    ]
+    authorities: list[str] = []
+    regions: list[str] = []
+    for signal in approved_customer_signals:
+        metadata = signal.get("metadata") or {}
+        if not isinstance(metadata, dict):
+            continue
+        authority = (
+            metadata.get("local_authority")
+            or metadata.get("council")
+            or (
+                (metadata.get("authority") or {}).get("name")
+                if isinstance(metadata.get("authority"), dict)
+                else None
+            )
+        )
+        if authority and str(authority) not in authorities:
+            authorities.append(str(authority))
+        region = metadata.get("region")
+        if region and str(region) not in regions:
+            regions.append(str(region))
+    customer_projection = {
+        "customer_title": opportunity[19],
+        "customer_summary": opportunity[20],
+        "town": opportunity[5],
+        "postcode": opportunity[4],
+        "local_authority": authorities[0] if len(authorities) == 1 else None,
+        "region": regions[0] if len(regions) == 1 else None,
+        "change_type": opportunity[7],
+        "source_types": sorted(
+            {str(signal["source_type"]) for signal in approved_customer_signals}
+        ),
+    }
     return {
         "id": opportunity[0],
         "name": opportunity[1],
@@ -6254,7 +6295,9 @@ def opportunity_detail(settings: Settings, opportunity_id: str) -> dict[str, Any
         "customer_summary": opportunity[20],
         "customer_published_by": opportunity[21],
         "customer_published_at": opportunity[22],
-        "signals": [dict(zip(fields, row)) for row in rows],
+        "default_customer_title": generated_customer_title(customer_projection),
+        "default_customer_summary": generated_customer_summary(customer_projection),
+        "signals": signals,
         "organisation_evidence": [
             {
                 "provider": row[0],

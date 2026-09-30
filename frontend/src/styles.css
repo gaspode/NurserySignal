@@ -211,6 +211,8 @@ td { border-top: 1px solid #f0f4f8; color: #334e68; font-size: 0.84rem; padding:
 .care-loading, .care-login-error { align-items: center; background: #f7faf9; color: var(--care-ink); display: flex; justify-content: center; min-height: 100vh; padding: 2rem; }
 .care-login-error { display: block; margin: auto; max-width: 620px; }
 .customer-publication-form { display: grid; gap: 1rem; grid-template-columns: 1fr 1fr; }.customer-publication-form textarea { min-height: 95px; resize: vertical; }
+.publication-default-preview { color: var(--muted); display: block; font-size: .78rem; font-weight: 400; line-height: 1.4; margin-top: .45rem; }
+.publication-default-preview strong { color: var(--ink); font-weight: 650; }
 .customer-account-row { align-items: center; border-top: 1px solid #e4e7eb; display: flex; gap: 1rem; justify-content: space-between; padding: .9rem 0; }
 
 @media (max-width: 900px) {

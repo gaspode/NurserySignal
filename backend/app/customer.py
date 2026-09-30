@@ -10,6 +10,14 @@ import boto3
 from psycopg.types.json import Jsonb
 
 from app.config import Settings
+from app.customer_projection import (
+    customer_safe_place,
+    customer_summary,
+    customer_title,
+    generated_customer_summary,
+    postcode_district,
+    safe_evidence_title,
+)
 from app.db import connection
 
 PLAN_ENTITLEMENTS = {
@@ -117,11 +125,8 @@ def _require_active(context: dict[str, Any]) -> None:
 def _opportunity_geography_sql() -> str:
     return """LEFT JOIN LATERAL (
         SELECT
-          (array_agg(NULLIF(COALESCE(rs.metadata->>'region',
-              rs.metadata->>'provider_region'), '')) FILTER
-              (WHERE COALESCE(
-                  rs.metadata->>'region', rs.metadata->>'provider_region'
-              ) IS NOT NULL))[1]
+          (array_agg(NULLIF(rs.metadata->>'region', '')) FILTER
+              (WHERE rs.metadata->>'region' IS NOT NULL))[1]
               AS region,
           (array_agg(NULLIF(COALESCE(rs.metadata->>'local_authority',
               rs.metadata->>'council', rs.metadata->'authority'->>'name'), '')) FILTER
@@ -152,29 +157,11 @@ def _eligibility_sql() -> str:
 
 
 def _outward_postcode(postcode: str | None) -> str | None:
-    if not postcode:
-        return None
-    value = " ".join(str(postcode).upper().split())
-    return value.split(" ", 1)[0] if value else None
+    return postcode_district(postcode)
 
 
 def _customer_title(row: dict[str, Any]) -> str:
-    if row.get("customer_title"):
-        return str(row["customer_title"])
-    location = row.get("town") or row.get("local_authority") or row.get("region")
-    postcode_area = _outward_postcode(row.get("postcode"))
-    if postcode_area and postcode_area.lower() not in str(location or "").lower():
-        location = f"{location} {postcode_area}" if location else postcode_area
-    subject = {
-        "OPENING": "new children’s home",
-        "EXPANSION": "children’s-home expansion",
-        "RELOCATION": "children’s-home relocation",
-        "OTHER_CHANGE": "children’s-home development",
-    }.get(str(row.get("change_type")), "children’s-home development")
-    operator = str(row.get("operator_name") or "").strip()
-    if operator:
-        return f"{operator} — {subject}{f', {location}' if location else ''}"
-    return f"{subject.capitalize()}{f' — {location}' if location else ''}"
+    return customer_title(row)
 
 
 def _strength(row: dict[str, Any]) -> str:
@@ -190,37 +177,24 @@ def _strength(row: dict[str, Any]) -> str:
 
 
 def _why(row: dict[str, Any]) -> str:
-    sources = set(row.get("source_types") or [])
-    change = str(row.get("change_type") or "OTHER_CHANGE")
-    if len(sources) >= 2:
-        return "Multiple independent public sources support this opportunity."
-    if "planning" in sources:
-        if change == "EXPANSION":
-            return "A planning application explicitly indicates increased children’s-home capacity."
-        return "A planning application explicitly proposes material children’s-home provision."
-    if "recruitment" in sources:
-        return (
-            "Recruitment evidence explicitly refers to a new or materially changing "
-            "children’s home."
-        )
-    if "ofsted" in sources:
-        return "Official Ofsted evidence confirms regulatory progress."
-    return "Reviewed public evidence supports a material children’s-home change."
+    return generated_customer_summary(row)
 
 
 def _project_opportunity(row: dict[str, Any], *, saved: bool) -> dict[str, Any]:
-    internal_location = row.get("location_sensitivity") == "INTERNAL_EXACT"
-    postcode = _outward_postcode(row.get("postcode")) if internal_location else row.get("postcode")
+    postcode = _outward_postcode(row.get("postcode"))
+    town = customer_safe_place(row.get("town"))
+    local_authority = customer_safe_place(row.get("local_authority"), authority=True)
+    region = customer_safe_place(row.get("region"))
     projected = {
         "id": str(row["id"]),
         "title": _customer_title(row),
-        "summary": row.get("customer_summary") or _why(row),
+        "summary": customer_summary(row),
         "operator": row.get("operator_name"),
-        "town": row.get("town"),
-        "local_authority": row.get("local_authority"),
-        "region": row.get("region"),
+        "town": town,
+        "local_authority": local_authority,
+        "region": region,
         "postcode": postcode,
-        "location_precision": "AREA_ONLY" if internal_location else "PUBLISHED_LOCATION",
+        "location_precision": "AREA_ONLY",
         "change_type": row.get("change_type"),
         "change_label": CHANGE_LABELS.get(str(row.get("change_type")), "Material change"),
         "stage": row.get("lifecycle_stage"),
@@ -473,7 +447,7 @@ def _project_evidence(item: tuple[Any, ...], opportunity: dict[str, Any]) -> dic
         "source_url": source_url
         if str(source_url or "").startswith(("https://", "http://"))
         else None,
-        "source_title": str(title or "")[:120] if source_type == "recruitment" else None,
+        "source_title": safe_evidence_title(title) if source_type == "recruitment" else None,
     }
 
 
