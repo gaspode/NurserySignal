@@ -457,10 +457,24 @@ def filter_hygiene_items(
     view: str = "inventory",
 ) -> list[dict[str, Any]]:
     """Apply bounded read-only admin filters to authoritative audit results."""
+    attention_categories = {
+        "NEEDS_INVESTIGATION",
+        "UNSUPPORTED_ORPHAN_CANDIDATE",
+        "DUPLICATE_CANDIDATE",
+        "SUPERSEDED_CANDIDATE",
+    }
     return [
         item
         for item in items
         if (view != "publication_candidates" or item["customer_readiness_candidate"])
+        and (
+            view != "needs_attention"
+            or item["category"] in attention_categories
+            or (
+                item.get("publication_status") == "PUBLISHED"
+                and bool(item.get("warning"))
+            )
+        )
         and (category is None or item["category"] == category)
         and (root_cause is None or item["root_cause"] == root_cause)
         and (change_type is None or item["change_type"] == change_type)

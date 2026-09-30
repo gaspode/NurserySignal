@@ -141,5 +141,16 @@ def test_hygiene_filters_and_publication_candidate_view_are_read_only() -> None:
     assert [item["opportunity_id"] for item in unsupported] == [str(rejected["id"])]
     candidates = filter_hygiene_items(items, view="publication_candidates")
     assert [item["opportunity_id"] for item in candidates] == [str(supported["id"])]
+    attention = filter_hygiene_items(items, view="needs_attention")
+    assert [item["opportunity_id"] for item in attention] == [str(rejected["id"])]
+    published_warning = {
+        **items[0],
+        "category": "MANUAL_OR_ADMIN_TOUCHED_PRESERVE",
+        "publication_status": "PUBLISHED",
+        "warning": "Published opportunity needs evidence review.",
+    }
+    assert filter_hygiene_items([published_warning], view="needs_attention") == [
+        published_warning
+    ]
     assert filter_hygiene_items(items, q="approved change") == [items[0]]
     assert all(item["publication_status"] == "DRAFT" for item in items)

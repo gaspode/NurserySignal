@@ -1,7 +1,7 @@
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { BacktestingPage, CustomersPage, Dashboard, LoginPage, MatchReviewPage, OpportunitiesPage, OpportunityDetail, OpportunityHygienePage, OrganisationsPage, ProcurementEvaluationPage, ReviewInboxPage, ReviewedSignalsPage, SignalDetail, SourcesPage, UnmatchedSignalsPage, restoredVertical, verticalScopedPath } from "./App.jsx";
+import { AdminNavigation, BacktestingPage, CustomersPage, Dashboard, LoginPage, MatchReviewPage, OpportunitiesPage, OpportunityDetail, OpportunityHygienePage, OrganisationsPage, ProcurementEvaluationPage, ReviewInboxPage, ReviewedSignalsPage, SignalDetail, SourcesPage, UnmatchedSignalsPage, restoredVertical, verticalScopedPath } from "./App.jsx";
 
 const pendingItem = {
   id: "signal-1",
@@ -129,6 +129,39 @@ describe("admin frontend", () => {
     vi.restoreAllMocks();
   });
 
+  it("groups admin navigation around signals, opportunities and organisations", async () => {
+    const onNavigate = vi.fn();
+    render(<AdminNavigation currentPath="/opportunity-hygiene?view=publication_candidates" onNavigate={onNavigate} />);
+
+    expect(screen.getByText("Signals")).toBeInTheDocument();
+    expect(screen.getByText("Opportunities")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Review queue" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "All signals" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Unmatched" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "All opportunities" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Needs attention" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Publication candidates" })).toHaveClass("active");
+    expect(screen.getByRole("button", { name: "Match review" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Organisations" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Source status" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Customers" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Procurement" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Procurement evaluation" })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Review queue" }));
+    await userEvent.click(screen.getByRole("button", { name: "Needs attention" }));
+    expect(onNavigate).toHaveBeenCalledWith("/inbox");
+    expect(onNavigate).toHaveBeenCalledWith("/opportunity-hygiene");
+  });
+
+  it("renders the grouped navigation as a stacked mobile menu", () => {
+    render(<AdminNavigation currentPath="/history" onNavigate={vi.fn()} mobile />);
+    const navigation = screen.getByRole("navigation", { name: "Mobile navigation" });
+    expect(navigation).toHaveClass("mobile-navigation-list");
+    expect(within(navigation).getByRole("button", { name: "All signals" })).toHaveClass("active");
+    expect(within(navigation).getByRole("button", { name: "Publication candidates" })).toBeInTheDocument();
+  });
+
   it("presents the login boundary and submits credentials", async () => {
     const onLogin = vi.fn().mockResolvedValue(undefined);
     render(<LoginPage onLogin={onLogin} />);
@@ -169,7 +202,7 @@ describe("admin frontend", () => {
   it("shows only pending records in the review inbox", async () => {
     const apiClient = vi.fn().mockResolvedValue(listResult());
     render(<ReviewInboxPage apiClient={apiClient} onNavigate={vi.fn()} />);
-    expect(await screen.findByRole("heading", { name: "Review Inbox" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Review queue" })).toBeInTheDocument();
     expect(screen.getByText(pendingItem.title)).toBeInTheDocument();
     expect(screen.queryByLabelText("Review status")).not.toBeInTheDocument();
     expect(apiClient).toHaveBeenCalledWith(expect.stringContaining("review_status=PENDING"));
@@ -189,7 +222,7 @@ describe("admin frontend", () => {
     await userEvent.click(screen.getByRole("menuitem", { name: "Approve" }));
     expect(nativeConfirm).not.toHaveBeenCalled();
     await waitFor(() => expect(apiClient).toHaveBeenCalledWith("/admin/signals/signal-1/approve", { method: "POST" }));
-    expect(await screen.findByText("Inbox clear")).toBeInTheDocument();
+    expect(await screen.findByText("Queue clear")).toBeInTheDocument();
   });
 
   it("portals a bottom-row action menu outside the scrolling table and flips it above", async () => {
@@ -221,7 +254,7 @@ describe("admin frontend", () => {
 
     await userEvent.click(trigger);
     expect(screen.getByRole("menu")).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("heading", { name: "Review Inbox" }));
+    await userEvent.click(screen.getByRole("heading", { name: "Review queue" }));
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
 
     await userEvent.click(trigger);
@@ -266,13 +299,16 @@ describe("admin frontend", () => {
     }));
   });
 
-  it("supports reviewed history search, filtering and pagination", async () => {
+  it("supports all-signal reference search, status filtering and pagination", async () => {
     const apiClient = vi.fn().mockResolvedValue(listResult([approvedItem], 11));
     render(<ReviewedSignalsPage apiClient={apiClient} onNavigate={vi.fn()} />);
-    expect(await screen.findByRole("heading", { name: "Reviewed Signals" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "All signals" })).toBeInTheDocument();
     expect(screen.getByText(approvedItem.title)).toBeInTheDocument();
-    await userEvent.type(screen.getByLabelText("Search reviewed signals"), "Bristol");
-    await waitFor(() => expect(apiClient).toHaveBeenLastCalledWith(expect.stringContaining("q=Bristol")));
+    expect(screen.getByLabelText("Review status")).toHaveValue("");
+    await userEvent.type(screen.getByLabelText("Search all signals"), "24/03385/FUL");
+    await waitFor(() => expect(apiClient).toHaveBeenLastCalledWith(expect.stringContaining("q=24%2F03385%2FFUL")));
+    await userEvent.selectOptions(screen.getByLabelText("Review status"), "PENDING");
+    await waitFor(() => expect(apiClient).toHaveBeenLastCalledWith(expect.stringContaining("review_status=PENDING")));
     await userEvent.selectOptions(screen.getByLabelText("Review status"), "REJECTED");
     await waitFor(() => expect(apiClient).toHaveBeenLastCalledWith(expect.stringContaining("review_status=REJECTED")));
     await userEvent.click(screen.getByRole("button", { name: "Next" }));
@@ -290,7 +326,7 @@ describe("admin frontend", () => {
   it("renders an empty inbox state", async () => {
     const apiClient = vi.fn().mockResolvedValue(listResult([], 0));
     render(<ReviewInboxPage apiClient={apiClient} onNavigate={vi.fn()} />);
-    expect(await screen.findByText("Inbox clear")).toBeInTheDocument();
+    expect(await screen.findByText("Queue clear")).toBeInTheDocument();
     expect(screen.getByText("There are no pending signals waiting for review.")).toBeInTheDocument();
   });
 
@@ -533,9 +569,12 @@ describe("admin frontend", () => {
       .mockResolvedValueOnce({ items: [planning, recruitment] })
       .mockResolvedValueOnce({ run_id: "run-2", status: "RUNNING" })
       .mockResolvedValueOnce({ items: [{ ...planning, last_run: { id: "run-2", status: "SUCCESS", invocation_source: "manual", started_at: "2026-09-26T19:00:00Z" }, last_status: "SUCCESS" }, recruitment] });
-    render(<SourcesPage apiClient={apiClient} />);
+    const onNavigate = vi.fn();
+    render(<SourcesPage apiClient={apiClient} onNavigate={onNavigate} />);
     expect(await screen.findByRole("heading", { name: "Sources" })).toBeInTheDocument();
     expect(screen.getByText("Planning applications")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Open procurement evaluation" }));
+    expect(onNavigate).toHaveBeenCalledWith("/procurement");
     await userEvent.click(screen.getAllByRole("button", { name: "Run now" })[0]);
     expect(apiClient).toHaveBeenCalledWith("/admin/sources/planning/run", {
       method: "POST",
@@ -836,8 +875,8 @@ describe("admin frontend", () => {
       .mockResolvedValueOnce({ total: 7 });
     const onNavigate = vi.fn();
     render(<Dashboard apiClient={apiClient} onNavigate={onNavigate} />);
-    await screen.findByText("Pending review");
-    await userEvent.click(screen.getByText("Pending review"));
+    await screen.findByText("Signals awaiting review");
+    await userEvent.click(screen.getByText("Signals awaiting review"));
     await userEvent.click(screen.getByText("Approved"));
     expect(onNavigate).toHaveBeenCalledWith("/inbox");
     expect(onNavigate).toHaveBeenCalledWith("/history?review_status=APPROVED");
@@ -854,7 +893,7 @@ describe("admin frontend", () => {
     });
     const onNavigate = vi.fn();
     render(<Dashboard apiClient={apiClient} onNavigate={onNavigate} />);
-    await screen.findByText("Pending review");
+    await screen.findByText("Signals awaiting review");
     await userEvent.click(screen.getByRole("button", { name: "Refresh data" }));
     expect(screen.getByRole("button", { name: "Refreshing data" })).toBeDisabled();
     expect(onNavigate).not.toHaveBeenCalled();
@@ -907,7 +946,7 @@ describe("admin frontend", () => {
     const apiClient = vi.fn().mockResolvedValue(listResult([approvedItem], 1));
     render(<ReviewedSignalsPage apiClient={apiClient} onNavigate={vi.fn()} />);
     await screen.findByText(approvedItem.title);
-    await userEvent.type(screen.getByLabelText("Search reviewed signals"), "Bristol");
+    await userEvent.type(screen.getByLabelText("Search all signals"), "Bristol");
     await waitFor(() => expect(apiClient).toHaveBeenLastCalledWith(expect.stringContaining("q=Bristol")));
     await userEvent.click(screen.getByRole("button", { name: "Refresh data" }));
     await waitFor(() => expect(apiClient).toHaveBeenLastCalledWith(expect.stringContaining("q=Bristol")));
@@ -938,8 +977,10 @@ describe("admin frontend", () => {
     const onNavigate = vi.fn();
     render(<OpportunityHygienePage apiClient={apiClient} onNavigate={onNavigate} />);
 
-    expect(await screen.findByRole("heading", { name: "Opportunity hygiene" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Valid supported/i })).toHaveTextContent("754");
+    expect(await screen.findByRole("heading", { name: "Needs attention" })).toBeInTheDocument();
+    expect(apiClient).toHaveBeenCalledWith(expect.stringContaining("view=needs_attention"));
+    expect(screen.queryByRole("button", { name: /Valid supported/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Unsupported \/ orphan/i })).toHaveTextContent("345");
     expect(screen.getByRole("button", { name: /Needs investigation/i })).toHaveTextContent("30");
     expect(screen.getByText("Published warning")).toBeInTheDocument();
 
@@ -956,7 +997,7 @@ describe("admin frontend", () => {
   it("supports orphan causes, publication candidates and server pagination", async () => {
     const apiClient = vi.fn().mockResolvedValue(hygieneResult());
     render(<OpportunityHygienePage apiClient={apiClient} onNavigate={vi.fn()} />);
-    await screen.findByRole("heading", { name: "Opportunity hygiene" });
+    await screen.findByRole("heading", { name: "Needs attention" });
 
     await userEvent.click(screen.getByRole("button", { name: /Unsupported \/ orphan/i }));
     const rootCause = await screen.findByLabelText("Unsupported root cause");
@@ -965,6 +1006,7 @@ describe("admin frontend", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Publication candidates" }));
     await waitFor(() => expect(apiClient).toHaveBeenLastCalledWith(expect.stringContaining("view=publication_candidates")));
+    expect(screen.getByRole("heading", { name: "Publication candidates" })).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "Next" }));
     await waitFor(() => expect(apiClient).toHaveBeenLastCalledWith(expect.stringContaining("offset=25")));
@@ -1116,6 +1158,28 @@ describe("admin frontend", () => {
     expect(onNavigate).toHaveBeenCalledWith(expect.stringContaining("/opportunities/opp-next?"));
     await userEvent.click(screen.getByRole("button", { name: "Find referenced application" }));
     expect(apiClient).toHaveBeenCalledWith("/admin/signals/followup-1/planning-origin", expect.objectContaining({ method: "POST" }));
+  });
+
+  it("preserves publication-candidate context through publish and advance", async () => {
+    const opportunity = {
+      id: "opp-publication", name: "New children's home — Coventry", vertical: "CHILDRENS_HOME",
+      lifecycle_stage: "PLANNING", change_type: "OPENING", confidence: 0.95,
+      publication_status: "DRAFT", signals: [],
+    };
+    const apiClient = vi.fn(async (path) => {
+      if (path === "/admin/opportunities/opp-publication") return opportunity;
+      if (path.startsWith("/admin/opportunities/hygiene-audit?")) return { items: [{ opportunity_id: "opp-next" }] };
+      if (path === "/admin/opportunities/opp-publication/publication") return { publication_status: "PUBLISHED" };
+      return {};
+    });
+    const onNavigate = vi.fn();
+    render(<OpportunityDetail opportunityId="opp-publication" apiClient={apiClient} onBack={vi.fn()} onNavigate={onNavigate} contextQuery="from=opportunity-hygiene&view=publication_candidates&hygiene_path=%2Fopportunity-hygiene&hygiene_offset=0&hygiene_total=2" />);
+
+    expect(await screen.findByRole("button", { name: "← Back to Publication candidates" })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Next →" })).toBeEnabled());
+    await userEvent.click(screen.getByRole("button", { name: "Publish to CareProspect" }));
+    await waitFor(() => expect(onNavigate).toHaveBeenCalledWith(expect.stringContaining("/opportunities/opp-next?")));
+    expect(onNavigate).toHaveBeenCalledWith(expect.stringContaining("view=publication_candidates"));
   });
 
   it("shows ambiguous Planning origin candidates without choosing one", async () => {

@@ -6216,7 +6216,7 @@ def care_opportunity_hygiene_audit(
         raise ValueError("invalid_hygiene_category")
     if root_cause is not None and root_cause not in ORPHAN_ROOT_CAUSES:
         raise ValueError("invalid_hygiene_root_cause")
-    if view not in {"inventory", "publication_candidates"}:
+    if view not in {"inventory", "needs_attention", "publication_candidates"}:
         raise ValueError("invalid_hygiene_view")
     normalized_change_type = str(change_type or "").strip().upper() or None
     normalized_publication = str(publication_status or "").strip().upper() or None
