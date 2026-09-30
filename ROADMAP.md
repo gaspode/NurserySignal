@@ -1354,5 +1354,16 @@ Paid-pilot activation check (2026-09-28):
   lifecycle bootstrap, watch enrollment/provider calls, automatic publication and automatic withdrawal all remain
   off pending the production read-only preview and explicit subsequent phase approval. The initial publication
   scope is deliberately limited to reviewed foundational new-home/proposed-lawfulness Planning evidence with safe
-  geography/content and a stable 10% QA holdout. Exact next step: deploy Phase A, run the production preview, record
-  lifecycle/watch/publication/withdrawal counts and provider-cost estimates, then stop for explicit Phase B approval.
+  geography/content, stored OPENING semantics and a stable 10% QA holdout. Production preview inspected all 1,145
+  opportunities without mutation: 344 PLANNING_PENDING, 416 PLANNING_APPROVED, two APPEAL_PENDING, 219 STOPPED
+  and 164 NEEDS_REVIEW; all 1,145 stored lifecycle values remain unset. The narrow publication preview contains
+  393 would-auto-publish and 47 stable QA holdouts, with 705 manual/ineligible. All 33 published opportunities are
+  retained (24 planning-pending, two planning-approved, seven needs-review); none qualifies for automatic
+  withdrawal, and human publication provenance remains authoritative. A full watch enrollment would include 366
+  applications (247 pending, 117 unknown and two active appeals), projecting about 121.7 Plota requests/day or
+  3,651/month at the initial cadence, so it is not safe to enable without a tighter quota strategy. Commits
+  `a52c792` and `10761cd` deployed successfully in runs `36792248181` and `36792752449`; 524 backend and 93 frontend
+  tests, Ruff, frontend build and Terraform fmt/validate/plan pass. API/database and frontend health are green,
+  active queues and non-collector DLQs are empty, and the six retained collector DLQ messages remain untouched.
+  Exact next step: approve only a bounded lifecycle bootstrap and separately define an acceptable watch cohort /
+  quota before enabling Phase B refresh. Phase C publication backlog and Phase D withdrawal remain unexecuted.
