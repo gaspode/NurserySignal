@@ -409,6 +409,38 @@ def test_plota_provider_reference_lookup_is_single_bounded_exact_query() -> None
     assert "council=" not in requests[0]
 
 
+def test_plota_provider_associated_lookup_retains_only_exact_reference() -> None:
+    requests = []
+
+    def opener(request, timeout):
+        requests.append(request.full_url)
+        return FakeResponse(
+            {
+                "data": [
+                    {
+                        "id": "origin",
+                        "reference": "24/03385/FUL",
+                        "description": "children's home",
+                    },
+                    {
+                        "id": "other",
+                        "reference": "23/02622/FUL",
+                        "description": "other application",
+                    },
+                ],
+                "meta": {"next_cursor": None},
+            }
+        )
+
+    provider = PlotaProvider("secret", opener=opener)
+    search = provider.associated_applications_by_reference(
+        "6v5f0ggb", "24/03385/FUL", limit=10
+    )
+
+    assert [item.application_id for item in search.candidates] == ["origin"]
+    assert requests == ["https://api.plota.co.uk/v1/applications/6v5f0ggb/associated?limit=10"]
+
+
 def test_targeted_origin_recovery_uses_normal_ingestion_queue(monkeypatch) -> None:
     results = []
     queued = []
@@ -546,6 +578,64 @@ def test_targeted_origin_recovery_selects_ashburton_from_multi_council_results(
     assert results[0].status == "FOUND"
     assert results[0].details["selected_candidate_id"] == "croydon"
     assert results[0].details["selection_reason"] == "unique_normalized_authority_match"
+
+
+def test_targeted_origin_recovery_uses_associated_fallback_when_q_has_no_rows(
+    monkeypatch,
+) -> None:
+    results = []
+    queued = []
+
+    class AssociatedProvider:
+        def applications_by_reference(self, reference, *, limit):
+            return PlanningReferenceSearchResult(reference, (), 0, False)
+
+        def associated_applications_by_reference(self, application_id, reference, *, limit):
+            assert (application_id, reference, limit) == ("6v5f0ggb", "24/03385/FUL", 10)
+            item = replace(
+                record(
+                    "Alterations and change of use to a children's care home",
+                    address="58 Ashburton Road Croydon CR0 6AN",
+                ),
+                application_id="origin-croydon",
+                council="Croydon",
+                postcode="CR0 6AN",
+                raw={"id": "origin-croydon", "reference": "24/03385/FUL"},
+            )
+            return PlanningReferenceSearchResult(
+                "associated:6v5f0ggb:24/03385/FUL", (item,), 1, False
+            )
+
+    monkeypatch.setattr("app.collector.provider_api_key_from_secret", lambda arn: "secret")
+    monkeypatch.setattr(
+        "app.collector.PlotaProvider", lambda *args, **kwargs: AssociatedProvider()
+    )
+    monkeypatch.setattr(
+        "app.collector.send_planning_origin_recovery_result",
+        lambda settings, message: results.append(message),
+    )
+    monkeypatch.setattr(
+        "app.collector.send_ingestion_message", lambda settings, message: queued.append(message)
+    )
+
+    result = recover_planning_origin(
+        Settings(planning_provider_secret_arn="arn:example"),
+        {
+            "attempt_id": "attempt-associated",
+            "normalized_reference": "24/03385/FUL",
+            "planning_authority": "Croydon",
+            "triggering_provider_id": "6v5f0ggb",
+            "site_postcode": "CR0 6AN",
+        },
+    )
+
+    assert result == {"requests": 2, "records_fetched": 1, "signals_queued": 1}
+    assert queued[0].signal["external_id"] == "plota:origin-croydon"
+    assert results[0].status == "FOUND"
+    assert results[0].details["provider_queries"] == [
+        "24/03385/FUL",
+        "associated:6v5f0ggb:24/03385/FUL",
+    ]
 
 
 def test_planning_signal_maps_metadata_and_stable_identity() -> None:

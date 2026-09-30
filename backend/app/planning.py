@@ -277,8 +277,8 @@ class PlotaProvider:
         self.opener = opener
         self.sleep = sleep
 
-    def _page(self, params: dict[str, Any]) -> dict[str, Any]:
-        url = f"{self.base_url}/applications?{urlencode(params)}"
+    def _get(self, path: str, params: dict[str, Any]) -> dict[str, Any]:
+        url = f"{self.base_url}/{path.lstrip('/')}?{urlencode(params)}"
         request = Request(
             url,
             headers={"Authorization": f"Bearer {self.api_key}", "Accept": "application/json"},
@@ -308,6 +308,9 @@ class PlotaProvider:
             except (json.JSONDecodeError, ValueError) as exc:
                 raise PlanningProviderError("Plota returned invalid JSON") from exc
         raise PlanningProviderError("Plota request failed")
+
+    def _page(self, params: dict[str, Any]) -> dict[str, Any]:
+        return self._get("applications", params)
 
     def applications(self, query: PlanningQuery) -> Iterator[PlanningRecord]:
         cursor: str | None = None
@@ -366,6 +369,40 @@ class PlotaProvider:
                 matches.append(record)
         return PlanningReferenceSearchResult(
             provider_query=query_value,
+            candidates=tuple(matches),
+            returned_count=len(payload["data"]),
+            truncated=bool((payload.get("meta") or {}).get("next_cursor")),
+        )
+
+    def associated_applications_by_reference(
+        self, application_id: str, reference: str, *, limit: int = 10
+    ) -> PlanningReferenceSearchResult:
+        """Use Plota's application-family route, retaining only the requested reference."""
+        from app.planning_families import normalize_planning_reference
+
+        normalized = normalize_planning_reference(reference)
+        provider_id = str(application_id or "").strip()
+        if (
+            not normalized
+            or not provider_id
+            or not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", provider_id)
+        ):
+            raise ValueError("invalid associated Planning lookup")
+        payload = self._get(
+            f"applications/{provider_id}/associated",
+            {"limit": min(max(int(limit), 1), 10)},
+        )
+        matches: list[PlanningRecord] = []
+        for row in payload["data"]:
+            record = normalize_plota_record(row, self.base_url)
+            candidate_reference = row.get("reference") or row.get("application_reference")
+            if (
+                normalize_planning_reference(candidate_reference or record.application_id)
+                == normalized
+            ):
+                matches.append(record)
+        return PlanningReferenceSearchResult(
+            provider_query=f"associated:{provider_id}:{str(reference).strip()}",
             candidates=tuple(matches),
             returned_count=len(payload["data"]),
             truncated=bool((payload.get("meta") or {}).get("next_cursor")),

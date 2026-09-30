@@ -5170,7 +5170,7 @@ def queue_planning_origin_recovery(
                                COALESCE(
                                  opportunity.postcode, rs.metadata->>'postcode'
                                ) AS site_postcode,
-                               opportunity.town
+                               opportunity.town, rs.external_id, rs.metadata
                 FROM planning_application_families f
                 JOIN planning_signal_family_relationships r ON r.family_id = f.id
                 JOIN raw_signals rs ON rs.id = r.raw_signal_id
@@ -5195,7 +5195,18 @@ def queue_planning_origin_recovery(
             [*params[:-1], force, params[-1]],
         ).fetchall()
         queued: list[dict[str, Any]] = []
-        for family_id, authority, reference, trigger_id, _, _, address, postcode, town in rows:
+        for (
+            family_id, authority, reference, trigger_id, _, _, address, postcode, town,
+            external_id, metadata,
+        ) in rows:
+            source_metadata = metadata if isinstance(metadata, dict) else {}
+            provider_record = source_metadata.get("provider_record")
+            provider_record = provider_record if isinstance(provider_record, dict) else {}
+            triggering_provider_id = (
+                source_metadata.get("provider_application_id")
+                or provider_record.get("id")
+                or str(external_id or "").removeprefix("plota:")
+            )
             attempt = conn.execute(
                 """INSERT INTO planning_origin_recovery_attempts
                      (family_id, triggering_signal_id, status, details)
@@ -5217,6 +5228,7 @@ def queue_planning_origin_recovery(
                     "triggering_signal_id": str(trigger_id), "planning_authority": authority,
                     "normalized_reference": reference,
                     "site_address": address, "site_postcode": postcode, "site_town": town,
+                    "triggering_provider_id": triggering_provider_id,
                 }
             )
         conn.commit()

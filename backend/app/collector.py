@@ -62,6 +62,14 @@ def recover_planning_origin(settings: Settings, payload: dict[str, Any]) -> dict
         api_key = provider_api_key_from_secret(settings.planning_provider_secret_arn)
         provider = PlotaProvider(api_key, base_url=settings.planning_provider_base_url)
         search = provider.applications_by_reference(reference, limit=10)
+        searches = [search]
+        triggering_provider_id = str(payload.get("triggering_provider_id") or "").strip()
+        if not search.candidates and triggering_provider_id:
+            associated = provider.associated_applications_by_reference(
+                triggering_provider_id, reference, limit=10
+            )
+            searches.append(associated)
+            search = associated
         resolution = resolve_origin_candidate(
             search.candidates,
             authority=authority,
@@ -71,8 +79,9 @@ def recover_planning_origin(settings: Settings, payload: dict[str, Any]) -> dict
         )
         candidate_details = [candidate_summary(candidate) for candidate in search.candidates]
         base_details = {
-            "requests": 1,
+            "requests": len(searches),
             "provider_query": search.provider_query,
+            "provider_queries": [item.provider_query for item in searches],
             "records_returned": search.returned_count,
             "exact_reference_candidates": len(search.candidates),
             "candidate_set_truncated": search.truncated,
@@ -82,12 +91,12 @@ def recover_planning_origin(settings: Settings, payload: dict[str, Any]) -> dict
         if resolution.status == "NOT_FOUND":
             status = "NOT_FOUND"
             details = base_details
-            result = {"requests": 1, "records_fetched": 0, "signals_queued": 0}
+            result = {"requests": len(searches), "records_fetched": 0, "signals_queued": 0}
         elif resolution.status == "AMBIGUOUS" or resolution.selected is None:
             status = "AMBIGUOUS"
             details = base_details
             result = {
-                "requests": 1,
+                "requests": len(searches),
                 "records_fetched": len(search.candidates),
                 "signals_queued": 0,
             }
@@ -97,7 +106,11 @@ def recover_planning_origin(settings: Settings, payload: dict[str, Any]) -> dict
             if not decision.matched:
                 status = "AMBIGUOUS"
                 details = {**base_details, "selected_candidate_excluded": True}
-                result = {"requests": 1, "records_fetched": 1, "signals_queued": 0}
+                result = {
+                    "requests": len(searches),
+                    "records_fetched": 1,
+                    "signals_queued": 0,
+                }
             else:
                 signal = care_planning_signal(record, decision, historical_source_date=True)
                 body = json.dumps(
@@ -118,7 +131,7 @@ def recover_planning_origin(settings: Settings, payload: dict[str, Any]) -> dict
                     "selected_candidate_authority": record.council,
                 }
                 result = {
-                    "requests": 1,
+                    "requests": len(searches),
                     "records_fetched": len(search.candidates),
                     "signals_queued": 1,
                 }

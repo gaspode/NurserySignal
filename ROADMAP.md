@@ -1250,3 +1250,9 @@ Paid-pilot activation check (2026-09-28):
   deterministically. Exact next step: deploy, force-retry only Ashburton, verify one foundational plus one supporting
   signal with no duplicate opportunity, then assess readiness for a bounded 5–10-family recovery sample. No broad
   historical recovery is authorized.
+- Live validation showed that Plota's paid `/v1/applications?q=<reference>` collection endpoint returns zero rows
+  for the historical Ashburton reference even without a council filter, while Plota's own application page exposes
+  the origin through its associated-application/reference lookup. The resolver therefore keeps the reference-first
+  query, then uses the triggering Plota application ID for one bounded `/applications/{id}/associated` fallback,
+  retaining only the exact requested reference before local authority/site resolution. This remains at most two
+  provider requests for one manual recovery and does not broaden historical execution.
