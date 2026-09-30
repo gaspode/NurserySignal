@@ -221,7 +221,10 @@ def _planning_text(raw: dict[str, Any]) -> str:
         text = re.sub(r"\bchildren\?s\b", "children's", text, flags=re.IGNORECASE)
         if text and text not in unique:
             unique.append(text)
-    return " . ".join(unique)
+    # Keep source fields on separate lines so bounded direction regexes cannot
+    # accidentally join the target use in one representation to the source
+    # use in a repeated title/raw/provider representation.
+    return "\n".join(unique)
 
 
 def extract_prior_planning_references(text: str) -> tuple[str, ...]:
