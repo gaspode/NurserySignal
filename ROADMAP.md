@@ -1290,3 +1290,16 @@ Paid-pilot activation check (2026-09-28):
   the deployment frontend build/Terraform plan pass, API/database health is green and active queues are empty.
   Exact next step: inspect the eight stale opportunity-semantic cases and design a separately previewed bounded
   recalculation; do not rewrite them as part of evidence projection.
+- The bounded `care-opportunity-semantic-drift-v1` pass inspected 1,092 stored OPENING opportunities and isolated
+  exactly nine system-owned draft conflicts: six LAWFULNESS_EXISTING-only records (four approved support-only,
+  two human-rejected), two rejected cessation/change-away records, and the rejected Croston capacity-change case.
+  None was published, admin-touched or backed by a separate valid foundation. All nine were audited and changed
+  from misleading generated OPENING/`opening` semantics to neutral OTHER_CHANGE/`other` semantics; generated
+  names now say `Children's home`, current stage reasons explain existing-use or absent foundational support,
+  while lifecycle stage, immutable creation reason, signal facts, reviews, relationships and publication remain
+  unchanged. A repeat selected and changed zero records. Hygiene remains 771 valid / 348 unsupported / 25 manual
+  preserve / 1 investigation because these shells were already unsupported; customer-readiness remains 766 and
+  publication remains 16 published / 1,129 draft. Commit `766618e` deployed in run `36782302978`; 511 backend
+  tests, Ruff and Terraform validation pass, API/database health is green, active queues and non-collector DLQs
+  are empty, and the six retained collector DLQ messages remain untouched. Exact next step: handle the broader
+  unsupported-orphan inventory only through a separately previewed cleanup; no broad cleanup is authorised here.
