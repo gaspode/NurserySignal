@@ -36,6 +36,10 @@ def _normalise(value: Any) -> str:
 
 def _touch_types(opportunity: dict[str, Any]) -> list[str]:
     touches: set[str] = set()
+    if opportunity.get("review_status") == "MERGED" or opportunity.get(
+        "merged_into_opportunity_id"
+    ):
+        touches.add("merge")
     if opportunity.get("publication_status") == "PUBLISHED" or opportunity.get(
         "customer_published_at"
     ):
@@ -166,6 +170,9 @@ def audit_opportunities(opportunities: list[dict[str, Any]]) -> dict[str, Any]:
     source_mix_counts: Counter[str] = Counter()
     publication_counts: Counter[str] = Counter()
     change_type_counts: Counter[str] = Counter()
+    category_by_publication: dict[str, Counter[str]] = defaultdict(Counter)
+    category_by_change_type: dict[str, Counter[str]] = defaultdict(Counter)
+    category_by_source_mix: dict[str, Counter[str]] = defaultdict(Counter)
 
     for opportunity in opportunities:
         opportunity_id = str(opportunity["id"])
@@ -239,6 +246,13 @@ def audit_opportunities(opportunities: list[dict[str, Any]]) -> dict[str, Any]:
         publication_counts[str(opportunity.get("publication_status") or "UNKNOWN")] += 1
         change_type_counts[str(opportunity.get("change_type") or "UNKNOWN")] += 1
         source_mix_counts[source_mix] += 1
+        category_by_publication[category][
+            str(opportunity.get("publication_status") or "UNKNOWN")
+        ] += 1
+        category_by_change_type[category][
+            str(opportunity.get("change_type") or "UNKNOWN")
+        ] += 1
+        category_by_source_mix[category][source_mix] += 1
         items.append(
             {
                 "opportunity_id": opportunity_id,
@@ -274,7 +288,7 @@ def audit_opportunities(opportunities: list[dict[str, Any]]) -> dict[str, Any]:
         )
 
     published = [item for item in items if item["publication_status"] == "PUBLISHED"]
-    customer_candidates = [
+    all_customer_candidates = [
         item
         for item in items
         if item["category"] == "VALID_SUPPORTED"
@@ -282,7 +296,8 @@ def audit_opportunities(opportunities: list[dict[str, Any]]) -> dict[str, Any]:
         and (item.get("postcode") or item.get("town"))
         and item["change_type"] in {"OPENING", "EXPANSION"}
         and not item["warning"]
-    ][:25]
+    ]
+    customer_candidates = all_customer_candidates[:25]
     cleanup_preview = {
         "potential_retire": category_counts["UNSUPPORTED_ORPHAN_CANDIDATE"],
         "potential_supersede": category_counts["SUPERSEDED_CANDIDATE"],
@@ -298,6 +313,18 @@ def audit_opportunities(opportunities: list[dict[str, Any]]) -> dict[str, Any]:
         "publication_counts": dict(sorted(publication_counts.items())),
         "change_type_counts": dict(sorted(change_type_counts.items())),
         "source_mix_counts": dict(sorted(source_mix_counts.items())),
+        "category_by_publication": {
+            category: dict(sorted(values.items()))
+            for category, values in sorted(category_by_publication.items())
+        },
+        "category_by_change_type": {
+            category: dict(sorted(values.items()))
+            for category, values in sorted(category_by_change_type.items())
+        },
+        "category_by_source_mix": {
+            category: dict(sorted(values.items()))
+            for category, values in sorted(category_by_source_mix.items())
+        },
         "orphan_root_causes": dict(sorted(root_causes.items())),
         "admin_touch_counts": dict(sorted(touch_counts.items())),
         "published": published,
@@ -315,6 +342,7 @@ def audit_opportunities(opportunities: list[dict[str, Any]]) -> dict[str, Any]:
             item for item in items if item["category"] == "NEEDS_INVESTIGATION"
         ],
         "customer_readiness_candidates": customer_candidates,
+        "customer_readiness_total": len(all_customer_candidates),
         "cleanup_preview": cleanup_preview,
         "items": items,
         "read_only": True,

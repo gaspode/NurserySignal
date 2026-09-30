@@ -97,3 +97,13 @@ def test_historical_age_does_not_make_supported_opportunity_an_orphan() -> None:
     report = audit_opportunities([historical])
     assert report["items"][0]["category"] == "VALID_SUPPORTED"
 
+
+def test_merged_opportunity_is_preserved_as_admin_touched() -> None:
+    merged = opportunity(
+        review_status="MERGED",
+        merged_into_opportunity_id=str(uuid4()),
+        relationships=[],
+    )
+    report = audit_opportunities([merged])
+    assert report["items"][0]["category"] == "MANUAL_OR_ADMIN_TOUCHED_PRESERVE"
+    assert report["items"][0]["admin_touch_types"] == ["merge"]
