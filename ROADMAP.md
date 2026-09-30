@@ -1303,3 +1303,17 @@ Paid-pilot activation check (2026-09-28):
   tests, Ruff and Terraform validation pass, API/database health is green, active queues and non-collector DLQs
   are empty, and the six retained collector DLQ messages remain untouched. Exact next step: handle the broader
   unsupported-orphan inventory only through a separately previewed cleanup; no broad cleanup is authorised here.
+- CareProspect Opportunity Detail now projects `planning-outcome-v1` semantics onto each admin Planning evidence
+  item: canonical outcome, raw council decision/status, current Planning subtype, opportunity action and the shared
+  evidence-support role. The timeline renders these compactly with approved/rejected/pending/neutral decision
+  tones, retains family/support labels and source/signal actions, and warns (without mutating or blocking) if an
+  active create-opportunity signal has a negative canonical outcome. Missing historical fields degrade cleanly and
+  non-Planning evidence is unchanged. Production checks covered Lambourne proposed-use evidence and Ashburton's
+  approved foundational origin plus pending condition-discharge follow-up; the latter projects one foundational
+  and one supporting signal with the expected create/support actions. The deployed frontend bundle contains the
+  new decision/action/warning UI. Customer APIs, review state, taxonomy, matching, publication eligibility and
+  publication state are unchanged. Commits `cfc31ff`, `31779f2` and `94ec2cc` deployed successfully through run
+  `36785695179`; 514 backend tests, 88 frontend tests, Ruff, frontend build, Terraform fmt/validate and production
+  API/database health pass. Active ingestion/enrichment queues and non-collector DLQs are empty; the six retained
+  shared collector DLQ messages remain untouched. Exact next step: admins can perform publication review directly
+  from Opportunity Detail and use Open source only for corroboration or edge cases.
