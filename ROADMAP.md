@@ -1326,3 +1326,20 @@ Paid-pilot activation check (2026-09-28):
   Commit `d8b15ba` deployed successfully in run `36787084684`; 514 backend tests, 88 frontend tests, Ruff,
   frontend build and Terraform fmt/validate pass, and production API/database health is green. No API, evidence,
   matching, review or publication semantics changed.
+- SignalHub's admin information architecture now reflects the operating model rather than implementation history.
+  The grouped navigation is Overview; Signals (Review queue, All signals, Unmatched); Opportunities (All
+  opportunities, Needs attention, Publication candidates, Match review); Organisations; Sources (Source status,
+  Procurement evaluation, Backtesting); and Customers. Existing hash routes and bookmarks remain valid. Review
+  Inbox/Reviewed Signals/Unmatched Signals were renamed with clearer queue/archive copy, exact Planning-reference
+  search remains available in All signals, and Procurement remains functional under Sources rather than appearing
+  as a first-class business entity.
+- Opportunity hygiene remains available as a secondary full audit, while its default `Needs attention` view is a
+  server-filtered actionable cohort: investigation, unsupported/orphan, duplicate, superseded, and any published
+  warning records. Healthy supported and ordinary preserve records no longer clutter that queue. Publication
+  candidates is now a first-class Opportunities workflow and retains URL-backed filters/page, return context,
+  Previous/Next and publish-and-advance. Production currently reports 1,145 CareProspect opportunities, 348 needing
+  attention and 750 supported unpublished publication candidates. Commit `f1fa8a5` deployed successfully in run
+  `36789723643`; 514 backend and 91 frontend tests, Ruff, frontend build and Terraform fmt/validate pass. The live
+  bundle and both read-only production views were verified, API/database health is green, active queues and
+  non-collector DLQs are empty, and the six retained collector DLQ messages remain untouched. No review, matching,
+  hygiene-classification, publication, organisation-resolution or ingestion business rule changed.
