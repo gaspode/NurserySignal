@@ -1194,3 +1194,22 @@ Paid-pilot activation check (2026-09-28):
   deployable artefact hashes. Exact next step: manually inspect the 58 unresolved families and approve a small
   (for example <=25) historical Plota recovery batch only if its expected quota cost is acceptable. Customer
   publication remains manual.
+- Historical support-only Planning family metadata is now backfilled under
+  `planning-family-historical-backfill-v1` through a read-only-preview-first, admin-only endpoint capped at 100
+  rows per page. The production preview inspected 79 current support-only CareProspect Planning signals: 34 had
+  usable authority/reference context, two referenced multiple applications, and 45 had no usable prior reference
+  and were skipped. The coherent cohort required 30 authority-scoped families and 36
+  `REFERENCES_APPLICATION` memberships; there were no stored origins, ambiguous matches or conflicts in this
+  narrower current-taxonomy cohort. Applying it created exactly those local records with `MISSING` origin state,
+  historical-backfill provenance and no opportunity/review/AI/publication mutation. An immediate repeat found all
+  34 signals already linked and created zero families, relationships or duplicate audit operations.
+- The Ashburton/Croydon condition-discharge example now remains `0 foundational · 1 supporting`, but projects its
+  Croydon `24/03385/FUL` family as `REFERENCES_APPLICATION` / `MISSING`, so Opportunity Detail renders Supporting
+  follow-up, the authority/reference, Missing, and Find referenced application. Exact signal search returns the
+  follow-up. No recovery button was triggered: Plota requests and records consumed are both zero, and the Planning
+  manual queue remains empty. Hygiene is unchanged at 1,144 opportunities (750 valid, 347 unsupported, 24
+  manual/admin preserve, 23 investigation), with 15 published and one withdrawn. Commit `ca3c187` deployed in
+  run `36761585021`; 456 backend and 86 frontend tests pass with Ruff, frontend build and Terraform validation.
+  API/database and HTTPS health pass, active queues and non-collector DLQs are empty, and the five retained
+  collector-manual-run DLQ messages remain untouched. Exact next step: manually exercise Find referenced
+  application on Ashburton before considering any bounded historical provider recovery.
