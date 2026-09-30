@@ -68,6 +68,34 @@ def test_rejected_capacity_signal_is_not_supporting_despite_ai_approve() -> None
     assert classify_evidence_support(signal) is EvidenceSupport.NON_SUPPORTING
 
 
+def test_approved_review_uses_immutable_relationship_create_semantics() -> None:
+    signal = planning_signal(subtype="AMBIGUOUS", decision="REVIEW")
+    signal["relationship_extracted_facts"] = {
+        "opportunity_creation_decision": "CREATE_OPPORTUNITY"
+    }
+    assert classify_evidence_support(signal) is EvidenceSupport.FOUNDATIONAL
+
+
+def test_rejected_review_does_not_use_relationship_create_semantics() -> None:
+    signal = planning_signal(
+        subtype="AMBIGUOUS", decision="REVIEW", review_status="REJECTED"
+    )
+    signal["relationship_extracted_facts"] = {
+        "opportunity_creation_decision": "CREATE_OPPORTUNITY"
+    }
+    assert classify_evidence_support(signal) is EvidenceSupport.NON_SUPPORTING
+
+
+def test_current_support_only_overrides_old_relationship_create_semantics() -> None:
+    signal = planning_signal(
+        subtype="CONDITION_DISCHARGE", decision="SUPPORT_EXISTING_ONLY"
+    )
+    signal["relationship_extracted_facts"] = {
+        "opportunity_creation_decision": "CREATE_OPPORTUNITY"
+    }
+    assert classify_evidence_support(signal) is EvidenceSupport.SUPPORTING_FOLLOWUP
+
+
 @pytest.mark.parametrize(
     "subtype",
     [

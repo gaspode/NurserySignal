@@ -32,7 +32,6 @@ PROCEDURAL_OR_NON_OPENING_SUBTYPES = frozenset(
         "CESSATION_OR_CHANGE_AWAY_FROM_CARE",
         "REFUSED",
         "WITHDRAWN",
-        "AMBIGUOUS",
     }
 )
 
@@ -82,12 +81,23 @@ def classify_evidence_support(signal: dict[str, Any]) -> EvidenceSupport:
     )
     subtype = str(facts.get("planning_subtype") or "")
     decision = str(facts.get("opportunity_creation_decision") or "")
+    relationship_facts = (
+        signal.get("relationship_extracted_facts")
+        if isinstance(signal.get("relationship_extracted_facts"), dict)
+        else {}
+    )
+    relationship_decision = str(
+        relationship_facts.get("opportunity_creation_decision") or ""
+    )
     family_relationships = _family_relationship_types(signal)
 
     if subtype == "CESSATION_OR_CHANGE_AWAY_FROM_CARE":
         return EvidenceSupport.OTHER_LIFECYCLE
+    creates_opportunity = decision == "CREATE_OPPORTUNITY" or (
+        decision in {"", "REVIEW"} and relationship_decision == "CREATE_OPPORTUNITY"
+    )
     if (
-        decision == "CREATE_OPPORTUNITY"
+        creates_opportunity
         and subtype not in PROCEDURAL_OR_NON_OPENING_SUBTYPES
         and not (
             "REFERENCES_APPLICATION" in family_relationships

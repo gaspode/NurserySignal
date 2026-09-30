@@ -7658,7 +7658,8 @@ def opportunity_detail(settings: Settings, opportunity_id: str) -> dict[str, Any
                       rs.source_url, rs.metadata, rs.organisation_hint, rs.location_hint,
                       os.status, os.created_by, os.match_outcome, os.match_confidence,
                       os.match_reason, os.provenance, se.confidence, se.review_status,
-                      ai.recommendation, ai.confidence, ai.status, se.extracted_facts
+                      ai.recommendation, ai.confidence, ai.status, se.extracted_facts,
+                      os.extracted_facts
                FROM opportunity_signals os JOIN raw_signals rs ON rs.id = os.raw_signal_id
                LEFT JOIN signal_enrichments se ON se.raw_signal_id = rs.id
                LEFT JOIN LATERAL (SELECT recommendation, confidence, status FROM signal_ai_reviews
@@ -7713,6 +7714,7 @@ def opportunity_detail(settings: Settings, opportunity_id: str) -> dict[str, Any
         "ai_confidence",
         "ai_status",
         "extracted_facts",
+        "relationship_extracted_facts",
     )
     signals = [dict(zip(fields, row)) for row in rows]
     family_by_signal: dict[str, list[dict[str, Any]]] = {}
