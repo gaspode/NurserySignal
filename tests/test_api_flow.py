@@ -1119,7 +1119,16 @@ def test_care_opportunity_hygiene_audit_is_admin_only_bounded_and_read_only(
     response = handler(
         event(
             "/admin/opportunities/hygiene-audit",
-            query={"limit": "999", "offset": "4", "category": "VALID_SUPPORTED"},
+            query={
+                "limit": "999",
+                "offset": "4",
+                "category": "UNSUPPORTED_ORPHAN_CANDIDATE",
+                "root_cause": "SIGNAL_REJECTED",
+                "change_type": "OPENING",
+                "publication_status": "DRAFT",
+                "q": "Bristol",
+                "view": "publication_candidates",
+            },
         ),
         None,
     )
@@ -1128,7 +1137,12 @@ def test_care_opportunity_hygiene_audit_is_admin_only_bounded_and_read_only(
     assert captured == {
         "limit": 250,
         "offset": 4,
-        "category": "VALID_SUPPORTED",
+        "category": "UNSUPPORTED_ORPHAN_CANDIDATE",
+        "root_cause": "SIGNAL_REJECTED",
+        "change_type": "OPENING",
+        "publication_status": "DRAFT",
+        "q": "Bristol",
+        "view": "publication_candidates",
     }
 
 

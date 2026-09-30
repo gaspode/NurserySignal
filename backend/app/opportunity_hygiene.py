@@ -15,6 +15,18 @@ HYGIENE_CATEGORIES = (
     "NEEDS_INVESTIGATION",
 )
 
+ORPHAN_ROOT_CAUSES = (
+    "PLANNING_REFUSED",
+    "PLANNING_WITHDRAWN",
+    "SIGNAL_REJECTED",
+    "RELATIONSHIP_REMOVED",
+    "TAXONOMY_RECLASSIFIED",
+    "OLD_CREATION_RULE",
+    "DUPLICATE_SHELL",
+    "NO_ACTIVE_SUPPORT",
+    "OTHER",
+)
+
 SUPPORT_ONLY_PLANNING_SUBTYPES = {
     "LAWFULNESS_EXISTING",
     "CONDITION_VARIATION",
@@ -253,6 +265,20 @@ def audit_opportunities(opportunities: list[dict[str, Any]]) -> dict[str, Any]:
             str(opportunity.get("change_type") or "UNKNOWN")
         ] += 1
         category_by_source_mix[category][source_mix] += 1
+        hygiene_reason = {
+            "VALID_SUPPORTED": "Current foundational evidence supports this opportunity.",
+            "DUPLICATE_CANDIDATE": (
+                duplicate.get("reason") if duplicate else "Potential duplicate opportunity."
+            ),
+            "SUPERSEDED_CANDIDATE": "Opportunity belongs to an existing supersession chain.",
+            "UNSUPPORTED_ORPHAN_CANDIDATE": root_cause.replace("_", " ").title()
+            if root_cause
+            else "No defensible active support remains.",
+            "MANUAL_OR_ADMIN_TOUCHED_PRESERVE": (
+                f"Preserved because of admin history: {', '.join(touches)}."
+            ),
+            "NEEDS_INVESTIGATION": warning,
+        }[category]
         items.append(
             {
                 "opportunity_id": opportunity_id,
@@ -261,11 +287,15 @@ def audit_opportunities(opportunities: list[dict[str, Any]]) -> dict[str, Any]:
                 "publication_status": opportunity.get("publication_status"),
                 "lifecycle_stage": opportunity.get("lifecycle_stage"),
                 "change_type": opportunity.get("change_type"),
+                "confidence": opportunity.get("confidence"),
                 "operator_name": opportunity.get("operator_name"),
                 "postcode": opportunity.get("postcode"),
                 "town": opportunity.get("town"),
+                "creation_reason": opportunity.get("creation_reason"),
+                "stage_reason": opportunity.get("stage_reason"),
                 "category": category,
                 "root_cause": root_cause,
+                "hygiene_reason": hygiene_reason,
                 "supporting_signal_count": foundational,
                 "active_approved_signal_count": active_approved,
                 "source_types": sources,
@@ -297,6 +327,19 @@ def audit_opportunities(opportunities: list[dict[str, Any]]) -> dict[str, Any]:
         and item["change_type"] in {"OPENING", "EXPANSION"}
         and not item["warning"]
     ]
+    customer_candidate_ids = {
+        item["opportunity_id"] for item in all_customer_candidates
+    }
+    for item in items:
+        item["customer_readiness_candidate"] = (
+            item["opportunity_id"] in customer_candidate_ids
+        )
+        item["customer_readiness_reason"] = (
+            "Supported unpublished opening/change evidence with usable geography and no "
+            "hygiene warning."
+            if item["customer_readiness_candidate"]
+            else None
+        )
     customer_candidates = all_customer_candidates[:25]
     cleanup_preview = {
         "potential_retire": category_counts["UNSUPPORTED_ORPHAN_CANDIDATE"],
@@ -347,3 +390,42 @@ def audit_opportunities(opportunities: list[dict[str, Any]]) -> dict[str, Any]:
         "items": items,
         "read_only": True,
     }
+
+
+def filter_hygiene_items(
+    items: list[dict[str, Any]],
+    *,
+    category: str | None = None,
+    root_cause: str | None = None,
+    change_type: str | None = None,
+    publication_status: str | None = None,
+    q: str = "",
+    view: str = "inventory",
+) -> list[dict[str, Any]]:
+    """Apply bounded read-only admin filters to authoritative audit results."""
+    return [
+        item
+        for item in items
+        if (view != "publication_candidates" or item["customer_readiness_candidate"])
+        and (category is None or item["category"] == category)
+        and (root_cause is None or item["root_cause"] == root_cause)
+        and (change_type is None or item["change_type"] == change_type)
+        and (
+            publication_status is None
+            or item["publication_status"] == publication_status
+        )
+        and (
+            not q
+            or q
+            in " ".join(
+                str(item.get(field) or "").lower()
+                for field in (
+                    "name",
+                    "town",
+                    "postcode",
+                    "creation_reason",
+                    "stage_reason",
+                )
+            )
+        )
+    ]

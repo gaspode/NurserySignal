@@ -6,7 +6,20 @@ import CustomerApp from "./CustomerApp.jsx";
 import PublicSite, { CareProspectLogo, PublicLegalPage } from "./PublicSite.jsx";
 
 const PAGE_SIZE = 10;
+const HYGIENE_PAGE_SIZE = 25;
 const ACTIVE_VERTICALS = new Set(["ALL", "NURSERY", "CHILDRENS_HOME"]);
+const HYGIENE_CATEGORIES = [
+  ["VALID_SUPPORTED", "Valid supported"],
+  ["UNSUPPORTED_ORPHAN_CANDIDATE", "Unsupported / orphan"],
+  ["NEEDS_INVESTIGATION", "Needs investigation"],
+  ["MANUAL_OR_ADMIN_TOUCHED_PRESERVE", "Manual/admin preserve"],
+  ["DUPLICATE_CANDIDATE", "Duplicate candidates"],
+  ["SUPERSEDED_CANDIDATE", "Superseded candidates"],
+];
+
+function hygieneCategoryLabel(value) {
+  return Object.fromEntries(HYGIENE_CATEGORIES)[value] || titleCase(value);
+}
 
 export function restoredVertical(storage = window.sessionStorage) {
   const stored = storage.getItem("signalhub.vertical") || "NURSERY";
@@ -262,6 +275,7 @@ function Shell({ user, onLogout, onNavigate, currentPath, vertical, onVerticalCh
           <button className={route.startsWith("/inbox") ? "nav-link active" : "nav-link"} onClick={() => onNavigate("/inbox")}>Review Inbox</button>
           <button className={route.startsWith("/history") ? "nav-link active" : "nav-link"} onClick={() => onNavigate("/history")}>Reviewed Signals</button>
           <button className={route.startsWith("/opportunities") ? "nav-link active" : "nav-link"} onClick={() => onNavigate("/opportunities")}>Opportunities</button>
+          <button className={route.startsWith("/opportunity-hygiene") ? "nav-link active" : "nav-link"} onClick={() => onNavigate("/opportunity-hygiene")}>Opportunity hygiene</button>
           <button className={route.startsWith("/unmatched") ? "nav-link active" : "nav-link"} onClick={() => onNavigate("/unmatched")}>Unmatched Signals</button>
           <button className={route.startsWith("/match-review") ? "nav-link active" : "nav-link"} onClick={() => onNavigate("/match-review")}>Match Review</button>
           <button className={route.startsWith("/sources") ? "nav-link active" : "nav-link"} onClick={() => onNavigate("/sources")}>Sources</button>
@@ -857,6 +871,79 @@ export function OpportunitiesPage({ apiClient, onNavigate, showVertical = false 
   return <section><div className="page-heading"><div><p className="eyebrow">Commercial evidence</p><h1>Opportunities</h1><p className="muted">Facilities supported by one or more independent signals.</p></div><div className="page-actions"><RefreshButton busy={loading} onClick={load} /><OpportunityRecalculateTool apiClient={apiClient} onComplete={async (message) => { setNotice(message); await load(); }} /></div></div>{notice && <div className="notice" role="status">{notice}</div>}<div className="filter-bar"><label>Search<input aria-label="Search opportunities" type="search" value={search} onChange={(event) => setSearch(event.target.value)} onKeyDown={(event) => event.key === "Enter" && (setPage(0), load())} placeholder="Name or explanation…" /></label><button className="button secondary" onClick={() => { setSearch(""); setPage(0); }}>Reset</button></div>{error && <ErrorState message={error} onRetry={load} />}{loading && !result && <LoadingState label="Loading opportunities" />}{result?.items?.length === 0 && <div className="state-card"><strong>No opportunities yet.</strong><p className="muted">Opportunities appear after signals are enriched.</p></div>}{result?.items?.length > 0 && <><div className="table-wrap"><table><thead><tr>{showVertical && <th>Vertical</th>}<th>Opportunity</th><th>Change type</th><th>Lifecycle</th><th>Confidence</th><th>Linked signals</th><th>Why created</th></tr></thead><tbody>{result.items.map((item) => <tr className="clickable-row" key={item.id} onClick={() => onNavigate(`/opportunities/${item.id}`)}>{showVertical && <td><Badge>{verticalName(item.vertical)}</Badge></td>}<td><strong>{item.name}</strong><span className="cell-subtitle">{titleCase(item.event_type)}</span></td><td><Badge>{titleCase(item.change_type || "OTHER_CHANGE")}</Badge></td><td><Badge>{titleCase(item.lifecycle_stage)}</Badge></td><td>{Math.round((item.confidence || 0) * 100)}%</td><td>{item.signal_count}</td><td>{item.creation_reason || item.stage_reason || "—"}</td></tr>)}</tbody></table></div><div className="pagination"><span>Page {page + 1} of {Math.max(1, Math.ceil(result.total / PAGE_SIZE))}</span><div><button className="button secondary" disabled={page === 0} onClick={() => setPage((value) => value - 1)}>Previous</button><button className="button secondary" disabled={(page + 1) * PAGE_SIZE >= result.total} onClick={() => setPage((value) => value + 1)}>Next</button></div></div></>}</section>;
 }
 
+export function OpportunityHygienePage({ apiClient, onNavigate }) {
+  const [result, setResult] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [page, setPage] = useState(0);
+  const [view, setView] = useState("inventory");
+  const [filters, setFilters] = useState({ category: "", root_cause: "", change_type: "", publication_status: "" });
+  const [searchInput, setSearchInput] = useState("");
+  const [search, setSearch] = useState("");
+
+  const load = async () => {
+    setLoading(true); setError("");
+    try {
+      const params = new URLSearchParams({ limit: HYGIENE_PAGE_SIZE, offset: page * HYGIENE_PAGE_SIZE, view });
+      Object.entries(filters).forEach(([key, value]) => value && params.set(key, value));
+      if (search) params.set("q", search);
+      setResult(await apiClient(`/admin/opportunities/hygiene-audit?${params}`));
+    } catch (loadError) {
+      setError(loadError.message || "Opportunity hygiene could not be loaded.");
+    } finally { setLoading(false); }
+  };
+  useEffect(() => { load(); }, [apiClient, page, view, filters, search]);
+
+  function updateFilter(key, value) {
+    setPage(0);
+    setFilters((current) => ({
+      ...current,
+      [key]: value,
+      ...(key === "category" && value !== "UNSUPPORTED_ORPHAN_CANDIDATE" ? { root_cause: "" } : {}),
+    }));
+  }
+  function selectCategory(category) { setView("inventory"); updateFilter("category", category); }
+  function selectPublicationCandidates() {
+    setPage(0); setView("publication_candidates");
+    setFilters({ category: "", root_cause: "", change_type: "", publication_status: "" });
+  }
+  function resetFilters() {
+    setPage(0); setView("inventory"); setSearchInput(""); setSearch("");
+    setFilters({ category: "", root_cause: "", change_type: "", publication_status: "" });
+  }
+  function submitSearch(event) { event.preventDefault(); setPage(0); setSearch(searchInput.trim()); }
+
+  const totalPages = Math.max(1, Math.ceil((result?.filtered_total || 0) / HYGIENE_PAGE_SIZE));
+  const emptyLabel = view === "publication_candidates"
+    ? "No unpublished customer-ready opportunities match these filters."
+    : filters.category === "NEEDS_INVESTIGATION"
+      ? "No unresolved opportunities match these filters."
+      : filters.category === "UNSUPPORTED_ORPHAN_CANDIDATE"
+        ? "No unsupported opportunities match these filters."
+        : "No opportunities match these filters.";
+
+  return <section className="opportunity-hygiene-page">
+    <div className="page-heading"><div><p className="eyebrow">Opportunity quality</p><h1>Opportunity hygiene</h1><p className="muted">Review supported, unsupported and unresolved CareProspect opportunities before cleanup or publication.</p></div><div className="page-actions"><RefreshButton busy={loading} onClick={load} /><span className="result-count">{result?.filtered_total ?? "—"} results</span></div></div>
+    <div className="metric-grid hygiene-metrics" aria-label="Opportunity hygiene categories">
+      {HYGIENE_CATEGORIES.map(([value, label]) => <button type="button" className={`metric-card clickable${view === "inventory" && filters.category === value ? " active" : ""}`} key={value} onClick={() => selectCategory(value)} aria-pressed={view === "inventory" && filters.category === value}><span className="metric-icon slate" /><strong>{result?.category_counts?.[value] ?? "—"}</strong><span className="metric-label">{label}</span></button>)}
+    </div>
+    <div className="hygiene-view-switch" aria-label="Opportunity hygiene views"><button type="button" className={`button ${view === "publication_candidates" ? "primary" : "secondary"}`} onClick={selectPublicationCandidates}>Publication candidates</button><span className="muted small-text">{result?.customer_readiness_total ?? "—"} supported unpublished candidates; publication remains on the opportunity detail page.</span></div>
+    <form className="filter-bar" onSubmit={submitSearch}>
+      <label>Category<select aria-label="Hygiene category" value={filters.category} onChange={(event) => selectCategory(event.target.value)}><option value="">All categories</option>{HYGIENE_CATEGORIES.map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label>
+      {filters.category === "UNSUPPORTED_ORPHAN_CANDIDATE" && <label>Root cause<select aria-label="Unsupported root cause" value={filters.root_cause} onChange={(event) => updateFilter("root_cause", event.target.value)}><option value="">All root causes</option>{Object.keys(result?.orphan_root_causes || {}).map((value) => <option value={value} key={value}>{titleCase(value)} ({result.orphan_root_causes[value]})</option>)}</select></label>}
+      <label>Change type<select aria-label="Hygiene change type" value={filters.change_type} onChange={(event) => updateFilter("change_type", event.target.value)}><option value="">All change types</option>{Object.keys(result?.change_type_counts || {}).map((value) => <option value={value} key={value}>{titleCase(value)}</option>)}</select></label>
+      <label>Publication<select aria-label="Hygiene publication status" value={filters.publication_status} onChange={(event) => updateFilter("publication_status", event.target.value)}><option value="">All publication states</option>{Object.keys(result?.publication_counts || {}).map((value) => <option value={value} key={value}>{titleCase(value)}</option>)}</select></label>
+      <label>Search<input aria-label="Search opportunity hygiene" type="search" value={searchInput} onChange={(event) => setSearchInput(event.target.value)} placeholder="Name, town, postcode or explanation…" /></label>
+      <button className="button secondary" type="submit">Search</button>
+      <button className="button ghost filter-reset" type="button" onClick={resetFilters}>Reset</button>
+    </form>
+    {error && <ErrorState message={error} onRetry={load} />}
+    {loading && !result && <LoadingState label="Loading opportunity hygiene" />}
+    {!loading && !error && result?.items?.length === 0 && <div className="state-card"><strong>{emptyLabel}</strong><p className="muted">Change or reset the filters to inspect another cohort.</p></div>}
+    {result?.items?.length > 0 && <><div className="table-wrap"><table><thead><tr><th>Opportunity</th><th>Change type</th><th>Location</th><th>Signals</th><th>Hygiene</th><th>Reason</th><th>Publication</th><th>Action</th></tr></thead><tbody>{result.items.map((item) => <tr className="clickable-row" key={item.opportunity_id} onClick={() => onNavigate(`/opportunities/${item.opportunity_id}`)}><td><strong>{item.name}</strong><span className="cell-subtitle">{titleCase(item.lifecycle_stage)}{item.confidence == null ? "" : ` · ${Math.round(item.confidence * 100)}% confidence`}</span></td><td><Badge>{titleCase(item.change_type)}</Badge></td><td>{[item.town, item.postcode].filter(Boolean).join(" · ") || "—"}</td><td>{item.supporting_signal_count}<span className="cell-subtitle">{item.source_mix || "No active source"}</span></td><td><Badge tone={item.category === "VALID_SUPPORTED" ? "approved" : item.category === "UNSUPPORTED_ORPHAN_CANDIDATE" ? "rejected" : item.category === "NEEDS_INVESTIGATION" ? "pending" : "neutral"}>{hygieneCategoryLabel(item.category)}</Badge>{item.admin_touch_types?.length > 0 && <span className="cell-subtitle">Admin touched: {item.admin_touch_types.map(titleCase).join(", ")}</span>}</td><td><span className="truncated-reason" title={item.customer_readiness_reason || item.hygiene_reason || item.warning || ""}>{item.customer_readiness_reason || item.hygiene_reason || item.warning || "—"}</span>{item.warning && item.publication_status === "PUBLISHED" && <span className="hygiene-warning">Published warning</span>}</td><td><Badge tone={item.publication_status === "PUBLISHED" ? "approved" : "neutral"}>{titleCase(item.publication_status)}</Badge></td><td><button type="button" className="button ghost" onClick={(event) => { event.stopPropagation(); onNavigate(`/opportunities/${item.opportunity_id}`); }}>View opportunity</button></td></tr>)}</tbody></table></div><div className="pagination"><span>Page {page + 1} of {totalPages}</span><div><button className="button secondary" disabled={page === 0} onClick={() => setPage((value) => value - 1)}>Previous</button><button className="button secondary" disabled={page + 1 >= totalPages} onClick={() => setPage((value) => value + 1)}>Next</button></div></div></>}
+  </section>;
+}
+
 function CustomerPublicationEditor({ opportunity, apiClient, onUpdated }) {
   const [title, setTitle] = useState(opportunity.customer_title || "");
   const [summary, setSummary] = useState(opportunity.customer_summary || "");
@@ -1342,6 +1429,6 @@ export default function App() {
   const detailNotice = new URLSearchParams(listQuery).get("notice") || "";
   const showVertical = vertical === "ALL";
   return <Shell user={auth.user} onLogout={auth.logout} onNavigate={navigate} currentPath={path} vertical={vertical} onVerticalChange={onVerticalChange}>
-    {detailMatch ? <SignalDetail key={vertical} signalId={detailMatch[2]} apiClient={scopedApiClient} queueMode={detailMode === "inbox"} unmatchedMode={detailMode === "unmatched"} initialNotice={detailNotice} queueQuery={listQuery} onBack={() => navigate(`${detailMode === "inbox" ? "/inbox" : detailMode === "unmatched" ? "/unmatched" : "/history"}${listQuery ? `?${listQuery}` : ""}`)} onReviewed={({ message, nextId }) => { const params = new URLSearchParams(listQuery); params.set("notice", message); const suffix = params.toString(); navigate(nextId ? `/inbox/${nextId}?${suffix}` : `/inbox?${suffix}`); }} /> : opportunityMatch ? <OpportunityDetail key={vertical} opportunityId={opportunityMatch[1]} apiClient={scopedApiClient} onBack={() => navigate("/opportunities")} /> : route === "/inbox" ? <ReviewInboxPage key={vertical} apiClient={scopedApiClient} onNavigate={navigate} initialQuery={listQuery} showVertical={showVertical} /> : route === "/history" ? <ReviewedSignalsPage key={vertical} apiClient={scopedApiClient} onNavigate={navigate} initialQuery={listQuery} showVertical={showVertical} /> : route === "/unmatched" ? <UnmatchedSignalsPage key={vertical} apiClient={scopedApiClient} onNavigate={navigate} initialQuery={listQuery} showVertical={showVertical} /> : route === "/match-review" ? <MatchReviewPage key={vertical} apiClient={scopedApiClient} onNavigate={navigate} showVertical={showVertical} /> : route === "/opportunities" ? <OpportunitiesPage key={vertical} apiClient={scopedApiClient} onNavigate={navigate} showVertical={showVertical} /> : route === "/sources" ? <SourcesPage key={vertical} apiClient={scopedApiClient} selectedVertical={vertical} /> : route === "/procurement" ? <ProcurementEvaluationPage key={vertical} apiClient={scopedApiClient} /> : route === "/organisations" ? <OrganisationsPage key={vertical} apiClient={scopedApiClient} /> : route === "/customers" ? <CustomersPage apiClient={apiClient} /> : route === "/backtesting" ? <BacktestingPage key={vertical} apiClient={scopedApiClient} selectedVertical={vertical} /> : <Dashboard key={vertical} apiClient={scopedApiClient} onNavigate={navigate} />}
+    {detailMatch ? <SignalDetail key={vertical} signalId={detailMatch[2]} apiClient={scopedApiClient} queueMode={detailMode === "inbox"} unmatchedMode={detailMode === "unmatched"} initialNotice={detailNotice} queueQuery={listQuery} onBack={() => navigate(`${detailMode === "inbox" ? "/inbox" : detailMode === "unmatched" ? "/unmatched" : "/history"}${listQuery ? `?${listQuery}` : ""}`)} onReviewed={({ message, nextId }) => { const params = new URLSearchParams(listQuery); params.set("notice", message); const suffix = params.toString(); navigate(nextId ? `/inbox/${nextId}?${suffix}` : `/inbox?${suffix}`); }} /> : opportunityMatch ? <OpportunityDetail key={vertical} opportunityId={opportunityMatch[1]} apiClient={scopedApiClient} onBack={() => navigate("/opportunities")} /> : route === "/inbox" ? <ReviewInboxPage key={vertical} apiClient={scopedApiClient} onNavigate={navigate} initialQuery={listQuery} showVertical={showVertical} /> : route === "/history" ? <ReviewedSignalsPage key={vertical} apiClient={scopedApiClient} onNavigate={navigate} initialQuery={listQuery} showVertical={showVertical} /> : route === "/unmatched" ? <UnmatchedSignalsPage key={vertical} apiClient={scopedApiClient} onNavigate={navigate} initialQuery={listQuery} showVertical={showVertical} /> : route === "/match-review" ? <MatchReviewPage key={vertical} apiClient={scopedApiClient} onNavigate={navigate} showVertical={showVertical} /> : route === "/opportunities" ? <OpportunitiesPage key={vertical} apiClient={scopedApiClient} onNavigate={navigate} showVertical={showVertical} /> : route === "/opportunity-hygiene" ? <OpportunityHygienePage apiClient={apiClient} onNavigate={navigate} /> : route === "/sources" ? <SourcesPage key={vertical} apiClient={scopedApiClient} selectedVertical={vertical} /> : route === "/procurement" ? <ProcurementEvaluationPage key={vertical} apiClient={scopedApiClient} /> : route === "/organisations" ? <OrganisationsPage key={vertical} apiClient={scopedApiClient} /> : route === "/customers" ? <CustomersPage apiClient={apiClient} /> : route === "/backtesting" ? <BacktestingPage key={vertical} apiClient={scopedApiClient} selectedVertical={vertical} /> : <Dashboard key={vertical} apiClient={scopedApiClient} onNavigate={navigate} />}
   </Shell>;
 }

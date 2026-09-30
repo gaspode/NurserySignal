@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from uuid import uuid4
 
-from app.opportunity_hygiene import audit_opportunities
+from app.opportunity_hygiene import audit_opportunities, filter_hygiene_items
 
 
 def relation(
@@ -107,3 +107,28 @@ def test_merged_opportunity_is_preserved_as_admin_touched() -> None:
     report = audit_opportunities([merged])
     assert report["items"][0]["category"] == "MANUAL_OR_ADMIN_TOUCHED_PRESERVE"
     assert report["items"][0]["admin_touch_types"] == ["merge"]
+
+
+def test_hygiene_filters_and_publication_candidate_view_are_read_only() -> None:
+    supported = opportunity(
+        name="New children's home — Bristol BS1",
+        postcode="BS1 1AA",
+        creation_reason="Approved change of use",
+    )
+    rejected = opportunity(
+        name="Rejected proposal — Leeds",
+        postcode="LS1 1AA",
+        relationships=[relation(review_status="REJECTED")],
+    )
+    items = audit_opportunities([supported, rejected])["items"]
+
+    unsupported = filter_hygiene_items(
+        items,
+        category="UNSUPPORTED_ORPHAN_CANDIDATE",
+        root_cause="SIGNAL_REJECTED",
+    )
+    assert [item["opportunity_id"] for item in unsupported] == [str(rejected["id"])]
+    candidates = filter_hygiene_items(items, view="publication_candidates")
+    assert [item["opportunity_id"] for item in candidates] == [str(supported["id"])]
+    assert filter_hygiene_items(items, q="approved change") == [items[0]]
+    assert all(item["publication_status"] == "DRAFT" for item in items)

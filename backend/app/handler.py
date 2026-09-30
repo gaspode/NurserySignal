@@ -1517,6 +1517,11 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                         limit=min(max(int(_query(event, "limit") or 100), 1), 250),
                         offset=max(int(_query(event, "offset") or 0), 0),
                         category=_query(event, "category"),
+                        root_cause=_query(event, "root_cause"),
+                        change_type=_query(event, "change_type"),
+                        publication_status=_query(event, "publication_status"),
+                        q=_query(event, "q"),
+                        view=_query(event, "view") or "inventory",
                     ),
                 )
             if action == "review-triage-safe-approve" and method == "POST":

@@ -50,7 +50,12 @@ from app.correlation import (
 )
 from app.db import connection
 from app.ingestion import NormalizedSignal
-from app.opportunity_hygiene import HYGIENE_CATEGORIES, audit_opportunities
+from app.opportunity_hygiene import (
+    HYGIENE_CATEGORIES,
+    ORPHAN_ROOT_CAUSES,
+    audit_opportunities,
+    filter_hygiene_items,
+)
 from app.planning_outcomes import (
     PLANNING_OUTCOME_POLICY_VERSION,
     PlanningOutcome,
@@ -5214,12 +5219,24 @@ def care_opportunity_hygiene_audit(
     limit: int = 100,
     offset: int = 0,
     category: str | None = None,
+    root_cause: str | None = None,
+    change_type: str | None = None,
+    publication_status: str | None = None,
+    q: str | None = None,
+    view: str = "inventory",
 ) -> dict[str, Any]:
     """Audit the complete CareProspect opportunity inventory without mutation."""
     bounded_limit = min(max(int(limit), 1), 250)
     bounded_offset = max(int(offset), 0)
     if category is not None and category not in HYGIENE_CATEGORIES:
         raise ValueError("invalid_hygiene_category")
+    if root_cause is not None and root_cause not in ORPHAN_ROOT_CAUSES:
+        raise ValueError("invalid_hygiene_root_cause")
+    if view not in {"inventory", "publication_candidates"}:
+        raise ValueError("invalid_hygiene_view")
+    normalized_change_type = str(change_type or "").strip().upper() or None
+    normalized_publication = str(publication_status or "").strip().upper() or None
+    search = str(q or "").strip().lower()[:200]
     with connection(settings) as conn:
         rows = conn.execute(
             """
@@ -5322,7 +5339,15 @@ def care_opportunity_hygiene_audit(
     opportunities = [dict(zip(fields, row)) for row in rows]
     report = audit_opportunities(opportunities)
     all_items = report.pop("items")
-    selected = [item for item in all_items if category is None or item["category"] == category]
+    selected = filter_hygiene_items(
+        all_items,
+        category=category,
+        root_cause=root_cause,
+        change_type=normalized_change_type,
+        publication_status=normalized_publication,
+        q=search,
+        view=view,
+    )
     report.update(
         {
             "items": selected[bounded_offset : bounded_offset + bounded_limit],
@@ -5330,6 +5355,11 @@ def care_opportunity_hygiene_audit(
             "limit": bounded_limit,
             "offset": bounded_offset,
             "category_filter": category,
+            "root_cause_filter": root_cause,
+            "change_type_filter": normalized_change_type,
+            "publication_status_filter": normalized_publication,
+            "search": search,
+            "view": view,
             "errors": 0,
             "inventory_complete": len(rows) < 5000,
             "prior_count_reconciliation": {

@@ -1,7 +1,7 @@
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { BacktestingPage, CustomersPage, Dashboard, LoginPage, MatchReviewPage, OpportunitiesPage, OpportunityDetail, OrganisationsPage, ProcurementEvaluationPage, ReviewInboxPage, ReviewedSignalsPage, SignalDetail, SourcesPage, UnmatchedSignalsPage, restoredVertical, verticalScopedPath } from "./App.jsx";
+import { BacktestingPage, CustomersPage, Dashboard, LoginPage, MatchReviewPage, OpportunitiesPage, OpportunityDetail, OpportunityHygienePage, OrganisationsPage, ProcurementEvaluationPage, ReviewInboxPage, ReviewedSignalsPage, SignalDetail, SourcesPage, UnmatchedSignalsPage, restoredVertical, verticalScopedPath } from "./App.jsx";
 
 const pendingItem = {
   id: "signal-1",
@@ -50,6 +50,47 @@ function detail(status = "PENDING") {
 
 function listResult(items = [pendingItem], total = items.length) {
   return { items, total, limit: 10, offset: 0 };
+}
+
+const hygieneItem = {
+  opportunity_id: "care-opp-1",
+  name: "New children's home — Liverpool L19",
+  lifecycle_stage: "PLANNING",
+  change_type: "OPENING",
+  confidence: 0.95,
+  town: "Liverpool",
+  postcode: "L19",
+  supporting_signal_count: 1,
+  source_mix: "PLANNING",
+  category: "NEEDS_INVESTIGATION",
+  hygiene_reason: "Active evidence lacks decisive event semantics.",
+  warning: "Active evidence lacks decisive event semantics.",
+  publication_status: "PUBLISHED",
+  admin_touch_types: ["manual_publication"],
+};
+
+function hygieneResult(overrides = {}) {
+  return {
+    total: 1143,
+    filtered_total: 30,
+    limit: 25,
+    offset: 0,
+    category_counts: {
+      VALID_SUPPORTED: 754,
+      UNSUPPORTED_ORPHAN_CANDIDATE: 345,
+      NEEDS_INVESTIGATION: 30,
+      MANUAL_OR_ADMIN_TOUCHED_PRESERVE: 14,
+      DUPLICATE_CANDIDATE: 0,
+      SUPERSEDED_CANDIDATE: 0,
+    },
+    orphan_root_causes: { SIGNAL_REJECTED: 295, PLANNING_REFUSED: 9 },
+    change_type_counts: { OPENING: 1088, EXPANSION: 52 },
+    publication_counts: { DRAFT: 1137, PUBLISHED: 6 },
+    customer_readiness_total: 749,
+    items: [hygieneItem],
+    read_only: true,
+    ...overrides,
+  };
 }
 
 const triageResult = {
@@ -860,6 +901,43 @@ describe("admin frontend", () => {
     expect(screen.getByText("Planning evidence indicates expansion")).toBeInTheDocument();
     await userEvent.click(screen.getByText("Little Acorns Nursery"));
     expect(onNavigate).toHaveBeenCalledWith("/opportunities/opp-1");
+  });
+
+  it("renders read-only opportunity hygiene counts, filters and detail navigation", async () => {
+    const apiClient = vi.fn().mockResolvedValue(hygieneResult());
+    const onNavigate = vi.fn();
+    render(<OpportunityHygienePage apiClient={apiClient} onNavigate={onNavigate} />);
+
+    expect(await screen.findByRole("heading", { name: "Opportunity hygiene" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Valid supported/i })).toHaveTextContent("754");
+    expect(screen.getByRole("button", { name: /Needs investigation/i })).toHaveTextContent("30");
+    expect(screen.getByText("Published warning")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: /Needs investigation/i }));
+    await waitFor(() => expect(apiClient).toHaveBeenLastCalledWith(expect.stringContaining("category=NEEDS_INVESTIGATION")));
+    await userEvent.click(screen.getByRole("button", { name: "View opportunity" }));
+    expect(onNavigate).toHaveBeenCalledWith("/opportunities/care-opp-1");
+
+    for (const action of ["Merge", "Split", "Unlink", "Retire", "Deactivate", "Delete", "Supersede", "Publish"]) {
+      expect(screen.queryByRole("button", { name: action })).not.toBeInTheDocument();
+    }
+  });
+
+  it("supports orphan causes, publication candidates and server pagination", async () => {
+    const apiClient = vi.fn().mockResolvedValue(hygieneResult());
+    render(<OpportunityHygienePage apiClient={apiClient} onNavigate={vi.fn()} />);
+    await screen.findByRole("heading", { name: "Opportunity hygiene" });
+
+    await userEvent.click(screen.getByRole("button", { name: /Unsupported \/ orphan/i }));
+    const rootCause = await screen.findByLabelText("Unsupported root cause");
+    await userEvent.selectOptions(rootCause, "SIGNAL_REJECTED");
+    await waitFor(() => expect(apiClient).toHaveBeenLastCalledWith(expect.stringContaining("root_cause=SIGNAL_REJECTED")));
+
+    await userEvent.click(screen.getByRole("button", { name: "Publication candidates" }));
+    await waitFor(() => expect(apiClient).toHaveBeenLastCalledWith(expect.stringContaining("view=publication_candidates")));
+
+    await userEvent.click(screen.getByRole("button", { name: "Next" }));
+    await waitFor(() => expect(apiClient).toHaveBeenLastCalledWith(expect.stringContaining("offset=25")));
   });
 
   it("keeps recalculation errors inside the confirmation dialog", async () => {
