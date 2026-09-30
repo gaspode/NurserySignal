@@ -287,7 +287,7 @@ class PlotaProvider:
             try:
                 with self.opener(request, timeout=self.timeout) as response:
                     payload = json.loads(response.read())
-                if not isinstance(payload, dict) or not isinstance(payload.get("data"), list):
+                if not isinstance(payload, dict):
                     raise PlanningProviderError("Plota response has an invalid shape")
                 return payload
             except HTTPError as exc:
@@ -310,7 +310,10 @@ class PlotaProvider:
         raise PlanningProviderError("Plota request failed")
 
     def _page(self, params: dict[str, Any]) -> dict[str, Any]:
-        return self._get("applications", params)
+        payload = self._get("applications", params)
+        if not isinstance(payload.get("data"), list):
+            raise PlanningProviderError("Plota response has an invalid shape")
+        return payload
 
     def applications(self, query: PlanningQuery) -> Iterator[PlanningRecord]:
         cursor: str | None = None
@@ -392,8 +395,15 @@ class PlotaProvider:
             f"applications/{provider_id}/associated",
             {"limit": min(max(int(limit), 1), 10)},
         )
+        data = payload.get("data")
+        if not isinstance(data, dict) or not isinstance(data.get("applications"), list):
+            raise PlanningProviderError("Plota associated response has an invalid shape")
+        bounded_limit = min(max(int(limit), 1), 10)
+        rows = data["applications"][:bounded_limit]
         matches: list[PlanningRecord] = []
-        for row in payload["data"]:
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
             record = normalize_plota_record(row, self.base_url)
             candidate_reference = row.get("reference") or row.get("application_reference")
             if (
@@ -404,8 +414,8 @@ class PlotaProvider:
         return PlanningReferenceSearchResult(
             provider_query=f"associated:{provider_id}:{str(reference).strip()}",
             candidates=tuple(matches),
-            returned_count=len(payload["data"]),
-            truncated=bool((payload.get("meta") or {}).get("next_cursor")),
+            returned_count=len(rows),
+            truncated=len(data["applications"]) > bounded_limit,
         )
 
 

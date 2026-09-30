@@ -416,19 +416,31 @@ def test_plota_provider_associated_lookup_retains_only_exact_reference() -> None
         requests.append(request.full_url)
         return FakeResponse(
             {
-                "data": [
-                    {
+                "data": {
+                    "id": "origin",
+                    "reference": "24/03385/FUL",
+                    "role": "principal",
+                    "principal": {
                         "id": "origin",
                         "reference": "24/03385/FUL",
                         "description": "children's home",
                     },
-                    {
-                        "id": "other",
-                        "reference": "23/02622/FUL",
-                        "description": "other application",
-                    },
-                ],
-                "meta": {"next_cursor": None},
+                    "applications": [
+                        {
+                            "id": "origin",
+                            "reference": "24/03385/FUL",
+                            "description": "children's home",
+                        },
+                        {
+                            "id": "other",
+                            "reference": "23/02622/FUL",
+                            "description": "other application",
+                        },
+                    ],
+                    "conditions": [],
+                    "count": 2,
+                },
+                "meta": {"historical_available": True},
             }
         )
 
@@ -438,7 +450,19 @@ def test_plota_provider_associated_lookup_retains_only_exact_reference() -> None
     )
 
     assert [item.application_id for item in search.candidates] == ["origin"]
+    assert search.returned_count == 2
+    assert search.truncated is False
     assert requests == ["https://api.plota.co.uk/v1/applications/6v5f0ggb/associated?limit=10"]
+
+
+def test_plota_provider_associated_lookup_rejects_standard_page_shape() -> None:
+    provider = PlotaProvider(
+        "secret",
+        opener=lambda request, timeout: FakeResponse({"data": []}),
+    )
+
+    with pytest.raises(Exception, match="associated response has an invalid shape"):
+        provider.associated_applications_by_reference("6v5f0ggb", "24/03385/FUL")
 
 
 def test_targeted_origin_recovery_uses_normal_ingestion_queue(monkeypatch) -> None:
