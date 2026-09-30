@@ -11,6 +11,7 @@ from psycopg.types.json import Jsonb
 from app.config import Settings
 from app.correlation import normalize_identity
 from app.db import connection
+from app.organisation_types import PUBLIC_AUTHORITY, is_public_authority_name
 from app.storage import put_raw_evidence
 
 
@@ -94,6 +95,23 @@ def process_organisation_enrichment(settings: Settings, payload: dict[str, Any])
         raise ValueError("organisation enrichment identity is missing")
     if not settings.evidence_bucket:
         raise RuntimeError("EVIDENCE_BUCKET is not configured")
+    with connection(settings) as conn:
+        operator_type = conn.execute(
+            """SELECT name, legal_name, organisation_type
+               FROM operators WHERE id = %s""",
+            (operator_id,),
+        ).fetchone()
+    if operator_type and (
+        operator_type[2] == PUBLIC_AUTHORITY
+        or is_public_authority_name(operator_type[0])
+        or is_public_authority_name(operator_type[1])
+    ):
+        return {
+            "operator_id": operator_id,
+            "status": "SKIPPED_PUBLIC_AUTHORITY",
+            "outcome": "NOT_APPLICABLE",
+            "company_number": None,
+        }
     company = payload.get("company") if isinstance(payload.get("company"), dict) else None
     candidates = _safe_candidates(payload.get("candidates"))
     status = str(payload.get("status") or "FAILED")

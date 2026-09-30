@@ -15,6 +15,7 @@ from app.companies_house import (
 )
 from app.config import Settings
 from app.logging import configure_logging
+from app.organisation_types import is_public_authority_name
 from app.secrets import provider_api_key_from_secret
 from app.source_runs import finish_run, safe_failure, start_run
 
@@ -71,7 +72,13 @@ def collect_companies_house(
             ),
         )
         for item in raw_candidates[:limit]
-        if isinstance(item, dict) and item.get("operator_id") and item.get("name")
+        if isinstance(item, dict)
+        and item.get("operator_id")
+        and item.get("name")
+        and not (
+            item.get("organisation_type") != "PRIVATE_COMPANY"
+            and is_public_authority_name(item.get("name"))
+        )
     ]
     run_id, started_at = start_run(
         settings,

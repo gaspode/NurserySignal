@@ -631,6 +631,36 @@ describe("admin frontend", () => {
     );
   });
 
+  it("shows public authorities without Companies House resolution controls", async () => {
+    const authority = { id: "operator-council", name: "Lancashire County Council", legal_name: "Lancashire County Council", vertical: "CHILDRENS_HOME", organisation_type: "PUBLIC_AUTHORITY", companies_house_number: null, signal_count: 3, opportunity_count: 1 };
+    const apiClient = vi.fn()
+      .mockResolvedValueOnce({ items: [authority] })
+      .mockResolvedValueOnce({ items: [] })
+      .mockResolvedValueOnce({ ...authority, aliases: [{ alias: "Lancashire CC" }], registered_office: {}, sic_codes: [], opportunities: [], ofsted_corroboration: [], public_authority_conflict: false });
+    render(<OrganisationsPage apiClient={apiClient} />);
+    expect(await screen.findByText("Public authority")).toBeInTheDocument();
+    expect(screen.getByText("Companies House match not applicable")).toBeInTheDocument();
+    await userEvent.click(screen.getByText("Lancashire County Council"));
+    expect(await screen.findByText("Not applicable")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Return to company resolution" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Use this company" })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Companies House number")).not.toBeInTheDocument();
+  });
+
+  it("shows a warning instead of hiding a public-authority mapping conflict", async () => {
+    const authority = { id: "operator-council", name: "Example City Council", vertical: "CHILDRENS_HOME", organisation_type: "PUBLIC_AUTHORITY", companies_house_number: "12345678", public_authority_conflict: true, signal_count: 1, opportunity_count: 1 };
+    const apiClient = vi.fn()
+      .mockResolvedValueOnce({ items: [authority] })
+      .mockResolvedValueOnce({ items: [] })
+      .mockResolvedValueOnce({ ...authority, aliases: [], registered_office: {}, sic_codes: [], opportunities: [], ofsted_corroboration: [] });
+    render(<OrganisationsPage apiClient={apiClient} />);
+    await userEvent.click(await screen.findByText("Example City Council"));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "historical Companies House mapping"
+    );
+    expect(screen.getByText("12345678")).toBeInTheDocument();
+  });
+
   it("looks up a manually entered company number before requiring confirmation", async () => {
     const review = { id: "review-1", operator_id: "operator-1", organisation_name: "Example Care", candidates: [] };
     const manualCandidate = { company_name: "EXAMPLE CARE LIMITED", company_number: "12345678", company_status: "dissolved", date_of_creation: "2020-03-04", registered_office_address: { locality: "Blackpool", postal_code: "FY4 2FF" }, match_outcome: "STRONG", match_reasons: ["Exact Ofsted provider-office postcode match"], selection_source: "MANUAL_LOOKUP" };

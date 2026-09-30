@@ -87,6 +87,40 @@ def test_access_request_list_remains_admin_only(monkeypatch) -> None:
     assert allowed["statusCode"] == 200
 
 
+def test_organisation_type_override_is_admin_only_and_audited(monkeypatch) -> None:
+    captured = {}
+
+    def fake_set(settings, operator_id, **kwargs):
+        captured.update({"operator_id": operator_id, **kwargs})
+        return {"id": operator_id, "organisation_type": kwargs["organisation_type"]}
+
+    monkeypatch.setattr("app.handler.set_organisation_type", fake_set)
+    denied = handler(
+        event(
+            "/admin/organisations/operator-1/type",
+            "POST",
+            body=json.dumps({"organisation_type": "PUBLIC_AUTHORITY"}),
+            claims={"sub": "outsider", "cognito:groups": ["Other"]},
+        ),
+        None,
+    )
+    assert denied["statusCode"] == 403
+    response = handler(
+        event(
+            "/admin/organisations/operator-1/type",
+            "POST",
+            body=json.dumps({"organisation_type": "PUBLIC_AUTHORITY"}),
+        ),
+        None,
+    )
+    assert response["statusCode"] == 200
+    assert captured == {
+        "operator_id": "operator-1",
+        "organisation_type": "PUBLIC_AUTHORITY",
+        "actor": "reviewer-123",
+    }
+
+
 def test_signal_requires_authentication() -> None:
     response = handler(
         {"rawPath": "/signals", "requestContext": {"http": {"method": "POST"}}}, None

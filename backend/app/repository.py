@@ -57,6 +57,15 @@ from app.opportunity_hygiene import (
     audit_opportunities,
     filter_hygiene_items,
 )
+from app.organisation_types import (
+    ORGANISATION_TYPES,
+    PRIVATE_COMPANY,
+    PUBLIC_AUTHORITY,
+    UNKNOWN,
+    is_public_authority_name,
+    looks_like_public_authority,
+    public_authority_aliases,
+)
 from app.planning_outcomes import (
     PLANNING_OUTCOME_POLICY_VERSION,
     PlanningOutcome,
@@ -129,10 +138,13 @@ def _resolve_operator_id(conn: Any, name: Any, metadata: dict[str, Any]) -> Any 
     display_name = str(name or "").strip()
     if not display_name:
         return None
+    public_authority = is_public_authority_name(display_name)
     company_number = (
         str(metadata.get("companies_house_number") or metadata.get("company_number") or "").strip()
         or None
     )
+    if public_authority:
+        company_number = None
     website = str(metadata.get("website") or metadata.get("website_url") or "").strip() or None
     identity = normalize_identity(display_name)
     conn.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (f"operator:{identity}",))
@@ -143,16 +155,63 @@ def _resolve_operator_id(conn: Any, name: Any, metadata: dict[str, Any]) -> Any 
         if row:
             return row[0]
     rows = conn.execute(
-        "SELECT id, name, legal_name FROM operators ORDER BY created_at LIMIT 1000"
+        """SELECT id, name, legal_name, companies_house_number, organisation_type
+           FROM operators ORDER BY created_at LIMIT 1000"""
     ).fetchall()
     for row in rows:
         if identity in {normalize_identity(row[1]), normalize_identity(row[2])}:
+            if public_authority and len(row) > 4 and row[4] == UNKNOWN and not row[3]:
+                conn.execute(
+                    """UPDATE operators SET organisation_type = 'PUBLIC_AUTHORITY',
+                       organisation_type_source = 'DETERMINISTIC_NAME',
+                       organisation_type_updated_at = now(), updated_at = now()
+                       WHERE id = %s AND organisation_type = 'UNKNOWN'
+                         AND companies_house_number IS NULL""",
+                    (row[0],),
+                )
+                _store_public_authority_aliases(conn, row[0], display_name)
             return row[0]
-    return conn.execute(
-        """INSERT INTO operators (name, legal_name, companies_house_number, website_url)
-           VALUES (%s, %s, %s, %s) RETURNING id""",
-        (display_name, display_name, company_number, website),
-    ).fetchone()[0]
+    alias_match = conn.execute(
+        """SELECT operator_id FROM organisation_aliases
+           WHERE normalized_alias = %s ORDER BY created_at LIMIT 1""",
+        (identity,),
+    ).fetchone()
+    if alias_match:
+        return alias_match[0]
+    organisation_type = PUBLIC_AUTHORITY if public_authority else (
+        PRIVATE_COMPANY if company_number else UNKNOWN
+    )
+    row = conn.execute(
+        """INSERT INTO operators
+           (name, legal_name, companies_house_number, website_url, organisation_type,
+            organisation_type_source, organisation_type_updated_at)
+           VALUES (%s, %s, %s, %s, %s, %s, now()) RETURNING id""",
+        (
+            display_name,
+            display_name,
+            company_number,
+            website,
+            organisation_type,
+            "DETERMINISTIC_NAME" if public_authority else "SOURCE_COMPANY_NUMBER"
+            if company_number else "UNCLASSIFIED",
+        ),
+    ).fetchone()
+    if public_authority:
+        _store_public_authority_aliases(conn, row[0], display_name)
+    return row[0]
+
+
+def _store_public_authority_aliases(conn: Any, operator_id: Any, name: str) -> None:
+    for alias in public_authority_aliases(name):
+        normalized = normalize_identity(alias)
+        if normalized:
+            conn.execute(
+                """INSERT INTO organisation_aliases
+                   (operator_id, alias, normalized_alias, source)
+                   VALUES (%s, %s, %s, 'PUBLIC_AUTHORITY_NAME')
+                   ON CONFLICT (operator_id, normalized_alias) DO NOTHING""",
+                (operator_id, alias, normalized),
+            )
 
 
 def store_ofsted_urn_enrichment(
@@ -5409,11 +5468,17 @@ def list_organisations(
                 SELECT g.name, g.vertical, g.signal_count, g.opportunity_count,
                        op.id, op.legal_name, op.companies_house_number,
                        op.company_status, op.incorporation_date,
-                       op.companies_house_url, op.resolution_outcome
+                       op.companies_house_url, op.resolution_outcome,
+                       op.organisation_type, op.organisation_type_source
                 FROM grouped g
                 LEFT JOIN operators op
                   ON lower(trim(op.name)) = lower(trim(g.name))
                   OR lower(trim(op.legal_name)) = lower(trim(g.name))
+                  OR EXISTS (
+                    SELECT 1 FROM organisation_aliases oa
+                    WHERE oa.operator_id = op.id
+                      AND lower(trim(oa.alias)) = lower(trim(g.name))
+                  )
                 ORDER BY lower(g.name)
                 LIMIT %s OFFSET %s""",
             [*params, min(max(limit, 1), 100), max(offset, 0)],
@@ -5432,11 +5497,252 @@ def list_organisations(
                 "incorporation_date": row[8],
                 "companies_house_url": row[9],
                 "resolution_outcome": row[10],
+                "organisation_type": row[11] or UNKNOWN,
+                "organisation_type_source": row[12],
+                "public_authority_suspected": bool(
+                    is_public_authority_name(row[0]) and (row[11] or UNKNOWN) != PUBLIC_AUTHORITY
+                ),
+                "public_authority_conflict": bool(
+                    (row[11] or UNKNOWN) == PUBLIC_AUTHORITY and row[6]
+                ),
             }
             for row in rows
         ],
         "limit": limit,
         "offset": offset,
+    }
+
+
+def public_authority_backfill(
+    settings: Settings, *, apply: bool = False, actor: str = "SYSTEM", limit: int = 5000
+) -> dict[str, Any]:
+    """Preview or safely classify obvious public authorities without replacing identities."""
+    bounded_limit = min(max(int(limit), 1), 5000)
+    with connection(settings) as conn:
+        rows = conn.execute(
+            """SELECT o.id, o.name, o.legal_name, o.companies_house_number,
+                      o.organisation_type, o.organisation_type_source,
+                      o.enrichment_provenance,
+                      (SELECT count(*) FROM opportunities opp
+                       WHERE opp.operator_id = o.id) AS opportunity_count,
+                      (SELECT count(DISTINCT linked.signal_id) FROM (
+                         SELECT os.raw_signal_id AS signal_id
+                         FROM opportunities opp
+                         JOIN opportunity_signals os ON os.opportunity_id = opp.id
+                         WHERE opp.operator_id = o.id
+                         UNION
+                         SELECT oe.raw_signal_id AS signal_id
+                         FROM ofsted_urn_enrichments oe WHERE oe.operator_id = o.id
+                       ) linked) AS signal_count,
+                      (SELECT count(*) FROM organisation_match_reviews r
+                       WHERE r.operator_id = o.id AND r.provider = 'COMPANIES_HOUSE'
+                         AND r.status = 'PENDING') AS pending_review_count,
+                      EXISTS (
+                        SELECT 1 FROM organisation_match_reviews r
+                        WHERE r.operator_id = o.id AND r.status = 'CONFIRMED'
+                          AND COALESCE(r.reviewed_by, 'SYSTEM') <> 'SYSTEM'
+                      ) OR COALESCE(o.enrichment_provenance->>'selection_source', '') IN
+                          ('MANUAL_COMPANY_NUMBER', 'SUGGESTED_CANDIDATE') AS manual_mapping
+               FROM operators o ORDER BY o.created_at, o.id LIMIT %s""",
+            (bounded_limit,),
+        ).fetchall()
+        items = []
+        counts = {
+            "organisations_inspected": len(rows),
+            "likely_public_authority": 0,
+            "no_ch_mapping": 0,
+            "pending_ch_review": 0,
+            "system_mapped_ch": 0,
+            "manually_confirmed_ch": 0,
+            "ambiguous_needs_review": 0,
+            "already_public_authority": 0,
+        }
+        for row in rows:
+            operator_id = str(row[0])
+            name = str(row[1] or row[2] or "").strip()
+            company_number = str(row[3] or "").strip() or None
+            organisation_type = str(row[4] or UNKNOWN)
+            obvious = is_public_authority_name(name) or is_public_authority_name(row[2])
+            ambiguous = not obvious and (
+                looks_like_public_authority(name) or looks_like_public_authority(row[2])
+            )
+            if ambiguous:
+                counts["ambiguous_needs_review"] += 1
+            if not obvious:
+                continue
+            counts["likely_public_authority"] += 1
+            if organisation_type == PUBLIC_AUTHORITY:
+                counts["already_public_authority"] += 1
+            if not company_number:
+                counts["no_ch_mapping"] += 1
+                mapping_state = "NO_MAPPING"
+            elif row[10]:
+                counts["manually_confirmed_ch"] += 1
+                mapping_state = "MANUAL_CONFLICT"
+            else:
+                counts["system_mapped_ch"] += 1
+                mapping_state = "SYSTEM_MAPPING"
+            if row[9]:
+                counts["pending_ch_review"] += 1
+            eligible = not row[10]
+            items.append(
+                {
+                    "operator_id": operator_id,
+                    "name": name,
+                    "organisation_type": organisation_type,
+                    "companies_house_number": company_number,
+                    "mapping_state": mapping_state,
+                    "pending_review_count": int(row[9] or 0),
+                    "linked_signal_count": int(row[8] or 0),
+                    "linked_opportunity_count": int(row[7] or 0),
+                    "manual_mapping": bool(row[10]),
+                    "safe_to_correct": eligible,
+                }
+            )
+        result: dict[str, Any] = {
+            "mode": "APPLY" if apply else "PREVIEW",
+            "counts": counts,
+            "items": items,
+            "classified": 0,
+            "reviews_closed": 0,
+            "system_mappings_removed": 0,
+            "manual_conflicts_preserved": sum(
+                1 for item in items if item["mapping_state"] == "MANUAL_CONFLICT"
+            ),
+            "errors": 0,
+        }
+        if not apply:
+            return result
+        for item in items:
+            if not item["safe_to_correct"]:
+                continue
+            operator_id = item["operator_id"]
+            current = conn.execute(
+                """SELECT organisation_type, companies_house_number
+                   FROM operators WHERE id = %s FOR UPDATE""",
+                (operator_id,),
+            ).fetchone()
+            if not current:
+                result["errors"] += 1
+                continue
+            changed = current[0] != PUBLIC_AUTHORITY
+            remove_system_mapping = bool(current[1])
+            if changed or remove_system_mapping:
+                conn.execute(
+                    """UPDATE operators SET organisation_type = 'PUBLIC_AUTHORITY',
+                       organisation_type_source = 'DETERMINISTIC_NAME_BACKFILL',
+                       organisation_type_updated_at = now(),
+                       companies_house_number = CASE WHEN %s THEN NULL
+                                                    ELSE companies_house_number END,
+                       company_status = CASE WHEN %s THEN NULL ELSE company_status END,
+                       incorporation_date = CASE WHEN %s THEN NULL ELSE incorporation_date END,
+                       company_type = CASE WHEN %s THEN NULL ELSE company_type END,
+                       registered_office = CASE WHEN %s THEN '{}'::jsonb
+                                                ELSE registered_office END,
+                       sic_codes = CASE WHEN %s THEN '[]'::jsonb ELSE sic_codes END,
+                       companies_house_url = CASE WHEN %s THEN NULL
+                                                  ELSE companies_house_url END,
+                       companies_house_refreshed_at = CASE WHEN %s THEN NULL
+                         ELSE companies_house_refreshed_at END,
+                       resolution_outcome = CASE WHEN %s THEN NULL
+                                                 ELSE resolution_outcome END,
+                       resolution_confidence = CASE WHEN %s THEN NULL
+                                                    ELSE resolution_confidence END,
+                       enrichment_provenance = CASE WHEN %s THEN '{}'::jsonb
+                                                    ELSE enrichment_provenance END,
+                       updated_at = now() WHERE id = %s""",
+                    (*([remove_system_mapping] * 11), operator_id),
+                )
+                result["classified"] += 1
+                if remove_system_mapping:
+                    result["system_mappings_removed"] += 1
+            closed = conn.execute(
+                """UPDATE organisation_match_reviews
+                   SET status = 'SUPERSEDED', reviewed_by = 'SYSTEM', reviewed_at = now()
+                   WHERE operator_id = %s AND provider = 'COMPANIES_HOUSE'
+                     AND status = 'PENDING' RETURNING id""",
+                (operator_id,),
+            ).fetchall()
+            result["reviews_closed"] += len(closed)
+            _store_public_authority_aliases(conn, operator_id, item["name"])
+            if changed or remove_system_mapping or closed:
+                conn.execute(
+                    """INSERT INTO admin_audit_events
+                       (action, actor, target_type, details)
+                       VALUES ('organisation_public_authority_classified', %s,
+                               'organisation', %s)""",
+                    (
+                        actor,
+                        Jsonb(
+                            {
+                                "operator_id": operator_id,
+                                "policy": "public-authority-v1",
+                                "system_mapping_removed": remove_system_mapping,
+                                "reviews_closed": len(closed),
+                            }
+                        ),
+                    ),
+                )
+        conn.commit()
+    return result
+
+
+def set_organisation_type(
+    settings: Settings, operator_id: str, *, organisation_type: str, actor: str
+) -> dict[str, Any]:
+    requested = str(organisation_type or "").strip().upper()
+    if requested == "NORMAL_RESOLUTION":
+        requested = PRIVATE_COMPANY
+    if requested not in ORGANISATION_TYPES:
+        raise ValueError("invalid organisation type")
+    with connection(settings) as conn:
+        row = conn.execute(
+            """SELECT name, companies_house_number, organisation_type
+               FROM operators WHERE id = %s FOR UPDATE""",
+            (operator_id,),
+        ).fetchone()
+        if not row:
+            raise ValueError("organisation not found")
+        effective = PRIVATE_COMPANY if requested == UNKNOWN and row[1] else requested
+        if row[2] == effective:
+            return {"id": operator_id, "organisation_type": effective, "idempotent": True}
+        conn.execute(
+            """UPDATE operators SET organisation_type = %s,
+               organisation_type_source = 'ADMIN', organisation_type_updated_at = now(),
+               updated_at = now() WHERE id = %s""",
+            (effective, operator_id),
+        )
+        if effective == PUBLIC_AUTHORITY:
+            _store_public_authority_aliases(conn, operator_id, row[0])
+            if not row[1]:
+                conn.execute(
+                    """UPDATE organisation_match_reviews SET status = 'SUPERSEDED',
+                       reviewed_by = %s, reviewed_at = now()
+                       WHERE operator_id = %s AND provider = 'COMPANIES_HOUSE'
+                         AND status = 'PENDING'""",
+                    (actor, operator_id),
+                )
+        conn.execute(
+            """INSERT INTO admin_audit_events (action, actor, target_type, details)
+               VALUES ('organisation_type_changed', %s, 'organisation', %s)""",
+            (
+                actor,
+                Jsonb(
+                    {
+                        "operator_id": operator_id,
+                        "from": row[2],
+                        "to": effective,
+                        "companies_house_mapping_preserved": bool(row[1]),
+                    }
+                ),
+            ),
+        )
+        conn.commit()
+    return {
+        "id": operator_id,
+        "organisation_type": effective,
+        "companies_house_mapping_preserved": bool(row[1]),
+        "idempotent": False,
     }
 
 
@@ -5563,7 +5869,7 @@ def list_organisation_enrichment_candidates(
                             SELECT 1 FROM organisation_match_reviews
                             WHERE operator_id = operators.id
                               AND provider = 'COMPANIES_HOUSE' AND status = 'PENDING'
-                          )
+                          ), organisation_type
                    FROM operators WHERE id = %s""",
                 (operator_id,),
             ).fetchone()
@@ -5575,13 +5881,7 @@ def list_organisation_enrichment_candidates(
                 (operator_id,),
             ).fetchall()
             refreshed_at = operator[2]
-            if (
-                refreshed_at
-                and refreshed_at > datetime.now(UTC) - timedelta(days=30)
-                and (not provider_evidence_at or provider_evidence_at <= refreshed_at)
-                and not (provider_name and len(operator) > 3 and operator[3])
-            ):
-                continue
+            organisation_type = operator[4] if len(operator) > 4 else UNKNOWN
             conn.execute(
                 """UPDATE opportunities SET operator_id = %s, updated_at = now()
                    WHERE vertical = %s AND operator_id IS NULL
@@ -5589,6 +5889,28 @@ def list_organisation_enrichment_candidates(
                      AND review_status NOT IN ('MERGED', 'REJECTED')""",
                 (operator_id, vertical, name),
             )
+            if organisation_type == PUBLIC_AUTHORITY or (
+                organisation_type != PRIVATE_COMPANY
+                and is_public_authority_name(operator[0])
+            ):
+                if organisation_type == UNKNOWN and not operator[1]:
+                    conn.execute(
+                        """UPDATE operators SET organisation_type = 'PUBLIC_AUTHORITY',
+                           organisation_type_source = 'DETERMINISTIC_NAME',
+                           organisation_type_updated_at = now(), updated_at = now()
+                           WHERE id = %s AND organisation_type = 'UNKNOWN'
+                             AND companies_house_number IS NULL""",
+                        (operator_id,),
+                    )
+                    _store_public_authority_aliases(conn, operator_id, operator[0])
+                continue
+            if (
+                refreshed_at
+                and refreshed_at > datetime.now(UTC) - timedelta(days=30)
+                and (not provider_evidence_at or provider_evidence_at <= refreshed_at)
+                and not (provider_name and len(operator) > 3 and operator[3])
+            ):
+                continue
             candidates.append(
                 {
                     "operator_id": str(operator_id),
@@ -5610,6 +5932,7 @@ def list_organisation_enrichment_candidates(
                     "aliases": [
                         str(alias[0]).strip() for alias in aliases if str(alias[0] or "").strip()
                     ],
+                    "organisation_type": organisation_type,
                 }
             )
             if len(candidates) >= limit:
@@ -5625,7 +5948,9 @@ def organisation_detail(settings: Settings, operator_id: str) -> dict[str, Any] 
                       company_status, incorporation_date, company_type,
                       registered_office, sic_codes, companies_house_url,
                       companies_house_refreshed_at, resolution_outcome,
-                      resolution_confidence, enrichment_provenance
+                      resolution_confidence, enrichment_provenance,
+                      organisation_type, organisation_type_source,
+                      organisation_type_updated_at
                FROM operators WHERE id = %s""",
             (operator_id,),
         ).fetchone()
@@ -5678,8 +6003,19 @@ def organisation_detail(settings: Settings, operator_id: str) -> dict[str, Any] 
         "resolution_outcome",
         "resolution_confidence",
         "enrichment_provenance",
+        "organisation_type",
+        "organisation_type_source",
+        "organisation_type_updated_at",
     )
     result = dict(zip(fields, operator))
+    result["public_authority_suspected"] = bool(
+        is_public_authority_name(result.get("name"))
+        and result.get("organisation_type") != PUBLIC_AUTHORITY
+    )
+    result["public_authority_conflict"] = bool(
+        result.get("organisation_type") == PUBLIC_AUTHORITY
+        and result.get("companies_house_number")
+    )
     result["aliases"] = [
         {"alias": row[0], "source": row[1], "created_at": row[2]} for row in aliases
     ]
@@ -5741,6 +6077,8 @@ def list_organisation_match_reviews(settings: Settings, *, limit: int = 25) -> l
                FROM organisation_match_reviews r
                JOIN operators o ON o.id = r.operator_id
                WHERE r.status = 'PENDING'
+                 AND (o.organisation_type <> 'PUBLIC_AUTHORITY'
+                      OR o.companies_house_number IS NOT NULL)
                ORDER BY r.created_at DESC LIMIT %s""",
             (min(max(limit, 1), 100),),
         ).fetchall()

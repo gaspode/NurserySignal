@@ -303,10 +303,11 @@ def test_signal_only_operator_is_materialised_as_enrichment_candidate(monkeypatc
             "provider_registered_locality": None,
             "provider_registered_postcode": None,
             "provider_registered_address": None,
-            "provider_registration_date": None,
-            "aliases": [],
-        }
-    ]
+                "provider_registration_date": None,
+                "aliases": [],
+                "organisation_type": "UNKNOWN",
+            }
+        ]
     assert conn.committed is True
 
 

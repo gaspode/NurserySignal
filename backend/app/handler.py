@@ -86,6 +86,7 @@ from app.repository import (
     opportunity_detail,
     organisation_detail,
     planning_outcome_dry_run,
+    public_authority_backfill,
     recalculate_opportunity_creation,
     reclassify_pending_care_planning,
     record_admin_audit,
@@ -100,6 +101,7 @@ from app.repository import (
     review_signals_bulk,
     review_triage_summary,
     safe_agreement_bulk_approve,
+    set_organisation_type,
     signal_detail,
     split_opportunity,
     unlink_signal_from_opportunity,
@@ -300,6 +302,9 @@ def _admin_path(path: str) -> tuple[str, str | None]:
             "enrich-ofsted",
         }:
             return f"organisation-review-{parts[1]}", parts[0]
+    if path.startswith("/admin/organisations/") and path.endswith("/type"):
+        operator_id = path[len("/admin/organisations/") : -len("/type")].rstrip("/")
+        return "organisation-type", operator_id
     if path.startswith("/admin/organisations/"):
         return "organisation-detail", path[len("/admin/organisations/") :]
     if path == "/admin/sources":
@@ -396,6 +401,13 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             settings,
             limit=int(event.get("limit") or 100),
             publication_status=event.get("publication_status"),
+        )
+    if event.get("operation") == "public_authority_backfill" and not event.get("requestContext"):
+        return public_authority_backfill(
+            settings,
+            apply=bool(event.get("apply")),
+            actor=str(event.get("actor") or "iam-public-authority-backfill")[:200],
+            limit=min(max(int(event.get("limit") or 5000), 1), 5000),
         )
     if event.get("operation") == "customer_pilot_publish" and not event.get("requestContext"):
         return apply_pilot_publications(
@@ -838,6 +850,24 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                     return admin_error
                 detail = organisation_detail(settings, signal_id)
                 return _response(200, detail) if detail else _response(404, {"error": "not_found"})
+            if action == "organisation-type" and method == "POST" and signal_id:
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                payload = parse_json_payload(_raw_body(event))
+                actor = str(claims.get("sub") or claims.get("username") or "unknown")
+                try:
+                    return _response(
+                        200,
+                        set_organisation_type(
+                            settings,
+                            signal_id,
+                            organisation_type=str(payload.get("organisation_type") or ""),
+                            actor=actor,
+                        ),
+                    )
+                except ValueError as exc:
+                    return _response(400, {"error": str(exc)})
             if action == "organisation-review-list" and method == "GET":
                 admin_error = _require_admin(claims, settings)
                 if admin_error:
