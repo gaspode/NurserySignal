@@ -1535,12 +1535,16 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                     return admin_error
                 payload = parse_json_payload(_raw_body(event))
                 actor = str(claims.get("sub") or claims.get("username") or "unknown")
+                signal_ids = payload.get("signal_ids")
+                if signal_ids is not None and not isinstance(signal_ids, list):
+                    raise ValueError("signal_ids must be a list")
                 return _response(
                     200,
                     reconcile_stored_planning_families(
                         settings,
                         actor=actor,
                         limit=min(max(int(payload.get("limit", 2500)), 1), 5000),
+                        signal_ids=signal_ids,
                     ),
                 )
             if action == "planning-families-recover" and method == "POST":

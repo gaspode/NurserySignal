@@ -4772,6 +4772,7 @@ def planning_family_historical_preview(settings: Settings, *, limit: int = 2500)
     }
     for item in followups:
         authority_key = normalize_planning_authority(item["authority"])
+        origin_signal_ids: list[str] = []
         if not authority_key:
             counts["no_usable_authority_or_reference"] += 1
             category = "no_usable_authority_or_reference"
@@ -4798,6 +4799,7 @@ def planning_family_historical_preview(settings: Settings, *, limit: int = 2500)
             if len(foundations) == 1:
                 category = "stored_origin_found"
                 counts[category] += 1
+                origin_signal_ids = [foundations[0]["id"]]
                 if item["has_opportunity"] and not foundations[0]["has_opportunity"]:
                     counts["could_gain_foundational_support_without_plota"] += 1
             elif len(foundations) > 1 or len(negatives) > 1:
@@ -4820,6 +4822,7 @@ def planning_family_historical_preview(settings: Settings, *, limit: int = 2500)
                     "authority": item["authority"],
                     "references": [value[0] for value in item["references"]],
                     "title": str(item["title"] or "")[:240],
+                    "origin_signal_ids": origin_signal_ids,
                 }
             )
     return {
@@ -4834,21 +4837,46 @@ def planning_family_historical_preview(settings: Settings, *, limit: int = 2500)
 
 
 def reconcile_stored_planning_families(
-    settings: Settings, *, actor: str, limit: int = 2500
+    settings: Settings,
+    *,
+    actor: str,
+    limit: int = 2500,
+    signal_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     """Bounded, idempotent stored-evidence reconciliation; never calls Plota."""
     bounded_limit = min(max(int(limit), 1), 5000)
+    explicit_selection = signal_ids is not None
+    if signal_ids is not None and len(signal_ids) > 100:
+        raise ValueError("signal_ids must contain at most 100 IDs")
+    requested_ids = [str(UUID(value)) for value in (signal_ids or [])]
     with connection(settings) as conn:
-        rows = conn.execute(
-            """SELECT rs.id, se.extracted_facts
-               FROM raw_signals rs JOIN signal_enrichments se ON se.raw_signal_id = rs.id
-               WHERE rs.vertical = 'CHILDRENS_HOME' AND rs.source_type = 'planning'
-               ORDER BY CASE WHEN se.extracted_facts->>'planning_subtype' IN
-                 ('NEW_HOME_CHANGE_OF_USE','NEW_HOME_OTHER_EXPLICIT','NEW_HOME_MIXED_USE',
-                  'LAWFULNESS_PROPOSED','EXPANSION_OR_CAPACITY_CHANGE') THEN 0 ELSE 1 END,
-                 rs.created_at, rs.id LIMIT %s""",
-            (bounded_limit,),
-        ).fetchall()
+        if explicit_selection:
+            if not requested_ids:
+                rows = []
+            else:
+                rows = conn.execute(
+                    """SELECT rs.id, se.extracted_facts
+                       FROM raw_signals rs JOIN signal_enrichments se ON se.raw_signal_id = rs.id
+                       WHERE rs.vertical = 'CHILDRENS_HOME' AND rs.source_type = 'planning'
+                         AND rs.id = ANY(%s::uuid[])
+                       ORDER BY CASE WHEN se.extracted_facts->>'planning_subtype' IN
+                         ('NEW_HOME_CHANGE_OF_USE','NEW_HOME_OTHER_EXPLICIT',
+                          'NEW_HOME_MIXED_USE','LAWFULNESS_PROPOSED',
+                          'EXPANSION_OR_CAPACITY_CHANGE') THEN 0 ELSE 1 END,
+                         rs.created_at, rs.id LIMIT %s""",
+                    (requested_ids, min(bounded_limit, len(requested_ids))),
+                ).fetchall()
+        else:
+            rows = conn.execute(
+                """SELECT rs.id, se.extracted_facts
+                   FROM raw_signals rs JOIN signal_enrichments se ON se.raw_signal_id = rs.id
+                   WHERE rs.vertical = 'CHILDRENS_HOME' AND rs.source_type = 'planning'
+                   ORDER BY CASE WHEN se.extracted_facts->>'planning_subtype' IN
+                     ('NEW_HOME_CHANGE_OF_USE','NEW_HOME_OTHER_EXPLICIT','NEW_HOME_MIXED_USE',
+                      'LAWFULNESS_PROPOSED','EXPANSION_OR_CAPACITY_CHANGE') THEN 0 ELSE 1 END,
+                     rs.created_at, rs.id LIMIT %s""",
+                (bounded_limit,),
+            ).fetchall()
     totals = {
         "signals_inspected": 0, "families_created_or_reused": 0, "origins_resolved": 0,
         "followups_linked": 0, "origins_linked": 0, "conflicts": 0, "missing_origins": 0,
@@ -4873,9 +4901,15 @@ def reconcile_stored_planning_families(
             "policy_version": PLANNING_FAMILY_POLICY_VERSION,
             "external_requests": 0,
             "vertical": "CHILDRENS_HOME",
+            "explicit_signal_selection": explicit_selection,
         },
     )
-    return {**totals, "policy_version": PLANNING_FAMILY_POLICY_VERSION, "external_requests": 0}
+    return {
+        **totals,
+        "policy_version": PLANNING_FAMILY_POLICY_VERSION,
+        "external_requests": 0,
+        "explicit_signal_selection": explicit_selection,
+    }
 
 
 def queue_planning_origin_recovery(

@@ -1497,3 +1497,26 @@ def test_match_review_is_admin_only_and_bounded(monkeypatch) -> None:
         None,
     )
     assert response["statusCode"] == 200
+
+
+def test_planning_family_reconciliation_accepts_bounded_explicit_signal_set(monkeypatch) -> None:
+    selected = [str(uuid4()), str(uuid4())]
+    captured = {}
+    monkeypatch.setattr(
+        "app.handler.reconcile_stored_planning_families",
+        lambda settings, **kwargs: captured.update(kwargs) or {"signals_inspected": 2},
+    )
+
+    response = handler(
+        event(
+            "/admin/planning/families/reconcile",
+            "POST",
+            body=json.dumps({"limit": 100, "signal_ids": selected}),
+            claims={**CLAIMS, "cognito:groups": ["NurserySignalAdmins"]},
+        ),
+        None,
+    )
+
+    assert response["statusCode"] == 200
+    assert captured["signal_ids"] == selected
+    assert captured["limit"] == 100
