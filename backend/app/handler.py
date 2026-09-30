@@ -430,12 +430,35 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         results = []
         for opportunity_id in opportunity_ids:
             detail = opportunity_detail(settings, str(UUID(str(opportunity_id))))
+            planning_timeline = []
+            if detail:
+                planning_timeline = [
+                    {
+                        "signal_id": signal.get("id"),
+                        "planning_outcome": signal.get("planning_outcome"),
+                        "planning_decision_raw": signal.get("planning_decision_raw"),
+                        "planning_status_raw": signal.get("planning_status_raw"),
+                        "planning_subtype": signal.get("planning_subtype"),
+                        "opportunity_creation_decision": signal.get(
+                            "opportunity_creation_decision"
+                        ),
+                        "evidence_support_classification": signal.get(
+                            "evidence_support_classification"
+                        ),
+                        "planning_consistency_warning": signal.get(
+                            "planning_consistency_warning"
+                        ),
+                    }
+                    for signal in detail.get("signals", [])
+                    if signal.get("source_type") == "planning"
+                ]
             results.append(
                 {
                     "opportunity_id": str(opportunity_id),
                     "found": detail is not None,
                     "evidence_support": detail.get("evidence_support") if detail else None,
                     "publication_status": detail.get("publication_status") if detail else None,
+                    "planning_timeline": planning_timeline,
                 }
             )
         return {"items": results, "read_only": True}

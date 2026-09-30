@@ -44,6 +44,20 @@ def test_iam_evidence_support_verification_is_bounded_and_read_only(monkeypatch)
             "id": value,
             "evidence_support": {"foundational": 1, "supporting_followups": 0},
             "publication_status": "DRAFT",
+            "signals": [
+                {
+                    "id": "signal-1",
+                    "source_type": "planning",
+                    "planning_outcome": "APPROVED",
+                    "planning_decision_raw": "Grant Conditionally",
+                    "planning_status_raw": "Decided",
+                    "planning_subtype": "NEW_HOME_CHANGE_OF_USE",
+                    "opportunity_creation_decision": "CREATE_OPPORTUNITY",
+                    "evidence_support_classification": "FOUNDATIONAL",
+                    "planning_consistency_warning": None,
+                },
+                {"id": "signal-2", "source_type": "recruitment"},
+            ],
         },
     )
 
@@ -62,6 +76,18 @@ def test_iam_evidence_support_verification_is_bounded_and_read_only(monkeypatch)
                 "found": True,
                 "evidence_support": {"foundational": 1, "supporting_followups": 0},
                 "publication_status": "DRAFT",
+                "planning_timeline": [
+                    {
+                        "signal_id": "signal-1",
+                        "planning_outcome": "APPROVED",
+                        "planning_decision_raw": "Grant Conditionally",
+                        "planning_status_raw": "Decided",
+                        "planning_subtype": "NEW_HOME_CHANGE_OF_USE",
+                        "opportunity_creation_decision": "CREATE_OPPORTUNITY",
+                        "evidence_support_classification": "FOUNDATIONAL",
+                        "planning_consistency_warning": None,
+                    }
+                ],
             }
         ],
         "read_only": True,
