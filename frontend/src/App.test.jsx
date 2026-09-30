@@ -1008,6 +1008,35 @@ describe("admin frontend", () => {
     expect(screen.getAllByText("same postcode and compatible operator/nursery name").length).toBeGreaterThan(0);
   });
 
+  it("links directly from opportunity evidence to safe external sources", async () => {
+    window.location.hash = "#/opportunities/opp-1?from=opportunity-hygiene&page=2";
+    const apiClient = vi.fn().mockResolvedValue({
+      id: "opp-1",
+      name: "New children's home — Coventry",
+      lifecycle_stage: "PLANNING",
+      change_type: "OPENING",
+      confidence: 0.95,
+      signals: [
+        { id: "planning-1", source_type: "planning", title: "Change of use", source_url: "https://planning.example/ABC-1", relationship_status: "ACTIVE" },
+        { id: "recruitment-1", source_type: "recruitment", title: "Registered manager", source_url: null, relationship_status: "ACTIVE" },
+        { id: "ofsted-1", source_type: "ofsted", title: "Registration update", source_url: "javascript:alert(1)", relationship_status: "ACTIVE" },
+        { id: "procurement-1", source_type: "procurement", title: "Commissioning notice", source_url: "http://procurement.example/notice/1", relationship_status: "ACTIVE" },
+      ],
+    });
+    render(<OpportunityDetail opportunityId="opp-1" apiClient={apiClient} onBack={vi.fn()} />);
+
+    expect(await screen.findAllByRole("button", { name: "Open signal" })).toHaveLength(4);
+    const sourceLinks = screen.getAllByRole("link", { name: "Open source" });
+    expect(sourceLinks).toHaveLength(2);
+    expect(sourceLinks[0]).toHaveAttribute("href", "https://planning.example/ABC-1");
+    expect(sourceLinks[1]).toHaveAttribute("href", "http://procurement.example/notice/1");
+    for (const link of sourceLinks) {
+      expect(link).toHaveAttribute("target", "_blank");
+      expect(link).toHaveAttribute("rel", "noreferrer");
+    }
+    expect(window.location.hash).toBe("#/opportunities/opp-1?from=opportunity-hygiene&page=2");
+  });
+
   it("previews a privacy-safe generated CareProspect title when the override is blank", async () => {
     const apiClient = vi.fn().mockResolvedValue({
       id: "care-opp-1",
