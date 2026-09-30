@@ -64,6 +64,7 @@ from app.logging import configure_logging
 from app.organisation_lookup import ManualCompanyLookupError, lookup_manual_company_candidate
 from app.planning_backfill import PlanningBackfillBounds, chunk_payload
 from app.repository import (
+    care_opportunity_hygiene_audit,
     care_planning_ai_approval_backlog,
     care_planning_fastpath_backlog,
     care_planning_lawfulness_backlog,
@@ -352,6 +353,8 @@ def _admin_path(path: str) -> tuple[str, str | None]:
         return "opportunity-list", None
     if path == "/admin/opportunities/recalculate":
         return "opportunity-recalculate", None
+    if path == "/admin/opportunities/hygiene-audit":
+        return "opportunity-hygiene-audit", None
     if path.startswith("/admin/opportunities/"):
         parts = path[len("/admin/opportunities/") :].split("/")
         if len(parts) == 2 and parts[1] == "publication":
@@ -1501,6 +1504,19 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                         taxonomy_catchup_only=bool(
                             payload.get("taxonomy_catchup_only", False)
                         ),
+                    ),
+                )
+            if action == "opportunity-hygiene-audit" and method == "GET":
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                return _response(
+                    200,
+                    care_opportunity_hygiene_audit(
+                        settings,
+                        limit=min(max(int(_query(event, "limit") or 100), 1), 250),
+                        offset=max(int(_query(event, "offset") or 0), 0),
+                        category=_query(event, "category"),
                     ),
                 )
             if action == "review-triage-safe-approve" and method == "POST":

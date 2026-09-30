@@ -1099,6 +1099,39 @@ def test_care_lawfulness_policy_preview_is_admin_only_and_read_only(monkeypatch)
     assert captured["backlog"]["taxonomy_catchup_only"] is True
 
 
+def test_care_opportunity_hygiene_audit_is_admin_only_bounded_and_read_only(
+    monkeypatch,
+) -> None:
+    captured = {}
+    monkeypatch.setattr(
+        "app.handler.care_opportunity_hygiene_audit",
+        lambda settings, **kwargs: captured.update(kwargs)
+        or {"read_only": True, "total": 10},
+    )
+    denied = handler(
+        event(
+            "/admin/opportunities/hygiene-audit",
+            claims={"sub": "staff", "cognito:groups": ["Other"]},
+        ),
+        None,
+    )
+    assert denied["statusCode"] == 403
+    response = handler(
+        event(
+            "/admin/opportunities/hygiene-audit",
+            query={"limit": "999", "offset": "4", "category": "VALID_SUPPORTED"},
+        ),
+        None,
+    )
+    assert response["statusCode"] == 200
+    assert json.loads(response["body"])["read_only"] is True
+    assert captured == {
+        "limit": 250,
+        "offset": 4,
+        "category": "VALID_SUPPORTED",
+    }
+
+
 def test_refusal_cleanup_and_safe_approve_are_bounded_admin_actions(monkeypatch) -> None:
     cleanup_args = {}
     approve_args = {}

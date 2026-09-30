@@ -50,6 +50,7 @@ from app.correlation import (
 )
 from app.db import connection
 from app.ingestion import NormalizedSignal
+from app.opportunity_hygiene import HYGIENE_CATEGORIES, audit_opportunities
 from app.planning_outcomes import (
     PLANNING_OUTCOME_POLICY_VERSION,
     PlanningOutcome,
@@ -5205,6 +5206,146 @@ def list_opportunities(
         "limit": limit,
         "offset": offset,
     }
+
+
+def care_opportunity_hygiene_audit(
+    settings: Settings,
+    *,
+    limit: int = 100,
+    offset: int = 0,
+    category: str | None = None,
+) -> dict[str, Any]:
+    """Audit the complete CareProspect opportunity inventory without mutation."""
+    bounded_limit = min(max(int(limit), 1), 250)
+    bounded_offset = max(int(offset), 0)
+    if category is not None and category not in HYGIENE_CATEGORIES:
+        raise ValueError("invalid_hygiene_category")
+    with connection(settings) as conn:
+        rows = conn.execute(
+            """
+            SELECT o.id, o.nursery_id, o.operator_id, o.name, o.event_type,
+                   o.lifecycle_stage, o.expected_opening_date, o.capacity, o.confidence,
+                   o.review_status, o.publication_status, o.first_seen_at,
+                   o.latest_update_at, o.created_at, o.updated_at, o.vertical,
+                   o.operator_name, o.address, o.postcode, o.town,
+                   o.merged_into_opportunity_id, o.change_type, o.confidence_breakdown,
+                   o.stage_reason, o.creation_reason, o.customer_title,
+                   o.customer_summary, o.customer_published_by, o.customer_published_at,
+                   COALESCE(rel.relationships, '[]'::jsonb),
+                   COALESCE(hist.actions, ARRAY[]::text[]),
+                   COALESCE(audit.actions, ARRAY[]::text[]),
+                   COALESCE(matches.pending_count, 0)
+            FROM opportunities o
+            LEFT JOIN LATERAL (
+                SELECT jsonb_agg(jsonb_build_object(
+                    'signal_id', os.raw_signal_id,
+                    'status', os.status,
+                    'relationship_type', os.relationship_type,
+                    'created_by', os.created_by,
+                    'match_outcome', os.match_outcome,
+                    'match_confidence', os.match_confidence,
+                    'match_reason', os.match_reason,
+                    'admin_override_by', os.admin_override_by,
+                    'provenance', os.provenance,
+                    'source_type', rs.source_type,
+                    'external_id', rs.external_id,
+                    'source_url', rs.source_url,
+                    'title', rs.title,
+                    'metadata', rs.metadata,
+                    'review_status', se.review_status,
+                    'extracted_facts', se.extracted_facts
+                ) ORDER BY rs.discovered_at, rs.id) AS relationships
+                FROM opportunity_signals os
+                JOIN raw_signals rs ON rs.id = os.raw_signal_id
+                LEFT JOIN signal_enrichments se ON se.raw_signal_id = rs.id
+                WHERE os.opportunity_id = o.id
+            ) rel ON TRUE
+            LEFT JOIN LATERAL (
+                SELECT array_agg(DISTINCT h.action) AS actions
+                FROM opportunity_signal_history h WHERE h.opportunity_id = o.id
+            ) hist ON TRUE
+            LEFT JOIN LATERAL (
+                SELECT array_agg(DISTINCT a.action) AS actions
+                FROM admin_audit_events a
+                WHERE a.target_type IN ('opportunity', 'opportunity_match')
+                  AND (
+                    a.details->>'opportunity_id' = o.id::text
+                    OR a.details->>'source_opportunity_id' = o.id::text
+                    OR a.details->>'target_opportunity_id' = o.id::text
+                    OR a.details->>'new_opportunity_id' = o.id::text
+                  )
+            ) audit ON TRUE
+            LEFT JOIN LATERAL (
+                SELECT count(*) AS pending_count FROM opportunity_match_reviews mr
+                WHERE mr.opportunity_id = o.id AND mr.status = 'PENDING'
+            ) matches ON TRUE
+            WHERE o.vertical = 'CHILDRENS_HOME'
+            ORDER BY o.created_at, o.id
+            LIMIT 5000
+            """
+        ).fetchall()
+    fields = (
+        "id",
+        "nursery_id",
+        "operator_id",
+        "name",
+        "event_type",
+        "lifecycle_stage",
+        "expected_opening_date",
+        "capacity",
+        "confidence",
+        "review_status",
+        "publication_status",
+        "first_seen_at",
+        "latest_update_at",
+        "created_at",
+        "updated_at",
+        "vertical",
+        "operator_name",
+        "address",
+        "postcode",
+        "town",
+        "merged_into_opportunity_id",
+        "change_type",
+        "confidence_breakdown",
+        "stage_reason",
+        "creation_reason",
+        "customer_title",
+        "customer_summary",
+        "customer_published_by",
+        "customer_published_at",
+        "relationships",
+        "history_actions",
+        "audit_actions",
+        "pending_match_reviews",
+    )
+    opportunities = [dict(zip(fields, row)) for row in rows]
+    report = audit_opportunities(opportunities)
+    all_items = report.pop("items")
+    selected = [item for item in all_items if category is None or item["category"] == category]
+    report.update(
+        {
+            "items": selected[bounded_offset : bounded_offset + bounded_limit],
+            "filtered_total": len(selected),
+            "limit": bounded_limit,
+            "offset": bounded_offset,
+            "category_filter": category,
+            "errors": 0,
+            "inventory_complete": len(rows) < 5000,
+            "prior_count_reconciliation": {
+                "cleanup_specific": (
+                    "Draft opportunities linked to the bounded refused-signal cleanup batch "
+                    "with no other active non-rejected support."
+                ),
+                "broad_followup_only": (
+                    "All draft opportunities whose active evidence included follow-up/negative "
+                    "Planning subtypes and no active non-follow-up, non-rejected signal."
+                ),
+                "directly_comparable": False,
+            },
+        }
+    )
+    return report
 
 
 def list_organisations(
