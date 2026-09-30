@@ -154,8 +154,8 @@ _MIXED_USE = re.compile(
     re.IGNORECASE,
 )
 _REFERENCE = re.compile(
-    r"\b(?:planning\s+permission|application|reference|ref(?:erence)?\.?)[\s:]*"
-    r"([A-Z0-9][A-Z0-9/._-]{4,30})\b",
+    r"\b(?:planning\s+permission|application|reference|ref(?:erence)?\.?)[\s:#]*"
+    r"((?:[A-Z0-9]{1,15}\s*[/._-]\s*)+[A-Z0-9]{1,15}|[A-Z0-9]{5,30})\b",
     re.IGNORECASE,
 )
 

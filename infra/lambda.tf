@@ -140,6 +140,7 @@ resource "aws_lambda_function" "enrichment" {
       AI_RECRUITMENT_PROMPT_VERSION      = var.ai_recruitment_prompt_version
       AI_CARE_PLANNING_PROMPT_VERSION    = var.ai_care_planning_prompt_version
       AI_CARE_RECRUITMENT_PROMPT_VERSION = var.ai_care_recruitment_prompt_version
+      PLANNING_MANUAL_RUN_QUEUE_URL      = aws_sqs_queue.planning_manual_runs.url
     }
   }
 

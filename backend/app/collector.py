@@ -21,6 +21,7 @@ from app.planning import (
 )
 from app.planning_backfill import add_counts, bounds_from_chunk, chunk_payload
 from app.queueing import SignalIngestionMessage, send_ingestion_message
+from app.repository import update_planning_origin_recovery
 from app.secrets import provider_api_key_from_secret
 from app.source_runs import (
     finish_run,
@@ -32,6 +33,65 @@ from app.source_runs import (
 from app.verticals import CHILDRENS_HOME, NURSERY, VERTICAL_REGISTRY, validate_vertical
 
 logger = configure_logging()
+
+
+def recover_planning_origin(settings: Settings, payload: dict[str, Any]) -> dict[str, int]:
+    """Run one exact-reference Plota lookup and queue a normal ingestion message."""
+    attempt_id = str(payload["attempt_id"])
+    reference = str(payload["normalized_reference"])
+    authority = str(payload["planning_authority"])
+    update_planning_origin_recovery(settings, attempt_id=attempt_id, status="RUNNING")
+    try:
+        api_key = provider_api_key_from_secret(settings.planning_provider_secret_arn)
+        provider = PlotaProvider(api_key, base_url=settings.planning_provider_base_url)
+        matches = provider.applications_by_reference(reference, council=authority, limit=10)
+        if not matches:
+            update_planning_origin_recovery(
+                settings,
+                attempt_id=attempt_id,
+                status="NOT_FOUND",
+                details={"requests": 1, "records_returned": 0},
+            )
+            return {"requests": 1, "records_fetched": 0, "signals_queued": 0}
+        if len(matches) > 1:
+            update_planning_origin_recovery(
+                settings,
+                attempt_id=attempt_id,
+                status="AMBIGUOUS",
+                details={"requests": 1, "records_returned": len(matches)},
+            )
+            return {"requests": 1, "records_fetched": len(matches), "signals_queued": 0}
+        record = matches[0]
+        decision = classify_care_planning(record)
+        if not decision.matched:
+            update_planning_origin_recovery(
+                settings,
+                attempt_id=attempt_id,
+                status="NOT_FOUND",
+                details={"requests": 1, "records_returned": 1, "candidate_excluded": True},
+            )
+            return {"requests": 1, "records_fetched": 1, "signals_queued": 0}
+        signal = care_planning_signal(record, decision, historical_source_date=True)
+        body = json.dumps(
+            {"message_version": "1.0", "signal": signal, "raw_provider_record": record.raw},
+            separators=(",", ":"), sort_keys=True,
+        ).encode()
+        send_ingestion_message(settings, SignalIngestionMessage.from_json(body))
+        update_planning_origin_recovery(
+            settings,
+            attempt_id=attempt_id,
+            status="FOUND",
+            details={"requests": 1, "records_returned": 1, "external_id": signal["external_id"]},
+        )
+        return {"requests": 1, "records_fetched": 1, "signals_queued": 1}
+    except Exception as exc:
+        update_planning_origin_recovery(
+            settings,
+            attempt_id=attempt_id,
+            status="PROVIDER_ERROR",
+            details={"error_type": type(exc).__name__},
+        )
+        raise
 
 
 def _requested_verticals(event: dict[str, Any]) -> tuple[str, ...]:
@@ -231,6 +291,8 @@ def collect_planning(
 def handler(event: dict[str, Any], context: Any) -> dict[str, int]:
     settings = Settings.from_env()
     payload = collector_payload(event)
+    if payload.get("invocation_source") == "planning_origin_recovery":
+        return recover_planning_origin(settings, payload)
     if payload.get("invocation_source") != "historical_backfill":
         return collect_planning(settings, payload)
 

@@ -31,6 +31,7 @@ def test_initial_migration_exists_and_contains_provenance_tables() -> None:
         "0023_organisation_review_ofsted_enrichment.sql",
         "0024_customer_access_requests.sql",
         "0025_public_authority_organisations.sql",
+        "0026_planning_application_families.sql",
     ]
     sql = "\n".join(path.read_text(encoding="utf-8") for path in files)
     tables = (

@@ -946,7 +946,7 @@ describe("admin frontend", () => {
     await userEvent.click(screen.getByRole("button", { name: /Needs investigation/i }));
     await waitFor(() => expect(apiClient).toHaveBeenLastCalledWith(expect.stringContaining("category=NEEDS_INVESTIGATION")));
     await userEvent.click(screen.getByRole("button", { name: "View opportunity" }));
-    expect(onNavigate).toHaveBeenCalledWith("/opportunities/care-opp-1");
+    expect(onNavigate).toHaveBeenCalledWith(expect.stringMatching(/^\/opportunities\/care-opp-1\?from=opportunity-hygiene/));
 
     for (const action of ["Merge", "Split", "Unlink", "Retire", "Deactivate", "Delete", "Supersede", "Publish"]) {
       expect(screen.queryByRole("button", { name: action })).not.toBeInTheDocument();
@@ -1035,6 +1035,38 @@ describe("admin frontend", () => {
       expect(link).toHaveAttribute("rel", "noreferrer");
     }
     expect(window.location.hash).toBe("#/opportunities/opp-1?from=opportunity-hygiene&page=2");
+  });
+
+  it("preserves hygiene review context and exposes planning-family recovery", async () => {
+    const opportunity = {
+      id: "opp-2", name: "Care home evidence", lifecycle_stage: "PLANNING",
+      change_type: "OPENING", confidence: 0.9,
+      evidence_support: { foundational: 0, supporting_followups: 1, unresolved_origins: 1 },
+      signals: [{
+        id: "followup-1", source_type: "planning", title: "Discharge of conditions",
+        relationship_status: "ACTIVE", planning_families: [{
+          id: "family-1", planning_authority: "Example Council", raw_reference: "24/03385/FUL",
+          relationship_type: "REFERENCES_APPLICATION", origin_status: "MISSING",
+          latest_recovery_status: null,
+        }],
+      }],
+    };
+    const apiClient = vi.fn(async (path, options) => {
+      if (path === "/admin/opportunities/opp-2") return opportunity;
+      if (path.includes("offset=3")) return { items: [{ opportunity_id: "opp-prev" }] };
+      if (path.includes("offset=5")) return { items: [{ opportunity_id: "opp-next" }] };
+      if (path === "/admin/signals/followup-1/planning-origin" && options?.method === "POST") return { queued: 1 };
+      return { items: [] };
+    });
+    const onBack = vi.fn(); const onNavigate = vi.fn();
+    render(<OpportunityDetail opportunityId="opp-2" apiClient={apiClient} onBack={onBack} onNavigate={onNavigate} contextQuery="from=opportunity-hygiene&category=NEEDS_INVESTIGATION&hygiene_offset=4&hygiene_total=8" />);
+    expect(await screen.findByText("0 foundational signals · 1 supporting follow-up signal")).toBeInTheDocument();
+    expect(screen.getByText("Originating planning application has not yet been resolved.")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Next →" })).toBeEnabled());
+    await userEvent.click(screen.getByRole("button", { name: "Next →" }));
+    expect(onNavigate).toHaveBeenCalledWith(expect.stringContaining("/opportunities/opp-next?"));
+    await userEvent.click(screen.getByRole("button", { name: "Find referenced application" }));
+    expect(apiClient).toHaveBeenCalledWith("/admin/signals/followup-1/planning-origin", expect.objectContaining({ method: "POST" }));
   });
 
   it("previews a privacy-safe generated CareProspect title when the override is blank", async () => {

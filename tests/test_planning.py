@@ -7,7 +7,7 @@ from pathlib import Path
 from urllib.error import HTTPError
 
 import pytest
-from app.collector import collect_planning
+from app.collector import collect_planning, recover_planning_origin
 from app.collector import handler as planning_handler
 from app.config import Settings
 from app.planning import (
@@ -374,6 +374,97 @@ def test_plota_provider_follows_cursor_pagination() -> None:
     results = list(provider.applications(query))
     assert [item.application_id for item in results] == ["1", "2"]
     assert "cursor=next" in requests[1]
+
+
+def test_plota_provider_reference_lookup_is_single_bounded_exact_query() -> None:
+    requests = []
+
+    def opener(request, timeout):
+        requests.append(request.full_url)
+        return FakeResponse(
+            {
+                "data": [
+                    {
+                        "id": "opaque-1",
+                        "reference": "24/03385/FUL",
+                        "description": "children's home",
+                    },
+                    {
+                        "id": "opaque-2",
+                        "reference": "24/03386/FUL",
+                        "description": "different application",
+                    },
+                ]
+            }
+        )
+
+    provider = PlotaProvider("secret", opener=opener)
+    matches = provider.applications_by_reference(
+        "24 / 03385 / ful", council="London Borough of Croydon"
+    )
+    assert [item.application_id for item in matches] == ["opaque-1"]
+    assert len(requests) == 1
+    assert "q=24+%2F+03385+%2F+ful" in requests[0]
+    assert "council=London+Borough+of+Croydon" in requests[0]
+
+
+def test_targeted_origin_recovery_uses_normal_ingestion_queue(monkeypatch) -> None:
+    updates = []
+    queued = []
+
+    class ExactProvider:
+        def applications_by_reference(self, reference, *, council, limit):
+            assert (reference, council, limit) == ("24/03385/FUL", "Croydon", 10)
+            return [record("Change of use from dwelling to a children's care home")]
+
+    monkeypatch.setattr("app.collector.provider_api_key_from_secret", lambda arn: "secret")
+    monkeypatch.setattr("app.collector.PlotaProvider", lambda *args, **kwargs: ExactProvider())
+    monkeypatch.setattr(
+        "app.collector.update_planning_origin_recovery",
+        lambda *args, **kwargs: updates.append(kwargs),
+    )
+    monkeypatch.setattr(
+        "app.collector.send_ingestion_message", lambda settings, message: queued.append(message)
+    )
+    result = recover_planning_origin(
+        Settings(
+            planning_provider_secret_arn="arn:example",
+            ingestion_queue_url="https://sqs.example/ingestion",
+        ),
+        {
+            "attempt_id": "attempt-1",
+            "normalized_reference": "24/03385/FUL",
+            "planning_authority": "Croydon",
+        },
+    )
+    assert result == {"requests": 1, "records_fetched": 1, "signals_queued": 1}
+    assert [update["status"] for update in updates] == ["RUNNING", "FOUND"]
+    assert queued[0].signal["vertical"] == "CHILDRENS_HOME"
+
+
+def test_targeted_origin_recovery_cools_down_not_found(monkeypatch) -> None:
+    updates = []
+
+    class EmptyProvider:
+        def applications_by_reference(self, reference, *, council, limit):
+            return []
+
+    monkeypatch.setattr("app.collector.provider_api_key_from_secret", lambda arn: "secret")
+    monkeypatch.setattr("app.collector.PlotaProvider", lambda *args, **kwargs: EmptyProvider())
+    monkeypatch.setattr(
+        "app.collector.update_planning_origin_recovery",
+        lambda *args, **kwargs: updates.append(kwargs),
+    )
+    result = recover_planning_origin(
+        Settings(planning_provider_secret_arn="arn:example"),
+        {
+            "attempt_id": "attempt-2",
+            "normalized_reference": "24/03385/FUL",
+            "planning_authority": "Croydon",
+        },
+    )
+    assert result == {"requests": 1, "records_fetched": 0, "signals_queued": 0}
+    assert [update["status"] for update in updates] == ["RUNNING", "NOT_FOUND"]
 
 
 def test_planning_signal_maps_metadata_and_stable_identity() -> None:

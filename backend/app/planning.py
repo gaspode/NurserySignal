@@ -330,6 +330,35 @@ class PlotaProvider:
             if not cursor:
                 break
 
+    def applications_by_reference(
+        self, reference: str, *, council: str | None = None, limit: int = 10
+    ) -> list[PlanningRecord]:
+        """Perform one bounded provider query and retain exact reference matches only."""
+        from app.planning_families import normalize_planning_reference
+
+        normalized = normalize_planning_reference(reference)
+        if not normalized:
+            raise ValueError("invalid planning reference")
+        params: dict[str, Any] = {
+            "nation": "england",
+            "q": reference,
+            "limit": min(max(int(limit), 1), 10),
+            "include_contact": "false",
+        }
+        if council:
+            params["council"] = council
+        payload = self._page(params)
+        matches: list[PlanningRecord] = []
+        for row in payload["data"]:
+            record = normalize_plota_record(row, self.base_url)
+            candidate_reference = row.get("reference") or row.get("application_reference")
+            if (
+                normalize_planning_reference(candidate_reference or record.application_id)
+                == normalized
+            ):
+                matches.append(record)
+        return matches
+
 
 @dataclass(frozen=True)
 class CandidateDecision:
@@ -430,6 +459,9 @@ def planning_signal(
     metadata = {
         "provider": record.provider,
         "provider_application_id": record.application_id,
+        "planning_reference": (
+            record.raw.get("reference") or record.raw.get("application_reference")
+        ),
         "council": record.council,
         "postcode": record.postcode,
         "latitude": record.latitude,

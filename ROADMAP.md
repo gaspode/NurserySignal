@@ -1166,3 +1166,14 @@ Paid-pilot activation check (2026-09-28):
   and the five retained collector-manual-run DLQ messages remain untouched. No review, opportunity,
   publication or customer visibility state changed. Exact next step: use the direct links during hygiene
   publication review and retain Signal Detail for internal classification/provenance inspection.
+- Planning application-family recovery is in implementation under `planning-family-v1`. The model uses
+  CareProspect vertical + normalized planning authority + conservatively normalized application reference,
+  with immutable signal memberships distinguishing primary applications from referenced/follow-up evidence.
+  Review decisions remain signal-specific. Stored evidence is always searched before a bounded exact Plota
+  lookup; external recovery runs asynchronously through the existing serial Planning queue, is capped at 25
+  records per admin invocation, and records FOUND/NOT_FOUND/AMBIGUOUS/PROVIDER_ERROR provenance with cooldowns.
+  Opportunity Detail now distinguishes foundational from supporting evidence, exposes unresolved-origin state
+  and manual lookup/retry, while hygiene review context is URL-backed with correct return, Previous/Next,
+  nested-signal return and publish-and-advance behaviour. Historical rollout gate remains: deploy, run the
+  read-only stored-origin preview, reconcile exact stored matches only, recompute hygiene, and report estimated
+  Plota quota before authorising any historical external recovery. Customer publication remains manual.

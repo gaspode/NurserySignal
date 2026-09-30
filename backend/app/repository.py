@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from collections import Counter
 from dataclasses import dataclass
@@ -7,6 +8,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
+import boto3
 from psycopg.types.json import Jsonb
 
 from app.care_planning_review import (
@@ -65,6 +67,17 @@ from app.organisation_types import (
     is_public_authority_name,
     looks_like_public_authority,
     public_authority_aliases,
+)
+from app.planning_families import (
+    PLANNING_FAMILY_POLICY_VERSION,
+    PlanningFamilyIdentity,
+    followup_can_support_opportunity,
+    is_foundational_planning_signal,
+    normalize_planning_authority,
+    normalize_planning_reference,
+    planning_authority,
+    primary_planning_reference,
+    prior_planning_references,
 )
 from app.planning_outcomes import (
     PLANNING_OUTCOME_POLICY_VERSION,
@@ -693,10 +706,13 @@ def list_signals(
             "OR COALESCE(rs.metadata->>'postcode', '') ILIKE %s "
             "OR COALESCE(se.nursery_name, '') ILIKE %s "
             "OR COALESCE(se.operator_name, '') ILIKE %s "
-            "OR COALESCE(se.address, '') ILIKE %s"
+            "OR COALESCE(se.address, '') ILIKE %s "
+            "OR COALESCE(se.extracted_facts->'planning_prior_references', "
+            "'[]'::jsonb)::text ILIKE %s "
+            "OR COALESCE(rs.planning_reference_normalized, '') ILIKE %s"
             ")"
         )
-        params.extend([search_pattern] * 10)
+        params.extend([search_pattern] * 12)
     if unmatched_only:
         clauses.append(
             "NOT EXISTS (SELECT 1 FROM opportunity_signals active_os "
@@ -4421,6 +4437,554 @@ def save_enrichment(settings: Settings, candidate: dict[str, Any]) -> bool:
     return row is not None
 
 
+def _planning_family_row(conn: Any, identity: PlanningFamilyIdentity, vertical: str) -> Any:
+    return conn.execute(
+        """INSERT INTO planning_application_families
+              (vertical, planning_authority, normalized_authority, raw_reference,
+               normalized_reference)
+           VALUES (%s, %s, %s, %s, %s)
+           ON CONFLICT (vertical, normalized_authority, normalized_reference)
+           DO UPDATE SET planning_authority = EXCLUDED.planning_authority,
+                         raw_reference = EXCLUDED.raw_reference, updated_at = now()
+           RETURNING id, primary_signal_id, origin_status""",
+        (
+            vertical,
+            identity.authority,
+            identity.normalized_authority,
+            identity.raw_reference,
+            identity.normalized_reference,
+        ),
+    ).fetchone()
+
+
+def _attach_family_support(conn: Any, family_id: Any, origin_signal_id: Any) -> dict[str, int]:
+    counts = {"followups_linked": 0, "origins_linked": 0, "conflicts": 0}
+    origin_opportunities = conn.execute(
+        """SELECT opportunity_id FROM opportunity_signals
+           WHERE raw_signal_id = %s AND status = 'ACTIVE' ORDER BY created_at""",
+        (origin_signal_id,),
+    ).fetchall()
+    followups = conn.execute(
+        """SELECT r.raw_signal_id, se.extracted_facts, rs.metadata
+           FROM planning_signal_family_relationships r
+           JOIN raw_signals rs ON rs.id = r.raw_signal_id
+           LEFT JOIN signal_enrichments se ON se.raw_signal_id = rs.id
+           WHERE r.family_id = %s AND r.relationship_type = 'REFERENCES_APPLICATION'""",
+        (family_id,),
+    ).fetchall()
+    if len(origin_opportunities) > 1:
+        counts["conflicts"] += 1
+        return counts
+    origin_opportunity = origin_opportunities[0][0] if origin_opportunities else None
+    for followup_id, facts, metadata in followups:
+        facts = facts if isinstance(facts, dict) else {}
+        if not followup_can_support_opportunity(facts.get("planning_subtype"), metadata):
+            continue
+        existing = conn.execute(
+            """SELECT opportunity_id, status FROM opportunity_signals
+               WHERE raw_signal_id = %s ORDER BY created_at""",
+            (followup_id,),
+        ).fetchall()
+        active = [row[0] for row in existing if row[1] == "ACTIVE"]
+        if origin_opportunity and active and origin_opportunity not in active:
+            counts["conflicts"] += 1
+            continue
+        if origin_opportunity and not active:
+            blocked = any(row[0] == origin_opportunity and row[1] == "REJECTED" for row in existing)
+            if blocked:
+                continue
+            result = conn.execute(
+                """INSERT INTO opportunity_signals
+                     (opportunity_id, raw_signal_id, vertical, relationship_type,
+                      extracted_facts, provenance, status, created_by, match_outcome,
+                      match_confidence, match_reason)
+                   VALUES (%s, %s, 'CHILDRENS_HOME', 'SUPPORTS', %s, %s,
+                           'ACTIVE', 'SYSTEM', 'STRONG', 1.0,
+                           'exact authority-scoped planning-family reference')
+                   ON CONFLICT (opportunity_id, raw_signal_id) DO NOTHING
+                   RETURNING raw_signal_id""",
+                (
+                    origin_opportunity,
+                    followup_id,
+                    Jsonb(facts),
+                    Jsonb(
+                        {
+                            "method": PLANNING_FAMILY_POLICY_VERSION,
+                            "family_id": str(family_id),
+                            "relationship": "SUPPORT_EXISTING_ONLY",
+                        }
+                    ),
+                ),
+            ).fetchone()
+            counts["followups_linked"] += int(result is not None)
+        elif not origin_opportunity and len(active) == 1:
+            blocked = conn.execute(
+                """SELECT 1 FROM opportunity_signals WHERE opportunity_id = %s
+                   AND raw_signal_id = %s AND status = 'REJECTED'""",
+                (active[0], origin_signal_id),
+            ).fetchone()
+            if blocked:
+                continue
+            result = conn.execute(
+                """INSERT INTO opportunity_signals
+                     (opportunity_id, raw_signal_id, vertical, relationship_type,
+                      extracted_facts, provenance, status, created_by, match_outcome,
+                      match_confidence, match_reason)
+                   SELECT %s, rs.id, rs.vertical, 'SUPPORTS', se.extracted_facts, %s,
+                          'ACTIVE', 'SYSTEM', 'STRONG', 1.0,
+                          'foundational planning-family origin'
+                   FROM raw_signals rs JOIN signal_enrichments se ON se.raw_signal_id = rs.id
+                   WHERE rs.id = %s AND se.review_status = 'APPROVED'
+                   ON CONFLICT (opportunity_id, raw_signal_id) DO NOTHING
+                   RETURNING raw_signal_id""",
+                (
+                    active[0],
+                    Jsonb({"method": PLANNING_FAMILY_POLICY_VERSION, "family_id": str(family_id)}),
+                    origin_signal_id,
+                ),
+            ).fetchone()
+            counts["origins_linked"] += int(result is not None)
+    return counts
+
+
+def reconcile_planning_family_signal(settings: Settings, signal_id: str) -> dict[str, Any]:
+    """Resolve one Care Planning signal by exact authority-scoped references."""
+    result = {
+        "families_created_or_reused": 0,
+        "origins_resolved": 0,
+        "followups_linked": 0,
+        "origins_linked": 0,
+        "conflicts": 0,
+        "missing_origins": 0,
+    }
+    with connection(settings) as conn:
+        row = conn.execute(
+            """SELECT rs.id, rs.external_id, rs.title, rs.raw_text, rs.metadata, rs.vertical,
+                      se.extracted_facts
+               FROM raw_signals rs LEFT JOIN signal_enrichments se ON se.raw_signal_id = rs.id
+               WHERE rs.id = %s AND rs.source_type = 'planning'
+                 AND rs.vertical = 'CHILDRENS_HOME'""",
+            (signal_id,),
+        ).fetchone()
+        if not row:
+            return result
+        raw = {
+            "id": row[0], "external_id": row[1], "title": row[2], "raw_text": row[3],
+            "metadata": row[4] or {}, "vertical": row[5],
+        }
+        facts = row[6] if isinstance(row[6], dict) else {}
+        authority = planning_authority(raw["metadata"])
+        normalized_authority = normalize_planning_authority(authority)
+        if not authority or not normalized_authority:
+            return result
+        primary_reference = primary_planning_reference(raw["external_id"], raw["metadata"])
+        conn.execute(
+            """UPDATE raw_signals SET planning_authority_normalized = %s,
+                       planning_reference_normalized = %s WHERE id = %s""",
+            (normalized_authority, primary_reference, signal_id),
+        )
+        if primary_reference:
+            identity = PlanningFamilyIdentity.create(authority, primary_reference)
+            family = _planning_family_row(conn, identity, row[5]) if identity else None
+            if family:
+                result["families_created_or_reused"] += 1
+                relationship = "PRIMARY_APPLICATION"
+                conn.execute(
+                    """INSERT INTO planning_signal_family_relationships
+                         (family_id, raw_signal_id, relationship_type, provenance)
+                       VALUES (%s, %s, %s, %s)
+                       ON CONFLICT DO NOTHING""",
+                    (
+                        family[0], signal_id, relationship,
+                        Jsonb(
+                            {
+                                "method": PLANNING_FAMILY_POLICY_VERSION,
+                                "raw_reference": primary_reference,
+                            }
+                        ),
+                    ),
+                )
+                conn.execute(
+                    """UPDATE planning_origin_recovery_attempts
+                       SET recovered_signal_id = %s
+                       WHERE family_id = %s AND status = 'FOUND'
+                         AND recovered_signal_id IS NULL""",
+                    (signal_id, family[0]),
+                )
+                if is_foundational_planning_signal(
+                    facts.get("planning_subtype"), raw["metadata"]
+                ):
+                    conn.execute(
+                        """UPDATE planning_application_families SET primary_signal_id = %s,
+                                  origin_status = 'RESOLVED', updated_at = now() WHERE id = %s""",
+                        (signal_id, family[0]),
+                    )
+                    linked = _attach_family_support(conn, family[0], signal_id)
+                    result["origins_resolved"] += 1
+                    for key in ("followups_linked", "origins_linked", "conflicts"):
+                        result[key] += linked[key]
+                elif canonical_planning_outcome(raw["metadata"]).outcome in {
+                    PlanningOutcome.REFUSED,
+                    PlanningOutcome.WITHDRAWN,
+                    PlanningOutcome.APPEAL_DISMISSED,
+                }:
+                    conn.execute(
+                        """UPDATE planning_application_families SET primary_signal_id = %s,
+                                  origin_status = 'NEGATIVE', updated_at = now() WHERE id = %s""",
+                        (signal_id, family[0]),
+                    )
+        for raw_reference, normalized_reference in prior_planning_references(raw, facts):
+            identity = PlanningFamilyIdentity.create(authority, raw_reference)
+            if identity is None or normalized_reference == primary_reference:
+                continue
+            family = _planning_family_row(conn, identity, row[5])
+            result["families_created_or_reused"] += 1
+            conn.execute(
+                """INSERT INTO planning_signal_family_relationships
+                     (family_id, raw_signal_id, relationship_type, provenance)
+                   VALUES (%s, %s, 'REFERENCES_APPLICATION', %s)
+                   ON CONFLICT DO NOTHING""",
+                (
+                    family[0], signal_id,
+                    Jsonb(
+                        {
+                            "method": PLANNING_FAMILY_POLICY_VERSION,
+                            "raw_reference": raw_reference,
+                        }
+                    ),
+                ),
+            )
+            candidates = conn.execute(
+                """SELECT rs.id, rs.metadata, se.extracted_facts
+                   FROM raw_signals rs JOIN signal_enrichments se ON se.raw_signal_id = rs.id
+                   WHERE rs.vertical = 'CHILDRENS_HOME' AND rs.source_type = 'planning'
+                     AND rs.planning_authority_normalized = %s
+                     AND rs.planning_reference_normalized = %s AND rs.id <> %s""",
+                (identity.normalized_authority, identity.normalized_reference, signal_id),
+            ).fetchall()
+            foundations = [
+                candidate for candidate in candidates
+                if is_foundational_planning_signal(
+                    (candidate[2] or {}).get("planning_subtype"), candidate[1]
+                )
+            ]
+            negative_origins = [
+                candidate for candidate in candidates
+                if canonical_planning_outcome(candidate[1]).outcome in {
+                    PlanningOutcome.REFUSED,
+                    PlanningOutcome.WITHDRAWN,
+                    PlanningOutcome.APPEAL_DISMISSED,
+                }
+            ]
+            if len(foundations) == 1:
+                origin_id = foundations[0][0]
+                conn.execute(
+                    """UPDATE planning_application_families SET primary_signal_id = %s,
+                              origin_status = 'RESOLVED', updated_at = now() WHERE id = %s""",
+                    (origin_id, family[0]),
+                )
+                conn.execute(
+                    """INSERT INTO planning_signal_family_relationships
+                         (family_id, raw_signal_id, relationship_type, provenance)
+                       VALUES (%s, %s, 'PRIMARY_APPLICATION', %s)
+                       ON CONFLICT DO NOTHING""",
+                    (family[0], origin_id, Jsonb({"method": PLANNING_FAMILY_POLICY_VERSION})),
+                )
+                linked = _attach_family_support(conn, family[0], origin_id)
+                result["origins_resolved"] += 1
+                for key in ("followups_linked", "origins_linked", "conflicts"):
+                    result[key] += linked[key]
+            elif len(foundations) > 1 or len(negative_origins) > 1:
+                conn.execute(
+                    """UPDATE planning_application_families
+                       SET origin_status = 'AMBIGUOUS', updated_at = now()
+                       WHERE id = %s""",
+                    (family[0],),
+                )
+                result["conflicts"] += 1
+            elif len(negative_origins) == 1:
+                origin_id = negative_origins[0][0]
+                conn.execute(
+                    """UPDATE planning_application_families SET primary_signal_id = %s,
+                              origin_status = 'NEGATIVE', updated_at = now() WHERE id = %s""",
+                    (origin_id, family[0]),
+                )
+                conn.execute(
+                    """INSERT INTO planning_signal_family_relationships
+                         (family_id, raw_signal_id, relationship_type, provenance)
+                       VALUES (%s, %s, 'PRIMARY_APPLICATION', %s)
+                       ON CONFLICT DO NOTHING""",
+                    (family[0], origin_id, Jsonb({"method": PLANNING_FAMILY_POLICY_VERSION})),
+                )
+            else:
+                result["missing_origins"] += 1
+        conn.commit()
+    return result
+
+
+def planning_family_historical_preview(settings: Settings, *, limit: int = 2500) -> dict[str, Any]:
+    """Read-only inventory of exact-reference Care Planning origin resolution."""
+    bounded_limit = min(max(int(limit), 1), 5000)
+    with connection(settings) as conn:
+        rows = conn.execute(
+            """SELECT rs.id, rs.external_id, rs.title, rs.raw_text, rs.metadata,
+                      se.extracted_facts,
+                      EXISTS (SELECT 1 FROM opportunity_signals os
+                              WHERE os.raw_signal_id = rs.id AND os.status = 'ACTIVE')
+               FROM raw_signals rs JOIN signal_enrichments se ON se.raw_signal_id = rs.id
+               WHERE rs.vertical = 'CHILDRENS_HOME' AND rs.source_type = 'planning'
+               ORDER BY rs.created_at, rs.id LIMIT %s""",
+            (bounded_limit,),
+        ).fetchall()
+    primaries: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    followups: list[dict[str, Any]] = []
+    for row in rows:
+        raw = {
+            "id": str(row[0]), "external_id": row[1], "title": row[2],
+            "raw_text": row[3], "metadata": row[4] or {},
+        }
+        authority = planning_authority(raw["metadata"])
+        normalized_authority = normalize_planning_authority(authority)
+        primary = primary_planning_reference(raw["external_id"], raw["metadata"])
+        facts = row[5] if isinstance(row[5], dict) else {}
+        item = {**raw, "authority": authority, "facts": facts, "has_opportunity": bool(row[6])}
+        if normalized_authority and primary:
+            primaries.setdefault((normalized_authority, primary), []).append(item)
+        refs = prior_planning_references(raw, facts)
+        if refs:
+            item["references"] = refs
+            followups.append(item)
+    counts = {
+        "followup_signals_with_prior_references": len(followups),
+        "stored_origin_found": 0,
+        "stored_negative_origin": 0,
+        "no_stored_origin": 0,
+        "multiple_candidate_origins": 0,
+        "no_usable_authority_or_reference": 0,
+        "followup_only_opportunities": 0,
+        "could_gain_foundational_support_without_plota": 0,
+        "requires_targeted_plota_lookup": 0,
+    }
+    examples: dict[str, list[dict[str, Any]]] = {
+        "stored_origin_found": [], "no_stored_origin": [],
+        "stored_negative_origin": [], "multiple_candidate_origins": [],
+        "no_usable_authority_or_reference": [],
+    }
+    for item in followups:
+        authority_key = normalize_planning_authority(item["authority"])
+        if not authority_key:
+            counts["no_usable_authority_or_reference"] += 1
+            category = "no_usable_authority_or_reference"
+        else:
+            candidates: dict[str, dict[str, Any]] = {}
+            for _, normalized_reference in item["references"]:
+                for candidate in primaries.get((authority_key, normalized_reference), []):
+                    if candidate["id"] != item["id"]:
+                        candidates[candidate["id"]] = candidate
+            foundations = [
+                candidate for candidate in candidates.values()
+                if is_foundational_planning_signal(
+                    candidate["facts"].get("planning_subtype"), candidate["metadata"]
+                )
+            ]
+            negatives = [
+                candidate for candidate in candidates.values()
+                if canonical_planning_outcome(candidate["metadata"]).outcome in {
+                    PlanningOutcome.REFUSED,
+                    PlanningOutcome.WITHDRAWN,
+                    PlanningOutcome.APPEAL_DISMISSED,
+                }
+            ]
+            if len(foundations) == 1:
+                category = "stored_origin_found"
+                counts[category] += 1
+                if item["has_opportunity"] and not foundations[0]["has_opportunity"]:
+                    counts["could_gain_foundational_support_without_plota"] += 1
+            elif len(foundations) > 1 or len(negatives) > 1:
+                category = "multiple_candidate_origins"
+                counts[category] += 1
+            elif len(negatives) == 1:
+                category = "stored_negative_origin"
+                counts[category] += 1
+            else:
+                category = "no_stored_origin"
+                counts[category] += 1
+                counts["requires_targeted_plota_lookup"] += 1
+        if item["has_opportunity"] and category != "stored_origin_found":
+            counts["followup_only_opportunities"] += 1
+        if len(examples[category]) < 5:
+            examples[category].append(
+                {
+                    "signal_id": item["id"],
+                    "external_id": item["external_id"],
+                    "authority": item["authority"],
+                    "references": [value[0] for value in item["references"]],
+                    "title": str(item["title"] or "")[:240],
+                }
+            )
+    return {
+        "preview": True,
+        "policy_version": PLANNING_FAMILY_POLICY_VERSION,
+        "planning_signals_inspected": len(rows),
+        **counts,
+        "examples": examples,
+        "external_provider_requests": 0,
+        "read_only": True,
+    }
+
+
+def reconcile_stored_planning_families(
+    settings: Settings, *, actor: str, limit: int = 2500
+) -> dict[str, Any]:
+    """Bounded, idempotent stored-evidence reconciliation; never calls Plota."""
+    bounded_limit = min(max(int(limit), 1), 5000)
+    with connection(settings) as conn:
+        rows = conn.execute(
+            """SELECT rs.id, se.extracted_facts
+               FROM raw_signals rs JOIN signal_enrichments se ON se.raw_signal_id = rs.id
+               WHERE rs.vertical = 'CHILDRENS_HOME' AND rs.source_type = 'planning'
+               ORDER BY CASE WHEN se.extracted_facts->>'planning_subtype' IN
+                 ('NEW_HOME_CHANGE_OF_USE','NEW_HOME_OTHER_EXPLICIT','NEW_HOME_MIXED_USE',
+                  'LAWFULNESS_PROPOSED','EXPANSION_OR_CAPACITY_CHANGE') THEN 0 ELSE 1 END,
+                 rs.created_at, rs.id LIMIT %s""",
+            (bounded_limit,),
+        ).fetchall()
+    totals = {
+        "signals_inspected": 0, "families_created_or_reused": 0, "origins_resolved": 0,
+        "followups_linked": 0, "origins_linked": 0, "conflicts": 0, "missing_origins": 0,
+        "errors": 0,
+    }
+    for signal_id, _ in rows:
+        try:
+            outcome = reconcile_planning_family_signal(settings, str(signal_id))
+            totals["signals_inspected"] += 1
+            for key in outcome:
+                totals[key] += int(outcome[key])
+        except Exception:
+            totals["errors"] += 1
+    record_admin_audit(
+        settings,
+        action="PLANNING_FAMILY_STORED_RECONCILIATION",
+        actor=actor,
+        target_type="planning_application_family",
+        details={
+            **totals,
+            "target_count": totals["signals_inspected"],
+            "policy_version": PLANNING_FAMILY_POLICY_VERSION,
+            "external_requests": 0,
+            "vertical": "CHILDRENS_HOME",
+        },
+    )
+    return {**totals, "policy_version": PLANNING_FAMILY_POLICY_VERSION, "external_requests": 0}
+
+
+def queue_planning_origin_recovery(
+    settings: Settings,
+    *,
+    signal_id: str | None = None,
+    actor: str,
+    limit: int = 1,
+    force: bool = False,
+) -> dict[str, Any]:
+    """Queue bounded exact-reference recovery for unresolved families."""
+    if not settings.planning_manual_run_queue_url:
+        raise RuntimeError("PLANNING_MANUAL_RUN_QUEUE_URL is not configured")
+    bounded_limit = min(max(int(limit), 1), 25)
+    signal_clause = "AND r.raw_signal_id = %s" if signal_id else ""
+    params: list[Any] = [signal_id] if signal_id else []
+    params.append(bounded_limit)
+    with connection(settings) as conn:
+        rows = conn.execute(
+            f"""SELECT DISTINCT f.id, f.planning_authority, f.normalized_reference,
+                               r.raw_signal_id, attempt.status, attempt.retry_after
+                FROM planning_application_families f
+                JOIN planning_signal_family_relationships r ON r.family_id = f.id
+                LEFT JOIN LATERAL (
+                  SELECT status, retry_after FROM planning_origin_recovery_attempts
+                  WHERE family_id = f.id ORDER BY attempted_at DESC, id DESC LIMIT 1
+                ) attempt ON TRUE
+                WHERE f.vertical = 'CHILDRENS_HOME' AND f.origin_status = 'MISSING'
+                  AND r.relationship_type = 'REFERENCES_APPLICATION'
+                  {signal_clause}
+                  AND (%s OR attempt.status IS NULL
+                       OR attempt.status = 'PROVIDER_ERROR'
+                       OR (attempt.status = 'NOT_FOUND' AND attempt.retry_after <= now()))
+                ORDER BY f.id LIMIT %s""",
+            [*params[:-1], force, params[-1]],
+        ).fetchall()
+        queued: list[dict[str, str]] = []
+        for family_id, authority, reference, trigger_id, _, _ in rows:
+            attempt = conn.execute(
+                """INSERT INTO planning_origin_recovery_attempts
+                     (family_id, triggering_signal_id, status, details)
+                   VALUES (%s, %s, 'QUEUED', %s) RETURNING id""",
+                (
+                    family_id,
+                    trigger_id,
+                    Jsonb({
+                        "reason": "REFERENCED_APPLICATION_MISSING",
+                        "actor": actor,
+                        "policy_version": PLANNING_FAMILY_POLICY_VERSION,
+                    }),
+                ),
+            ).fetchone()
+            queued.append(
+                {
+                    "attempt_id": str(attempt[0]), "family_id": str(family_id),
+                    "triggering_signal_id": str(trigger_id), "planning_authority": authority,
+                    "normalized_reference": reference,
+                }
+            )
+        conn.commit()
+    sent = 0
+    for item in queued:
+        try:
+            response = boto3.client("sqs").send_message(
+                QueueUrl=settings.planning_manual_run_queue_url,
+                MessageBody=json.dumps(
+                    {"invocation_source": "planning_origin_recovery", **item},
+                    separators=(",", ":"), sort_keys=True,
+                ),
+            )
+            if response.get("MessageId"):
+                sent += 1
+        except Exception:
+            with connection(settings) as conn:
+                conn.execute(
+                    """UPDATE planning_origin_recovery_attempts SET status = 'PROVIDER_ERROR',
+                              retry_after = now() + INTERVAL '1 hour',
+                              details = details || %s WHERE id = %s""",
+                    (Jsonb({"queue_error": True}), item["attempt_id"]),
+                )
+                conn.commit()
+            raise
+    return {"selected": len(queued), "queued": sent, "limit": bounded_limit}
+
+
+def update_planning_origin_recovery(
+    settings: Settings,
+    *,
+    attempt_id: str,
+    status: str,
+    recovered_signal_id: str | None = None,
+    details: dict[str, Any] | None = None,
+) -> None:
+    if status not in {"RUNNING", "FOUND", "NOT_FOUND", "AMBIGUOUS", "PROVIDER_ERROR"}:
+        raise ValueError("invalid planning origin recovery status")
+    with connection(settings) as conn:
+        conn.execute(
+            """UPDATE planning_origin_recovery_attempts
+               SET status = %s, recovered_signal_id = %s,
+                   retry_after = CASE WHEN %s = 'NOT_FOUND' THEN now() + INTERVAL '30 days'
+                                      WHEN %s = 'PROVIDER_ERROR' THEN now() + INTERVAL '1 hour'
+                                      ELSE NULL END,
+                   details = details || %s, attempted_at = now()
+               WHERE id = %s""",
+            (status, recovered_signal_id, status, status, Jsonb(details or {}), attempt_id),
+        )
+        conn.commit()
+
+
 def correlate_signal(
     settings: Settings, signal_id: str, candidate: dict[str, Any]
 ) -> dict[str, Any]:
@@ -4511,13 +5075,14 @@ def correlate_signal(
         match_reason = None
         uncertain_matches: list[tuple[Any, float, str]] = []
         prior_references = [
-            str(value).upper()
+            normalized
             for value in (candidate.get("extracted_facts") or {}).get(
                 "planning_prior_references", []
             )
-            if value
+            if (normalized := normalize_planning_reference(value))
         ]
         if source_type == "planning" and prior_references:
+            authority = normalize_planning_authority(planning_authority(metadata))
             referenced = conn.execute(
                 """
                 SELECT o.id
@@ -4526,18 +5091,14 @@ def correlate_signal(
                 JOIN raw_signals prior ON prior.id = os.raw_signal_id
                 WHERE o.vertical = %s AND o.review_status NOT IN ('MERGED', 'REJECTED')
                   AND os.status = 'ACTIVE' AND prior.source_type = 'planning'
-                  AND (
-                    upper(prior.external_id) = ANY(%s)
-                    OR upper(COALESCE(prior.metadata->'provider_record'->>'id', '')) = ANY(%s)
-                    OR upper(COALESCE(prior.metadata->>'application_id', '')) = ANY(%s)
-                  )
+                  AND prior.planning_authority_normalized = %s
+                  AND prior.planning_reference_normalized = ANY(%s)
                 ORDER BY o.updated_at DESC
                 LIMIT 2
                 """,
                 (
                     signal_vertical,
-                    [*prior_references, *(f"PLOTA:{item}" for item in prior_references)],
-                    prior_references,
+                    authority,
                     prior_references,
                 ),
             ).fetchall()
@@ -6530,12 +7091,28 @@ def opportunity_detail(settings: Settings, opportunity_id: str) -> dict[str, Any
                       rs.source_url, rs.metadata, rs.organisation_hint, rs.location_hint,
                       os.status, os.created_by, os.match_outcome, os.match_confidence,
                       os.match_reason, os.provenance, se.confidence, se.review_status,
-                      ai.recommendation, ai.confidence, ai.status
+                      ai.recommendation, ai.confidence, ai.status, se.extracted_facts
                FROM opportunity_signals os JOIN raw_signals rs ON rs.id = os.raw_signal_id
                LEFT JOIN signal_enrichments se ON se.raw_signal_id = rs.id
                LEFT JOIN LATERAL (SELECT recommendation, confidence, status FROM signal_ai_reviews
                  WHERE raw_signal_id = rs.id ORDER BY created_at DESC LIMIT 1) ai ON TRUE
                WHERE os.opportunity_id = %s ORDER BY rs.discovered_at""",
+            (opportunity_id,),
+        ).fetchall()
+        family_rows = conn.execute(
+            """SELECT r.raw_signal_id, f.id, f.planning_authority, f.raw_reference,
+                      f.normalized_reference, f.origin_status, f.primary_signal_id,
+                      r.relationship_type, attempt.status, attempt.attempted_at
+               FROM planning_signal_family_relationships r
+               JOIN planning_application_families f ON f.id = r.family_id
+               LEFT JOIN LATERAL (
+                 SELECT status, attempted_at FROM planning_origin_recovery_attempts
+                 WHERE family_id = f.id ORDER BY attempted_at DESC, id DESC LIMIT 1
+               ) attempt ON TRUE
+               WHERE r.raw_signal_id = ANY(
+                 SELECT raw_signal_id FROM opportunity_signals WHERE opportunity_id = %s
+               )
+               ORDER BY f.raw_reference, r.created_at""",
             (opportunity_id,),
         ).fetchall()
         organisation_evidence = []
@@ -6568,8 +7145,50 @@ def opportunity_detail(settings: Settings, opportunity_id: str) -> dict[str, Any
         "ai_recommendation",
         "ai_confidence",
         "ai_status",
+        "extracted_facts",
     )
     signals = [dict(zip(fields, row)) for row in rows]
+    family_by_signal: dict[str, list[dict[str, Any]]] = {}
+    for row in family_rows:
+        family_by_signal.setdefault(str(row[0]), []).append(
+            {
+                "id": str(row[1]),
+                "planning_authority": row[2],
+                "raw_reference": row[3],
+                "normalized_reference": row[4],
+                "origin_status": row[5],
+                "primary_signal_id": str(row[6]) if row[6] else None,
+                "relationship_type": row[7],
+                "latest_recovery_status": row[8],
+                "latest_recovery_at": row[9],
+            }
+        )
+    for signal in signals:
+        signal["planning_families"] = family_by_signal.get(str(signal["id"]), [])
+    active_signals = [signal for signal in signals if signal["relationship_status"] == "ACTIVE"]
+    foundational_count = sum(
+        1 for signal in active_signals
+        if signal["source_type"] != "planning"
+        or is_foundational_planning_signal(
+            (signal.get("extracted_facts") or {}).get("planning_subtype"), signal.get("metadata")
+        )
+    )
+    supporting_followup_count = sum(
+        1 for signal in active_signals
+        if signal["source_type"] == "planning"
+        and followup_can_support_opportunity(
+            (signal.get("extracted_facts") or {}).get("planning_subtype"), signal.get("metadata")
+        )
+    )
+    unresolved_origin_count = len(
+        {
+            family["id"]
+            for signal in active_signals
+            for family in signal.get("planning_families", [])
+            if family["relationship_type"] == "REFERENCES_APPLICATION"
+            and family["origin_status"] in {"MISSING", "AMBIGUOUS"}
+        }
+    )
     approved_customer_signals = [
         signal
         for signal in signals
@@ -6636,6 +7255,11 @@ def opportunity_detail(settings: Settings, opportunity_id: str) -> dict[str, Any
         "default_customer_title": generated_customer_title(customer_projection),
         "default_customer_summary": generated_customer_summary(customer_projection),
         "signals": signals,
+        "evidence_support": {
+            "foundational": foundational_count,
+            "supporting_followups": supporting_followup_count,
+            "unresolved_origins": unresolved_origin_count,
+        },
         "organisation_evidence": [
             {
                 "provider": row[0],

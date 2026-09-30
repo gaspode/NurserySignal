@@ -85,10 +85,13 @@ from app.repository import (
     merge_opportunities,
     opportunity_detail,
     organisation_detail,
+    planning_family_historical_preview,
     planning_outcome_dry_run,
     public_authority_backfill,
+    queue_planning_origin_recovery,
     recalculate_opportunity_creation,
     reclassify_pending_care_planning,
+    reconcile_stored_planning_families,
     record_admin_audit,
     recruitment_planning_diagnostic,
     release_organisation_review_ofsted_enrichment_request,
@@ -330,6 +333,12 @@ def _admin_path(path: str) -> tuple[str, str | None]:
         return "recruitment-reprocess", None
     if path == "/admin/recruitment/planning-diagnostic":
         return "recruitment-planning-diagnostic", None
+    if path == "/admin/planning/families":
+        return "planning-families", None
+    if path == "/admin/planning/families/reconcile":
+        return "planning-families-reconcile", None
+    if path == "/admin/planning/families/recover":
+        return "planning-families-recover", None
     if path == "/admin/review-triage":
         return "review-triage", None
     if path == "/admin/review-triage/refusals":
@@ -389,6 +398,7 @@ def _admin_path(path: str) -> tuple[str, str | None]:
             "evidence",
             "ai-review",
             "create-opportunity",
+            "planning-origin",
         }:
             return parts[1], parts[0]
     return "unknown", None
@@ -1508,6 +1518,46 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 if admin_error:
                     return admin_error
                 return _response(200, care_planning_manual_cohort_analysis(settings))
+            if action == "planning-families" and method == "GET":
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                return _response(
+                    200,
+                    planning_family_historical_preview(
+                        settings,
+                        limit=min(max(int(_query(event, "limit") or 2500), 1), 5000),
+                    ),
+                )
+            if action == "planning-families-reconcile" and method == "POST":
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                payload = parse_json_payload(_raw_body(event))
+                actor = str(claims.get("sub") or claims.get("username") or "unknown")
+                return _response(
+                    200,
+                    reconcile_stored_planning_families(
+                        settings,
+                        actor=actor,
+                        limit=min(max(int(payload.get("limit", 2500)), 1), 5000),
+                    ),
+                )
+            if action == "planning-families-recover" and method == "POST":
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                payload = parse_json_payload(_raw_body(event))
+                actor = str(claims.get("sub") or claims.get("username") or "unknown")
+                return _response(
+                    202,
+                    queue_planning_origin_recovery(
+                        settings,
+                        actor=actor,
+                        limit=min(max(int(payload.get("limit", 25)), 1), 25),
+                        force=bool(payload.get("force", False)),
+                    ),
+                )
             if action == "care-planning-lawfulness-approval" and method == "GET":
                 admin_error = _require_admin(claims, settings)
                 if admin_error:
@@ -1599,6 +1649,22 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 except UnsupportedShadowSourceError:
                     return _response(400, {"error": "ai_shadow_not_supported_for_source"})
                 return _response(200, result) if result else _response(404, {"error": "not_found"})
+            if action == "planning-origin" and method == "POST" and signal_id:
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                payload = parse_json_payload(_raw_body(event))
+                actor = str(claims.get("sub") or claims.get("username") or "unknown")
+                return _response(
+                    202,
+                    queue_planning_origin_recovery(
+                        settings,
+                        signal_id=signal_id,
+                        actor=actor,
+                        limit=1,
+                        force=bool(payload.get("force", False)),
+                    ),
+                )
             if action == "bulk-review" and method == "POST":
                 admin_error = _require_admin(claims, settings)
                 if admin_error:

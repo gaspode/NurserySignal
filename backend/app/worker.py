@@ -17,6 +17,8 @@ from app.repository import (
     auto_reject_withdrawn_planning,
     correlate_signal,
     get_raw_signal,
+    queue_planning_origin_recovery,
+    reconcile_planning_family_signal,
     save_ai_review,
     save_enrichment,
 )
@@ -66,6 +68,15 @@ def process_message(settings: Settings, body: str) -> None:
         and (getattr(settings, "database_url", None) or getattr(settings, "db_secret_arn", None))
     ):
         opportunity = correlate_signal(settings, message.signal_id, candidate)
+        if raw.get("vertical") == "CHILDRENS_HOME" and raw.get("source_type") == "planning":
+            family_result = reconcile_planning_family_signal(settings, message.signal_id)
+            if family_result.get("missing_origins"):
+                queue_planning_origin_recovery(
+                    settings,
+                    signal_id=message.signal_id,
+                    actor="SYSTEM_FUTURE_INGESTION",
+                    limit=1,
+                )
     logger.info(
         "enrichment signal_id=%s created=%s refused=%s withdrawn=%s opportunity_id=%s linked=%s",
         message.signal_id,

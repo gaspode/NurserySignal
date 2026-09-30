@@ -115,6 +115,11 @@ resource "aws_iam_role_policy" "enrichment_application" {
         Effect   = "Allow"
         Action   = ["bedrock:InvokeModel"]
         Resource = local.ai_invoke_resources
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["sqs:SendMessage"]
+        Resource = aws_sqs_queue.planning_manual_runs.arn
       }
     ]
   })
