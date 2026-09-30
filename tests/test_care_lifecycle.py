@@ -35,6 +35,7 @@ def opportunity(**overrides) -> dict:
         "id": "00000000-0000-0000-0000-000000000001",
         "vertical": "CHILDRENS_HOME",
         "publication_status": "DRAFT",
+        "change_type": "OPENING",
         "town": "Nottingham",
         "postcode": "NG8 1LD",
         "address": "10 Kingswood Road",
@@ -176,6 +177,18 @@ def test_publication_policy_is_safe_stable_and_idempotent() -> None:
         "MANUAL_BLOCK"
         in evaluate_publication(
             opportunity(publication_automation_blocked=True),
+            lifecycle,
+            [planning("Pending")],
+            hygiene_category="VALID_SUPPORTED",
+            hygiene_warning=None,
+            safe_title="Safe",
+            safe_summary="Safe",
+        ).exclusions
+    )
+    assert (
+        "INITIAL_POLICY_SCOPE"
+        in evaluate_publication(
+            opportunity(change_type="EXPANSION"),
             lifecycle,
             [planning("Pending")],
             hygiene_category="VALID_SUPPORTED",

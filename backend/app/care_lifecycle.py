@@ -206,6 +206,8 @@ def evaluate_publication(
         exclusions.append("WARNING")
     if lifecycle.lifecycle not in ACTIVE_PUBLICATION_LIFECYCLES:
         exclusions.append("LIFECYCLE")
+    if opportunity.get("change_type") != "OPENING":
+        exclusions.append("INITIAL_POLICY_SCOPE")
     if not lifecycle.triggering_signal_ids:
         exclusions.append("NO_FOUNDATIONAL_EVIDENCE")
     narrow_foundations = []
@@ -266,6 +268,8 @@ def evaluate_withdrawal(
 ) -> AutomationDecision:
     if opportunity.get("publication_status") != "PUBLISHED":
         return AutomationDecision("NOT_ELIGIBLE", "NOT_PUBLISHED", ("NOT_PUBLISHED",))
+    if lifecycle.lifecycle != CareLifecycle.STOPPED:
+        return AutomationDecision("KEEP_PUBLISHED", "ACTIVE_OR_UNRESOLVED_LIFECYCLE")
     if opportunity.get("publication_automation_blocked"):
         return AutomationDecision("MANUAL_REVIEW", "MANUAL_BLOCK", ("MANUAL_BLOCK",))
     provenance = opportunity.get("publication_automation_provenance") or {}
@@ -275,9 +279,7 @@ def evaluate_withdrawal(
             "MANUAL_PUBLICATION",
             ("MANUAL_PUBLICATION",),
         )
-    if lifecycle.lifecycle == CareLifecycle.STOPPED:
-        return AutomationDecision(
-            "AUTO_WITHDRAW",
-            "Terminal-negative evidence remains without an alternative active foundation.",
-        )
-    return AutomationDecision("KEEP_PUBLISHED", "ACTIVE_OR_UNRESOLVED_LIFECYCLE")
+    return AutomationDecision(
+        "AUTO_WITHDRAW",
+        "Terminal-negative evidence remains without an alternative active foundation.",
+    )

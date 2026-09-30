@@ -6345,6 +6345,7 @@ def care_opportunity_lifecycle_preview(settings: Settings) -> dict[str, Any]:
     publication_counts: Counter[str] = Counter()
     publication_exclusions: Counter[str] = Counter()
     withdrawal_counts: Counter[str] = Counter()
+    published_lifecycle_counts: Counter[str] = Counter()
     watch_outcomes: Counter[str] = Counter()
     watched_candidates: set[str] = set()
     examples: list[dict[str, Any]] = []
@@ -6396,6 +6397,8 @@ def care_opportunity_lifecycle_preview(settings: Settings) -> dict[str, Any]:
         publication_exclusions.update(publication.exclusions)
         withdrawal = evaluate_withdrawal(projection, decision)
         withdrawal_counts[withdrawal.outcome] += 1
+        if opportunity.get("publication_status") == "PUBLISHED":
+            published_lifecycle_counts[decision.lifecycle.value] += 1
 
         for signal in opportunity["relationships"] or []:
             if signal.get("source_type") != "planning" or signal.get("status") != "ACTIVE":
@@ -6484,6 +6487,7 @@ def care_opportunity_lifecycle_preview(settings: Settings) -> dict[str, Any]:
             "exclusions": dict(sorted(publication_exclusions.items())),
         },
         "withdrawal_preview": dict(sorted(withdrawal_counts.items())),
+        "published_lifecycle_counts": dict(sorted(published_lifecycle_counts.items())),
         "hygiene_counts": hygiene["category_counts"],
         "examples": examples,
     }
