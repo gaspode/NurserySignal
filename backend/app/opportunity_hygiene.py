@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import re
 from collections import Counter, defaultdict
+from collections.abc import Callable
 from typing import Any
 
+from app.evidence_support import EvidenceSupport, classify_evidence_support
 from app.planning_outcomes import PlanningOutcome, canonical_planning_outcome
 
 HYGIENE_CATEGORIES = (
@@ -93,7 +95,8 @@ def _touch_types(opportunity: dict[str, Any]) -> list[str]:
     return sorted(touches)
 
 
-def _relation_state(relation: dict[str, Any]) -> str:
+def legacy_relation_support_state(relation: dict[str, Any]) -> str:
+    """Pre-shared-classifier semantics retained only for before/after diagnostics."""
     if relation.get("status") != "ACTIVE":
         return "INACTIVE"
     if relation.get("review_status") != "APPROVED":
@@ -120,7 +123,31 @@ def _relation_state(relation: dict[str, Any]) -> str:
     return "SUPPORT_ONLY"
 
 
-def _duplicate_counterparts(opportunities: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+def _relation_state(relation: dict[str, Any]) -> str:
+    state = classify_evidence_support(relation)
+    if state is EvidenceSupport.OTHER_LIFECYCLE:
+        outcome = canonical_planning_outcome(relation.get("metadata")).outcome
+        if outcome in NEGATIVE_OUTCOMES or outcome is PlanningOutcome.REFUSED_UNDER_APPEAL:
+            return outcome.value
+    return {
+        EvidenceSupport.FOUNDATIONAL: "FOUNDATIONAL",
+        EvidenceSupport.SUPPORTING_FOLLOWUP: "SUPPORT_ONLY",
+        EvidenceSupport.OTHER_LIFECYCLE: "OTHER_LIFECYCLE",
+        EvidenceSupport.NON_SUPPORTING: (
+            "PENDING"
+            if relation.get("status") == "ACTIVE" and relation.get("review_status") == "PENDING"
+            else "REJECTED"
+            if relation.get("status") == "ACTIVE"
+            and relation.get("review_status") == "REJECTED"
+            else "INACTIVE"
+        ),
+    }[state]
+
+
+def _duplicate_counterparts(
+    opportunities: list[dict[str, Any]],
+    relation_state: Callable[[dict[str, Any]], str],
+) -> dict[str, dict[str, Any]]:
     groups: dict[tuple[str, ...], list[dict[str, Any]]] = defaultdict(list)
     for opportunity in opportunities:
         if opportunity.get("review_status") in {"MERGED", "REJECTED"}:
@@ -152,7 +179,7 @@ def _duplicate_counterparts(opportunities: list[dict[str, Any]]) -> dict[str, di
             key=lambda item: (
                 item.get("publication_status") == "PUBLISHED",
                 bool(_touch_types(item)),
-                sum(_relation_state(rel) == "FOUNDATIONAL" for rel in item["relationships"]),
+                sum(relation_state(rel) == "FOUNDATIONAL" for rel in item["relationships"]),
                 str(item.get("created_at") or ""),
             ),
             reverse=True,
@@ -172,9 +199,12 @@ def _duplicate_counterparts(opportunities: list[dict[str, Any]]) -> dict[str, di
     return counterparts
 
 
-def audit_opportunities(opportunities: list[dict[str, Any]]) -> dict[str, Any]:
+def audit_opportunities(
+    opportunities: list[dict[str, Any]], *, legacy_support_semantics: bool = False
+) -> dict[str, Any]:
     """Classify a complete vertical inventory without changing any stored state."""
-    duplicates = _duplicate_counterparts(opportunities)
+    relation_state = legacy_relation_support_state if legacy_support_semantics else _relation_state
+    duplicates = _duplicate_counterparts(opportunities, relation_state)
     items: list[dict[str, Any]] = []
     category_counts: Counter[str] = Counter()
     root_causes: Counter[str] = Counter()
@@ -189,8 +219,20 @@ def audit_opportunities(opportunities: list[dict[str, Any]]) -> dict[str, Any]:
     for opportunity in opportunities:
         opportunity_id = str(opportunity["id"])
         relationships = opportunity.get("relationships") or []
-        states = [_relation_state(relation) for relation in relationships]
+        states = [relation_state(relation) for relation in relationships]
         foundational = sum(state == "FOUNDATIONAL" for state in states)
+        supporting_followups = sum(state == "SUPPORT_ONLY" for state in states)
+        other_lifecycle = sum(
+            state
+            in {
+                "OTHER_LIFECYCLE",
+                "REFUSED",
+                "WITHDRAWN",
+                "REFUSED_UNDER_APPEAL",
+                "APPEAL_DISMISSED",
+            }
+            for state in states
+        )
         active_approved = sum(
             relation.get("status") == "ACTIVE" and relation.get("review_status") == "APPROVED"
             for relation in relationships
@@ -297,6 +339,9 @@ def audit_opportunities(opportunities: list[dict[str, Any]]) -> dict[str, Any]:
                 "root_cause": root_cause,
                 "hygiene_reason": hygiene_reason,
                 "supporting_signal_count": foundational,
+                "foundational_signal_count": foundational,
+                "supporting_followup_count": supporting_followups,
+                "other_lifecycle_signal_count": other_lifecycle,
                 "active_approved_signal_count": active_approved,
                 "source_types": sources,
                 "source_mix": source_mix,

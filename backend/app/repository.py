@@ -52,6 +52,7 @@ from app.correlation import (
 )
 from app.customer_projection import generated_customer_summary, generated_customer_title
 from app.db import connection
+from app.evidence_support import EvidenceSupport, classify_evidence_support
 from app.ingestion import NormalizedSignal
 from app.opportunity_hygiene import (
     HYGIENE_CATEGORIES,
@@ -6241,7 +6242,13 @@ def care_opportunity_hygiene_audit(
                     'title', rs.title,
                     'metadata', rs.metadata,
                     'review_status', se.review_status,
-                    'extracted_facts', se.extracted_facts
+                    'extracted_facts', se.extracted_facts,
+                    'planning_family_relationship_types', COALESCE(
+                        (SELECT jsonb_agg(DISTINCT family_rel.relationship_type)
+                         FROM planning_signal_family_relationships family_rel
+                         WHERE family_rel.raw_signal_id = rs.id),
+                        '[]'::jsonb
+                    )
                 ) ORDER BY rs.discovered_at, rs.id) AS relationships
                 FROM opportunity_signals os
                 JOIN raw_signals rs ON rs.id = os.raw_signal_id
@@ -6308,7 +6315,190 @@ def care_opportunity_hygiene_audit(
         "pending_match_reviews",
     )
     opportunities = [dict(zip(fields, row)) for row in rows]
+    legacy_report = audit_opportunities(opportunities, legacy_support_semantics=True)
     report = audit_opportunities(opportunities)
+    legacy_items_by_id = {
+        item["opportunity_id"]: item for item in legacy_report["items"]
+    }
+    corrected_items_by_id = {item["opportunity_id"]: item for item in report["items"]}
+    zero_foundation_with_planning = 0
+    newly_foundational = 0
+    no_longer_foundational = 0
+    published_newly_foundational = 0
+    breakdowns: dict[str, Counter[str]] = {
+        "planning_subtype": Counter(),
+        "review_status": Counter(),
+        "opportunity_creation_decision": Counter(),
+        "opportunity_change_type": Counter(),
+        "legacy_hygiene_category": Counter(),
+        "publication_status": Counter(),
+    }
+    changed_examples: list[dict[str, Any]] = []
+    named_examples: list[dict[str, Any]] = []
+    semantic_drift: list[dict[str, Any]] = []
+    example_terms = {
+        "LAMBOURNE": "Lambourne Close",
+        "CASTLEDENE": "Castledene",
+        "COCKINGTON": "Cockington Road",
+        "MOSS ROAD": "Moss Road",
+        "BUTLER STREET": "Butler Street",
+        "ARMITAGE": "Armitage Close",
+        "CROSTON": "Croston Road",
+    }
+    for opportunity in opportunities:
+        opportunity_id = str(opportunity["id"])
+        legacy_item = legacy_items_by_id[opportunity_id]
+        corrected_item = corrected_items_by_id[opportunity_id]
+        active_planning = [
+            relation
+            for relation in opportunity.get("relationships") or []
+            if relation.get("status") == "ACTIVE"
+            and str(relation.get("source_type") or "").lower() == "planning"
+        ]
+        active_relationships = [
+            relation
+            for relation in opportunity.get("relationships") or []
+            if relation.get("status") == "ACTIVE"
+        ]
+        detail_before_foundational = sum(
+            str(relation.get("source_type") or "").lower() != "planning"
+            or is_foundational_planning_signal(
+                (relation.get("extracted_facts") or {}).get("planning_subtype"),
+                relation.get("metadata"),
+            )
+            for relation in active_relationships
+        )
+        if active_planning and detail_before_foundational == 0:
+            zero_foundation_with_planning += 1
+            breakdowns["opportunity_change_type"][
+                str(opportunity.get("change_type") or "UNKNOWN")
+            ] += 1
+            breakdowns["legacy_hygiene_category"][legacy_item["category"]] += 1
+            breakdowns["publication_status"][
+                str(opportunity.get("publication_status") or "UNKNOWN")
+            ] += 1
+            for relation in active_planning:
+                facts = relation.get("extracted_facts") or {}
+                breakdowns["planning_subtype"][
+                    str(facts.get("planning_subtype") or "UNKNOWN")
+                ] += 1
+                breakdowns["review_status"][
+                    str(relation.get("review_status") or "UNKNOWN")
+                ] += 1
+                breakdowns["opportunity_creation_decision"][
+                    str(facts.get("opportunity_creation_decision") or "UNKNOWN")
+                ] += 1
+        if corrected_item["foundational_signal_count"] > detail_before_foundational:
+            newly_foundational += 1
+            published_newly_foundational += int(
+                opportunity.get("publication_status") == "PUBLISHED"
+            )
+            if len(changed_examples) < 100:
+                changed_examples.append(
+                    {
+                        "opportunity_id": opportunity_id,
+                        "name": opportunity.get("name"),
+                        "publication_status": opportunity.get("publication_status"),
+                        "change_type": opportunity.get("change_type"),
+                        "before_foundational": detail_before_foundational,
+                        "after_foundational": corrected_item["foundational_signal_count"],
+                        "before_category": legacy_item["category"],
+                        "after_category": corrected_item["category"],
+                    }
+                )
+        elif corrected_item["foundational_signal_count"] < detail_before_foundational:
+            no_longer_foundational += 1
+            if len(changed_examples) < 100:
+                changed_examples.append(
+                    {
+                        "opportunity_id": opportunity_id,
+                        "name": opportunity.get("name"),
+                        "publication_status": opportunity.get("publication_status"),
+                        "change_type": opportunity.get("change_type"),
+                        "before_foundational": detail_before_foundational,
+                        "after_foundational": corrected_item["foundational_signal_count"],
+                        "before_category": legacy_item["category"],
+                        "after_category": corrected_item["category"],
+                    }
+                )
+        searchable = " ".join(
+            [
+                str(opportunity.get("name") or ""),
+                str(opportunity.get("address") or ""),
+                *[str(relation.get("title") or "") for relation in active_planning],
+            ]
+        ).upper()
+        for term, label in example_terms.items():
+            if term in searchable:
+                named_examples.append(
+                    {
+                        "label": label,
+                        "opportunity_id": opportunity_id,
+                        "before_foundational": detail_before_foundational,
+                        "after_foundational": corrected_item["foundational_signal_count"],
+                        "supporting_followups": corrected_item["supporting_followup_count"],
+                        "category": corrected_item["category"],
+                    }
+                )
+                break
+        for relation in active_planning:
+            facts = relation.get("extracted_facts") or {}
+            subtype = str(facts.get("planning_subtype") or "")
+            opportunity_change = str(opportunity.get("change_type") or "")
+            drift_reason = None
+            if subtype == "EXPANSION_OR_CAPACITY_CHANGE" and opportunity_change == "OPENING":
+                drift_reason = "EXPANSION_SIGNAL_ON_OPENING"
+            elif (
+                subtype == "CESSATION_OR_CHANGE_AWAY_FROM_CARE"
+                and opportunity_change == "OPENING"
+            ):
+                drift_reason = "CESSATION_SIGNAL_ON_OPENING"
+            elif subtype == "LAWFULNESS_EXISTING" and opportunity_change == "OPENING":
+                drift_reason = "EXISTING_LAWFULNESS_ON_OPENING"
+            elif subtype == "NEW_HOME_MIXED_USE":
+                drift_reason = "MIXED_USE_REVIEW"
+            if drift_reason and len(semantic_drift) < 250:
+                semantic_drift.append(
+                    {
+                        "opportunity_id": opportunity_id,
+                        "signal_id": str(relation.get("signal_id")),
+                        "reason": drift_reason,
+                        "review_status": relation.get("review_status"),
+                        "opportunity_creation_decision": facts.get(
+                            "opportunity_creation_decision"
+                        ),
+                        "opportunity_change_type": opportunity_change,
+                        "planning_subtype": subtype,
+                    }
+                )
+    report["support_semantics_diagnostic"] = {
+        "active_planning_zero_foundational_before": zero_foundation_with_planning,
+        "opportunities_newly_foundational": newly_foundational,
+        "opportunities_no_longer_foundational": no_longer_foundational,
+        "published_newly_foundational": published_newly_foundational,
+        "before_category_counts": legacy_report["category_counts"],
+        "after_category_counts": report["category_counts"],
+        "category_changes": Counter(
+            f"{legacy_items_by_id[item_id]['category']} -> "
+            f"{corrected_items_by_id[item_id]['category']}"
+            for item_id in corrected_items_by_id
+            if legacy_items_by_id[item_id]["category"]
+            != corrected_items_by_id[item_id]["category"]
+        ),
+        "zero_foundation_breakdowns": {
+            key: dict(sorted(values.items())) for key, values in breakdowns.items()
+        },
+        "changed_examples": changed_examples,
+        "named_example_verification": named_examples,
+        "semantic_drift": {
+            "count": len(semantic_drift),
+            "reason_counts": dict(
+                sorted(Counter(item["reason"] for item in semantic_drift).items())
+            ),
+            "items": semantic_drift,
+            "truncated": len(semantic_drift) >= 250,
+        },
+    }
     all_items = report.pop("items")
     selected = filter_hygiene_items(
         all_items,
@@ -7517,20 +7707,10 @@ def opportunity_detail(settings: Settings, opportunity_id: str) -> dict[str, Any
     for signal in signals:
         signal["planning_families"] = family_by_signal.get(str(signal["id"]), [])
     active_signals = [signal for signal in signals if signal["relationship_status"] == "ACTIVE"]
-    foundational_count = sum(
-        1 for signal in active_signals
-        if signal["source_type"] != "planning"
-        or is_foundational_planning_signal(
-            (signal.get("extracted_facts") or {}).get("planning_subtype"), signal.get("metadata")
-        )
-    )
-    supporting_followup_count = sum(
-        1 for signal in active_signals
-        if signal["source_type"] == "planning"
-        and followup_can_support_opportunity(
-            (signal.get("extracted_facts") or {}).get("planning_subtype"), signal.get("metadata")
-        )
-    )
+    support_states = [classify_evidence_support(signal) for signal in active_signals]
+    foundational_count = support_states.count(EvidenceSupport.FOUNDATIONAL)
+    supporting_followup_count = support_states.count(EvidenceSupport.SUPPORTING_FOLLOWUP)
+    other_lifecycle_count = support_states.count(EvidenceSupport.OTHER_LIFECYCLE)
     unresolved_origin_count = len(
         {
             family["id"]
@@ -7609,6 +7789,7 @@ def opportunity_detail(settings: Settings, opportunity_id: str) -> dict[str, Any
         "evidence_support": {
             "foundational": foundational_count,
             "supporting_followups": supporting_followup_count,
+            "other_lifecycle": other_lifecycle_count,
             "unresolved_origins": unresolved_origin_count,
         },
         "organisation_evidence": [

@@ -415,6 +415,11 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             limit=int(event.get("limit") or 100),
             publication_status=event.get("publication_status"),
         )
+    if event.get("operation") == "care_foundational_evidence_diagnostic" and not event.get(
+        "requestContext"
+    ):
+        report = care_opportunity_hygiene_audit(settings, limit=1)
+        return report["support_semantics_diagnostic"]
     if event.get("operation") == "public_authority_backfill" and not event.get("requestContext"):
         return public_authority_backfill(
             settings,
