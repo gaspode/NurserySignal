@@ -26,12 +26,47 @@ from app.care_planning_review import (
 from app.config import Settings
 from app.repository import (
     _care_planning_taxonomy_evaluations,
+    _taxonomy_v2_reclassified_candidate,
     apply_care_planning_ai_approval_policy,
     apply_care_planning_fastpath_policy,
     apply_care_planning_lawfulness_policy,
     auto_reject_withdrawn_planning,
     care_planning_manual_analysis_from_rows,
 )
+
+
+def test_taxonomy_v2_catchup_selects_only_semantically_reclassified_records() -> None:
+    explicit = {
+        "extracted_facts": {
+            "planning_taxonomy_version": "care-planning-taxonomy-v2",
+            "planning_subtype": "NEW_HOME_CHANGE_OF_USE",
+            "planning_classification_history": [
+                {"taxonomy_version": "legacy", "planning_subtype": "AMBIGUOUS"}
+            ],
+        }
+    }
+    lawfulness = {
+        "extracted_facts": {
+            "planning_taxonomy_version": "care-planning-taxonomy-v2",
+            "planning_subtype": "LAWFULNESS_PROPOSED",
+            "planning_classification_history": [
+                {"taxonomy_version": "legacy", "planning_subtype": "AMBIGUOUS"}
+            ],
+        }
+    }
+    unchanged = {
+        "extracted_facts": {
+            "planning_taxonomy_version": "care-planning-taxonomy-v2",
+            "planning_subtype": "NEW_HOME_CHANGE_OF_USE",
+            "planning_classification_history": [
+                {"taxonomy_version": "legacy", "planning_subtype": "NEW_HOME_CHANGE_OF_USE"}
+            ],
+        }
+    }
+    assert _taxonomy_v2_reclassified_candidate(explicit) is True
+    assert _taxonomy_v2_reclassified_candidate(lawfulness) is True
+    assert _taxonomy_v2_reclassified_candidate(unchanged) is False
+    assert _taxonomy_v2_reclassified_candidate({"extracted_facts": {}}) is False
 
 
 def ai_approval_kwargs(**overrides):

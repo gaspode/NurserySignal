@@ -66,6 +66,7 @@ from app.planning_backfill import PlanningBackfillBounds, chunk_payload
 from app.repository import (
     care_planning_ai_approval_backlog,
     care_planning_fastpath_backlog,
+    care_planning_lawfulness_backlog,
     care_planning_lawfulness_preview,
     care_planning_manual_cohort_analysis,
     care_planning_taxonomy_preview,
@@ -1460,6 +1461,9 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                         actor=actor,
                         preview=bool(payload.get("preview", True)),
                         limit=min(max(int(payload.get("limit", 100)), 1), 100),
+                        taxonomy_catchup_only=bool(
+                            payload.get("taxonomy_catchup_only", False)
+                        ),
                     ),
                 )
             if action == "care-planning-manual-analysis" and method == "GET":
@@ -1471,7 +1475,34 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 admin_error = _require_admin(claims, settings)
                 if admin_error:
                     return admin_error
-                return _response(200, care_planning_lawfulness_preview(settings))
+                return _response(
+                    200,
+                    care_planning_lawfulness_preview(
+                        settings,
+                        taxonomy_catchup_only=(
+                            str(_query(event, "taxonomy_catchup_only") or "").lower()
+                            == "true"
+                        ),
+                    ),
+                )
+            if action == "care-planning-lawfulness-approval" and method == "POST":
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                payload = parse_json_payload(_raw_body(event))
+                actor = str(claims.get("sub") or claims.get("username") or "unknown")
+                return _response(
+                    200,
+                    care_planning_lawfulness_backlog(
+                        settings,
+                        actor=actor,
+                        preview=bool(payload.get("preview", True)),
+                        limit=min(max(int(payload.get("limit", 100)), 1), 100),
+                        taxonomy_catchup_only=bool(
+                            payload.get("taxonomy_catchup_only", False)
+                        ),
+                    ),
+                )
             if action == "review-triage-safe-approve" and method == "POST":
                 admin_error = _require_admin(claims, settings)
                 if admin_error:

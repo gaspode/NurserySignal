@@ -2527,7 +2527,8 @@ def _care_planning_ai_approval_rows(settings: Settings) -> list[dict[str, Any]]:
     with connection(settings) as conn:
         rows = conn.execute(
             """
-            SELECT rs.id, rs.vertical, rs.source_type, rs.metadata, se.review_status,
+            SELECT rs.id, rs.external_id, rs.vertical, rs.source_type, rs.metadata,
+                   se.review_status,
                    se.reviewed_by, se.extracted_facts, ai.status, ai.recommendation,
                    ai.confidence, ai.prompt_version
             FROM raw_signals rs
@@ -2546,6 +2547,7 @@ def _care_planning_ai_approval_rows(settings: Settings) -> list[dict[str, Any]]:
         ).fetchall()
     fields = (
         "id",
+        "external_id",
         "vertical",
         "source_type",
         "metadata",
@@ -2558,6 +2560,18 @@ def _care_planning_ai_approval_rows(settings: Settings) -> list[dict[str, Any]]:
         "ai_prompt_version",
     )
     return [dict(zip(fields, row)) for row in rows]
+
+
+def _taxonomy_v2_reclassified_candidate(item: dict[str, Any]) -> bool:
+    """Limit a historical catch-up to records whose semantics changed under taxonomy v2."""
+    facts = item.get("extracted_facts") or {}
+    if facts.get("planning_taxonomy_version") != CARE_PLANNING_TAXONOMY_VERSION:
+        return False
+    history = facts.get("planning_classification_history") or []
+    if not isinstance(history, list) or not history:
+        return False
+    prior = history[-1] if isinstance(history[-1], dict) else {}
+    return prior.get("planning_subtype") != facts.get("planning_subtype")
 
 
 def _care_planning_ai_approval_evaluation(
@@ -2605,11 +2619,15 @@ def _care_planning_ai_approval_evaluation(
     return eligible, exclusions, excluded_subtypes
 
 
-def care_planning_ai_approval_preview(settings: Settings, *, limit: int = 100) -> dict[str, Any]:
+def care_planning_ai_approval_preview(
+    settings: Settings, *, limit: int = 100, taxonomy_catchup_only: bool = False
+) -> dict[str, Any]:
     """Preview the exact current CareProspect AI approval cohort without mutation."""
     bounded_limit = min(max(int(limit), 1), 100)
     items = _care_planning_ai_approval_rows(settings)
     eligible, exclusions, excluded_subtypes = _care_planning_ai_approval_evaluation(items)
+    if taxonomy_catchup_only:
+        eligible = [item for item in eligible if _taxonomy_v2_reclassified_candidate(item[0])]
     subtype_counts = {subtype: 0 for subtype in sorted(CARE_PLANNING_AI_APPROVAL_SUBTYPES)}
     for item, _ in eligible:
         subtype = str((item.get("extracted_facts") or {}).get("planning_subtype"))
@@ -2639,6 +2657,7 @@ def care_planning_ai_approval_preview(settings: Settings, *, limit: int = 100) -
         },
         "batch_limit": bounded_limit,
         "batch_count": min(len(eligible), bounded_limit),
+        "taxonomy_catchup_only": taxonomy_catchup_only,
         "customer_publication_unchanged": True,
     }
 
@@ -2713,6 +2732,7 @@ def apply_care_planning_ai_approval_policy(
             "planning_outcome_policy_version": PLANNING_OUTCOME_POLICY_VERSION,
             "source_type": item["source_type"],
             "vertical": item["vertical"],
+            "planning_taxonomy_version": facts.get("planning_taxonomy_version"),
             "trigger": "admin_backlog" if trigger_actor else "live_enrichment",
         }
         if outcome == "QA_HOLDOUT":
@@ -2778,14 +2798,25 @@ def apply_care_planning_ai_approval_policy(
 
 
 def care_planning_ai_approval_backlog(
-    settings: Settings, *, actor: str, preview: bool, limit: int = 100
+    settings: Settings,
+    *,
+    actor: str,
+    preview: bool,
+    limit: int = 100,
+    taxonomy_catchup_only: bool = False,
 ) -> dict[str, Any]:
     """Preview or process one bounded batch under the current Care AI approval policy."""
     bounded_limit = min(max(int(limit), 1), 100)
     if preview:
-        return care_planning_ai_approval_preview(settings, limit=bounded_limit)
+        return care_planning_ai_approval_preview(
+            settings,
+            limit=bounded_limit,
+            taxonomy_catchup_only=taxonomy_catchup_only,
+        )
     items = _care_planning_ai_approval_rows(settings)
     eligible, _, _ = _care_planning_ai_approval_evaluation(items)
+    if taxonomy_catchup_only:
+        eligible = [item for item in eligible if _taxonomy_v2_reclassified_candidate(item[0])]
     batch = eligible[:bounded_limit]
     with connection(settings) as conn:
         published_before = conn.execute(
@@ -2829,6 +2860,8 @@ def care_planning_ai_approval_backlog(
         "preview": False,
         "policy_version": CARE_PLANNING_AI_APPROVAL_POLICY_VERSION,
         "requested": len(batch),
+        "selected": len(batch),
+        "processed": len(results),
         "updated": sum(bool(item.get("updated")) for item in results),
         "auto_approved": len(approved_ids),
         "qa_holdouts": sum(
@@ -2840,9 +2873,26 @@ def care_planning_ai_approval_backlog(
         "opportunities_reused": int(opportunities_reused),
         "relationships_created": 0,
         "relationships_reused": int(relationships_reused),
+        "match_reviews_created": 0,
+        "qa_holdout_references": [
+            {
+                "signal_id": item.get("signal_id"),
+                "external_id": next(
+                    (
+                        candidate.get("external_id")
+                        for candidate, _ in batch
+                        if str(candidate["id"]) == item.get("signal_id")
+                    ),
+                    None,
+                ),
+            }
+            for item in results
+            if item.get("updated") and item.get("outcome") == "QA_HOLDOUT"
+        ],
         "published_before": int(published_before),
         "published_after": int(published_after),
         "customer_publication_unchanged": True,
+        "taxonomy_catchup_only": taxonomy_catchup_only,
     }
 
 
@@ -2889,10 +2939,14 @@ def _care_planning_lawfulness_evaluation(
     return eligible, exclusions
 
 
-def care_planning_lawfulness_preview(settings: Settings) -> dict[str, Any]:
+def care_planning_lawfulness_preview(
+    settings: Settings, *, taxonomy_catchup_only: bool = False
+) -> dict[str, Any]:
     """Preview proposed-lawfulness v1 over the bounded pending Planning cohort."""
     items = _care_planning_ai_approval_rows(settings)
     eligible, exclusions = _care_planning_lawfulness_evaluation(items)
+    if taxonomy_catchup_only:
+        eligible = [item for item in eligible if _taxonomy_v2_reclassified_candidate(item[0])]
     with connection(settings) as conn:
         published = int(
             conn.execute(
@@ -2913,6 +2967,7 @@ def care_planning_lawfulness_preview(settings: Settings) -> dict[str, Any]:
         "exclusions": dict(sorted(exclusions.items())),
         "published_opportunities": published,
         "customer_publication_unchanged": True,
+        "taxonomy_catchup_only": taxonomy_catchup_only,
     }
 
 
@@ -2986,6 +3041,7 @@ def apply_care_planning_lawfulness_policy(
             "opportunity_creation_decision": facts.get("opportunity_creation_decision"),
             "source_type": item["source_type"],
             "vertical": item["vertical"],
+            "planning_taxonomy_version": facts.get("planning_taxonomy_version"),
             "trigger": "admin" if trigger_actor else "live_enrichment",
         }
         marker_json = Jsonb({"care_planning_lawfulness_approval": marker})
@@ -3048,6 +3104,105 @@ def apply_care_planning_lawfulness_policy(
             )
             conn.commit()
         return {"signal_id": signal_id, "outcome": outcome, "updated": bool(updated)}
+
+
+def care_planning_lawfulness_backlog(
+    settings: Settings,
+    *,
+    actor: str,
+    preview: bool,
+    limit: int = 100,
+    taxonomy_catchup_only: bool = False,
+) -> dict[str, Any]:
+    """Preview or process one bounded proposed-lawfulness batch using the live policy."""
+    bounded_limit = min(max(int(limit), 1), 100)
+    if preview:
+        return care_planning_lawfulness_preview(
+            settings, taxonomy_catchup_only=taxonomy_catchup_only
+        )
+    items = _care_planning_ai_approval_rows(settings)
+    eligible, _ = _care_planning_lawfulness_evaluation(items)
+    if taxonomy_catchup_only:
+        eligible = [item for item in eligible if _taxonomy_v2_reclassified_candidate(item[0])]
+    batch = eligible[:bounded_limit]
+    with connection(settings) as conn:
+        published_before = int(
+            conn.execute(
+                """SELECT count(*) FROM opportunities
+                   WHERE vertical = 'CHILDRENS_HOME' AND publication_status = 'PUBLISHED'"""
+            ).fetchone()[0]
+        )
+    results: list[dict[str, Any]] = []
+    failures = 0
+    for item, _ in batch:
+        try:
+            results.append(
+                apply_care_planning_lawfulness_policy(
+                    settings, str(item["id"]), trigger_actor=actor
+                )
+            )
+        except Exception:
+            failures += 1
+    approved_ids = [
+        result["signal_id"]
+        for result in results
+        if result.get("updated") and result.get("outcome") == "AUTO_APPROVE"
+    ]
+    opportunities_reused = 0
+    relationships_reused = 0
+    with connection(settings) as conn:
+        if approved_ids:
+            opportunities_reused, relationships_reused = conn.execute(
+                """
+                SELECT count(DISTINCT os.opportunity_id), count(*)
+                FROM opportunity_signals os
+                WHERE os.raw_signal_id = ANY(%s::uuid[]) AND os.status = 'ACTIVE'
+                """,
+                (approved_ids,),
+            ).fetchone()
+        published_after = int(
+            conn.execute(
+                """SELECT count(*) FROM opportunities
+                   WHERE vertical = 'CHILDRENS_HOME' AND publication_status = 'PUBLISHED'"""
+            ).fetchone()[0]
+        )
+    return {
+        "preview": False,
+        "policy_version": CARE_PLANNING_LAWFULNESS_POLICY_VERSION,
+        "selected": len(batch),
+        "processed": len(results),
+        "updated": sum(bool(item.get("updated")) for item in results),
+        "auto_approved": len(approved_ids),
+        "qa_holdouts": sum(
+            item.get("updated") and item.get("outcome") == "QA_HOLDOUT" for item in results
+        ),
+        "idempotent_skips": sum(not item.get("updated") for item in results),
+        "failures": failures,
+        "opportunities_created": 0,
+        "opportunities_reused": int(opportunities_reused),
+        "relationships_created": 0,
+        "relationships_reused": int(relationships_reused),
+        "match_reviews_created": 0,
+        "qa_holdout_references": [
+            {
+                "signal_id": item.get("signal_id"),
+                "external_id": next(
+                    (
+                        candidate.get("external_id")
+                        for candidate, _ in batch
+                        if str(candidate["id"]) == item.get("signal_id")
+                    ),
+                    None,
+                ),
+            }
+            for item in results
+            if item.get("updated") and item.get("outcome") == "QA_HOLDOUT"
+        ],
+        "published_before": published_before,
+        "published_after": published_after,
+        "customer_publication_unchanged": published_before == published_after,
+        "taxonomy_catchup_only": taxonomy_catchup_only,
+    }
 
 
 CARE_PLANNING_MANUAL_ANALYSIS_SUBTYPES = (

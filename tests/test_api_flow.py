@@ -1051,9 +1051,19 @@ def test_care_planning_manual_analysis_is_admin_only_and_read_only(monkeypatch) 
 
 
 def test_care_lawfulness_policy_preview_is_admin_only_and_read_only(monkeypatch) -> None:
+    captured = {}
     monkeypatch.setattr(
         "app.handler.care_planning_lawfulness_preview",
-        lambda settings: {"preview": True, "eligible": 0, "qa_holdouts": 0},
+        lambda settings, **kwargs: (
+            captured.update({"preview": kwargs})
+            or {"preview": True, "eligible": 0, "qa_holdouts": 0}
+        ),
+    )
+    monkeypatch.setattr(
+        "app.handler.care_planning_lawfulness_backlog",
+        lambda settings, **kwargs: (
+            captured.update({"backlog": kwargs}) or {"preview": kwargs["preview"]}
+        ),
     )
     denied = handler(
         event(
@@ -1064,11 +1074,29 @@ def test_care_lawfulness_policy_preview_is_admin_only_and_read_only(monkeypatch)
     )
     assert denied["statusCode"] == 403
     response = handler(
-        event("/admin/review-triage/care-planning/lawfulness-approval"),
+        event(
+            "/admin/review-triage/care-planning/lawfulness-approval",
+            query={"taxonomy_catchup_only": "true"},
+        ),
         None,
     )
     assert response["statusCode"] == 200
     assert json.loads(response["body"]) == {"preview": True, "eligible": 0, "qa_holdouts": 0}
+    assert captured["preview"]["taxonomy_catchup_only"] is True
+    applied = handler(
+        event(
+            "/admin/review-triage/care-planning/lawfulness-approval",
+            "POST",
+            body=json.dumps(
+                {"preview": False, "limit": 999, "taxonomy_catchup_only": True}
+            ),
+        ),
+        None,
+    )
+    assert applied["statusCode"] == 200
+    assert captured["backlog"]["preview"] is False
+    assert captured["backlog"]["limit"] == 100
+    assert captured["backlog"]["taxonomy_catchup_only"] is True
 
 
 def test_refusal_cleanup_and_safe_approve_are_bounded_admin_actions(monkeypatch) -> None:
@@ -1182,7 +1210,9 @@ def test_care_planning_backlog_actions_are_admin_only_and_bounded(monkeypatch) -
         event(
             "/admin/review-triage/care-planning/ai-approval",
             "POST",
-            body=json.dumps({"preview": True, "limit": 999}),
+            body=json.dumps(
+                {"preview": True, "limit": 999, "taxonomy_catchup_only": True}
+            ),
         ),
         None,
     )
@@ -1204,6 +1234,7 @@ def test_care_planning_backlog_actions_are_admin_only_and_bounded(monkeypatch) -
     assert fastpath_args["preview"] is True and fastpath_args["limit"] == 100
     assert ai_preview["statusCode"] == 200
     assert ai_approval_args["preview"] is True and ai_approval_args["limit"] == 100
+    assert ai_approval_args["taxonomy_catchup_only"] is True
     denied = handler(
         event(
             "/admin/review-triage/care-planning/fastpath",
