@@ -1069,6 +1069,32 @@ describe("admin frontend", () => {
     expect(apiClient).toHaveBeenCalledWith("/admin/signals/followup-1/planning-origin", expect.objectContaining({ method: "POST" }));
   });
 
+  it("shows ambiguous Planning origin candidates without choosing one", async () => {
+    const opportunity = {
+      id: "opp-ambiguous", name: "Ambiguous origin", lifecycle_stage: "PLANNING",
+      change_type: "OPENING", confidence: 0.9,
+      evidence_support: { foundational: 0, supporting_followups: 1, unresolved_origins: 1 },
+      signals: [{
+        id: "followup-ambiguous", source_type: "planning", title: "Condition discharge",
+        relationship_status: "ACTIVE", planning_families: [{
+          id: "family-ambiguous", planning_authority: "Croydon", raw_reference: "24/03385/FUL",
+          relationship_type: "REFERENCES_APPLICATION", origin_status: "AMBIGUOUS",
+          latest_recovery_status: "AMBIGUOUS",
+          latest_recovery_details: { candidates: [
+            { provider_id: "one", authority: "Sheffield", application_date: "2024-01-01", address: "1 Other Road", source_url: "https://planning.example/one" },
+            { provider_id: "two", authority: "Enfield", application_date: "2024-01-02", address: "2 Other Road", source_url: "https://planning.example/two" },
+          ] },
+        }],
+      }],
+    };
+    const apiClient = vi.fn(async () => opportunity);
+    render(<OpportunityDetail opportunityId="opp-ambiguous" apiClient={apiClient} onBack={vi.fn()} onNavigate={vi.fn()} />);
+
+    expect(await screen.findByText("Multiple referenced applications found (2)")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Retry lookup" })).toBeEnabled();
+    expect(screen.getByText((_, element) => element?.classList.contains("cell-subtitle") && element.textContent.includes("Lookup: AMBIGUOUS"))).toBeInTheDocument();
+  });
+
   it("previews a privacy-safe generated CareProspect title when the override is blank", async () => {
     const apiClient = vi.fn().mockResolvedValue({
       id: "care-opp-1",

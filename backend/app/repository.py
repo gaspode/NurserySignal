@@ -5165,14 +5165,27 @@ def queue_planning_origin_recovery(
     with connection(settings) as conn:
         rows = conn.execute(
             f"""SELECT DISTINCT f.id, f.planning_authority, f.normalized_reference,
-                               r.raw_signal_id, attempt.status, attempt.retry_after
+                               r.raw_signal_id, attempt.status, attempt.retry_after,
+                               COALESCE(opportunity.address, rs.location_hint) AS site_address,
+                               COALESCE(
+                                 opportunity.postcode, rs.metadata->>'postcode'
+                               ) AS site_postcode,
+                               opportunity.town
                 FROM planning_application_families f
                 JOIN planning_signal_family_relationships r ON r.family_id = f.id
+                JOIN raw_signals rs ON rs.id = r.raw_signal_id
                 LEFT JOIN LATERAL (
                   SELECT status, retry_after FROM planning_origin_recovery_attempts
                   WHERE family_id = f.id ORDER BY attempted_at DESC, id DESC LIMIT 1
                 ) attempt ON TRUE
-                WHERE f.vertical = 'CHILDRENS_HOME' AND f.origin_status = 'MISSING'
+                LEFT JOIN LATERAL (
+                  SELECT o.address, o.postcode, o.town
+                  FROM opportunity_signals os JOIN opportunities o ON o.id = os.opportunity_id
+                  WHERE os.raw_signal_id = r.raw_signal_id AND os.status = 'ACTIVE'
+                  ORDER BY o.created_at, o.id LIMIT 1
+                ) opportunity ON TRUE
+                WHERE f.vertical = 'CHILDRENS_HOME'
+                  AND f.origin_status IN ('MISSING', 'AMBIGUOUS')
                   AND r.relationship_type = 'REFERENCES_APPLICATION'
                   {signal_clause}
                   AND (%s OR attempt.status IS NULL
@@ -5181,8 +5194,8 @@ def queue_planning_origin_recovery(
                 ORDER BY f.id LIMIT %s""",
             [*params[:-1], force, params[-1]],
         ).fetchall()
-        queued: list[dict[str, str]] = []
-        for family_id, authority, reference, trigger_id, _, _ in rows:
+        queued: list[dict[str, Any]] = []
+        for family_id, authority, reference, trigger_id, _, _, address, postcode, town in rows:
             attempt = conn.execute(
                 """INSERT INTO planning_origin_recovery_attempts
                      (family_id, triggering_signal_id, status, details)
@@ -5194,6 +5207,7 @@ def queue_planning_origin_recovery(
                         "reason": "REFERENCED_APPLICATION_MISSING",
                         "actor": actor,
                         "policy_version": PLANNING_FAMILY_POLICY_VERSION,
+                        "provider_query": reference,
                     }),
                 ),
             ).fetchone()
@@ -5202,6 +5216,7 @@ def queue_planning_origin_recovery(
                     "attempt_id": str(attempt[0]), "family_id": str(family_id),
                     "triggering_signal_id": str(trigger_id), "planning_authority": authority,
                     "normalized_reference": reference,
+                    "site_address": address, "site_postcode": postcode, "site_town": town,
                 }
             )
         conn.commit()
@@ -5250,6 +5265,17 @@ def update_planning_origin_recovery(
                    details = details || %s, attempted_at = now()
                WHERE id = %s""",
             (status, recovered_signal_id, status, status, Jsonb(details or {}), attempt_id),
+        )
+        conn.execute(
+            """UPDATE planning_application_families f
+               SET origin_status = CASE WHEN %s = 'AMBIGUOUS' THEN 'AMBIGUOUS'
+                                        ELSE 'MISSING' END,
+                   updated_at = now()
+               FROM planning_origin_recovery_attempts attempt
+               WHERE attempt.id = %s AND attempt.family_id = f.id
+                 AND f.origin_status IN ('MISSING', 'AMBIGUOUS')
+                 AND %s IN ('NOT_FOUND', 'AMBIGUOUS', 'PROVIDER_ERROR')""",
+            (status, attempt_id, status),
         )
         conn.commit()
 
@@ -7371,11 +7397,11 @@ def opportunity_detail(settings: Settings, opportunity_id: str) -> dict[str, Any
         family_rows = conn.execute(
             """SELECT r.raw_signal_id, f.id, f.planning_authority, f.raw_reference,
                       f.normalized_reference, f.origin_status, f.primary_signal_id,
-                      r.relationship_type, attempt.status, attempt.attempted_at
+                      r.relationship_type, attempt.status, attempt.attempted_at, attempt.details
                FROM planning_signal_family_relationships r
                JOIN planning_application_families f ON f.id = r.family_id
                LEFT JOIN LATERAL (
-                 SELECT status, attempted_at FROM planning_origin_recovery_attempts
+                 SELECT status, attempted_at, details FROM planning_origin_recovery_attempts
                  WHERE family_id = f.id ORDER BY attempted_at DESC, id DESC LIMIT 1
                ) attempt ON TRUE
                WHERE r.raw_signal_id = ANY(
@@ -7430,6 +7456,7 @@ def opportunity_detail(settings: Settings, opportunity_id: str) -> dict[str, Any
                 "relationship_type": row[7],
                 "latest_recovery_status": row[8],
                 "latest_recovery_at": row[9],
+                "latest_recovery_details": row[10] or {},
             }
         )
     for signal in signals:

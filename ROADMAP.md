@@ -1240,3 +1240,13 @@ Paid-pilot activation check (2026-09-28):
   the obsolete pre-fix Ashburton delivery. None were purged or redriven. Exact next step: no code work is required;
   retry later only if Plota coverage is expected to have changed, or verify the origin directly through the council
   source before spending another provider request.
+- Targeted Plota origin recovery now mirrors reference-search semantics: it submits the preserved normalized
+  application reference without an unreliable provider-side council filter, retains only exact-reference results,
+  then resolves locally by normalized authority alias, full postcode and normalized site address. Zero exact
+  provider candidates is the only `NOT_FOUND` path; returned-but-unresolved or truncated sets are `AMBIGUOUS` and
+  retain bounded candidate summaries for admin inspection. Recovery queue messages now carry existing site context,
+  while selected origins continue through normal ingestion/review/family reconciliation. The Ashburton regression
+  covers Sheffield, Enfield and Croydon reuse of `24/03385/FUL`, with the Croydon application selected
+  deterministically. Exact next step: deploy, force-retry only Ashburton, verify one foundational plus one supporting
+  signal with no duplicate opportunity, then assess readiness for a bounded 5–10-family recovery sample. No broad
+  historical recovery is authorized.

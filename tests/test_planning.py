@@ -14,6 +14,7 @@ from app.planning import (
     PlanningQuery,
     PlanningRateLimitError,
     PlanningRecord,
+    PlanningReferenceSearchResult,
     PlotaProvider,
     candidate_decision,
     normalize_plota_record,
@@ -399,13 +400,13 @@ def test_plota_provider_reference_lookup_is_single_bounded_exact_query() -> None
         )
 
     provider = PlotaProvider("secret", opener=opener)
-    matches = provider.applications_by_reference(
-        "24 / 03385 / ful", council="London Borough of Croydon"
-    )
-    assert [item.application_id for item in matches] == ["opaque-1"]
+    search = provider.applications_by_reference("24 / 03385 / ful")
+    assert [item.application_id for item in search.candidates] == ["opaque-1"]
+    assert search.provider_query == "24 / 03385 / ful"
+    assert search.truncated is False
     assert len(requests) == 1
     assert "q=24+%2F+03385+%2F+ful" in requests[0]
-    assert "council=London+Borough+of+Croydon" in requests[0]
+    assert "council=" not in requests[0]
 
 
 def test_targeted_origin_recovery_uses_normal_ingestion_queue(monkeypatch) -> None:
@@ -413,9 +414,14 @@ def test_targeted_origin_recovery_uses_normal_ingestion_queue(monkeypatch) -> No
     queued = []
 
     class ExactProvider:
-        def applications_by_reference(self, reference, *, council, limit):
-            assert (reference, council, limit) == ("24/03385/FUL", "Croydon", 10)
-            return [record("Change of use from dwelling to a children's care home")]
+        def applications_by_reference(self, reference, *, limit):
+            assert (reference, limit) == ("24/03385/FUL", 10)
+            return PlanningReferenceSearchResult(
+                reference,
+                (record("Change of use from dwelling to a children's care home"),),
+                1,
+                False,
+            )
 
     monkeypatch.setattr("app.collector.provider_api_key_from_secret", lambda arn: "secret")
     monkeypatch.setattr("app.collector.PlotaProvider", lambda *args, **kwargs: ExactProvider())
@@ -447,8 +453,8 @@ def test_targeted_origin_recovery_cools_down_not_found(monkeypatch) -> None:
     results = []
 
     class EmptyProvider:
-        def applications_by_reference(self, reference, *, council, limit):
-            return []
+        def applications_by_reference(self, reference, *, limit):
+            return PlanningReferenceSearchResult(reference, (), 0, False)
 
     monkeypatch.setattr("app.collector.provider_api_key_from_secret", lambda arn: "secret")
     monkeypatch.setattr("app.collector.PlotaProvider", lambda *args, **kwargs: EmptyProvider())
@@ -469,6 +475,77 @@ def test_targeted_origin_recovery_cools_down_not_found(monkeypatch) -> None:
     )
     assert result == {"requests": 1, "records_fetched": 0, "signals_queued": 0}
     assert [message.status for message in results] == ["NOT_FOUND"]
+
+
+def test_targeted_origin_recovery_selects_ashburton_from_multi_council_results(
+    monkeypatch,
+) -> None:
+    results = []
+    queued = []
+
+    def origin(application_id, council, address, postcode):
+        return replace(
+            record(
+                "Alterations and change of use to a children's care home for up to 5 children",
+                address=address,
+            ),
+            application_id=application_id,
+            council=council,
+            postcode=postcode,
+            raw={"id": application_id, "reference": "24/03385/FUL"},
+        )
+
+    class MultiCouncilProvider:
+        def applications_by_reference(self, reference, *, limit):
+            assert reference == "24/03385/FUL"
+            return PlanningReferenceSearchResult(
+                reference,
+                (
+                    origin("sheffield", "Sheffield", "1 Other Road", "S1 1AA"),
+                    origin("enfield", "Enfield", "2 Other Road", "EN1 1AA"),
+                    origin(
+                        "croydon",
+                        "London Borough of Croydon",
+                        "58 Ashburton Road Croydon CR0 6AN",
+                        "CR0 6AN",
+                    ),
+                ),
+                3,
+                False,
+            )
+
+    monkeypatch.setattr("app.collector.provider_api_key_from_secret", lambda arn: "secret")
+    monkeypatch.setattr(
+        "app.collector.PlotaProvider", lambda *args, **kwargs: MultiCouncilProvider()
+    )
+    monkeypatch.setattr(
+        "app.collector.send_planning_origin_recovery_result",
+        lambda settings, message: results.append(message),
+    )
+    monkeypatch.setattr(
+        "app.collector.send_ingestion_message", lambda settings, message: queued.append(message)
+    )
+
+    result = recover_planning_origin(
+        Settings(
+            planning_provider_secret_arn="arn:example",
+            ingestion_queue_url="https://sqs.example/ingestion",
+            enrichment_queue_url="https://sqs.example/enrichment",
+        ),
+        {
+            "attempt_id": "attempt-ashburton",
+            "normalized_reference": "24/03385/FUL",
+            "planning_authority": "Croydon",
+            "site_address": "58 Ashburton Road Croydon CR0 6AN",
+            "site_postcode": "CR0 6AN",
+        },
+    )
+
+    assert result == {"requests": 1, "records_fetched": 3, "signals_queued": 1}
+    assert queued[0].signal["external_id"] == "plota:croydon"
+    assert results[0].status == "FOUND"
+    assert results[0].details["selected_candidate_id"] == "croydon"
+    assert results[0].details["selection_reason"] == "unique_normalized_authority_match"
 
 
 def test_planning_signal_maps_metadata_and_stable_identity() -> None:

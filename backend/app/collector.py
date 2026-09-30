@@ -20,6 +20,7 @@ from app.planning import (
     planning_signal,
 )
 from app.planning_backfill import add_counts, bounds_from_chunk, chunk_payload
+from app.planning_origin import candidate_summary, resolve_origin_candidate
 from app.queueing import (
     PlanningOriginRecoveryResultMessage,
     SignalIngestionMessage,
@@ -60,29 +61,42 @@ def recover_planning_origin(settings: Settings, payload: dict[str, Any]) -> dict
     try:
         api_key = provider_api_key_from_secret(settings.planning_provider_secret_arn)
         provider = PlotaProvider(api_key, base_url=settings.planning_provider_base_url)
-        matches = provider.applications_by_reference(reference, council=authority, limit=10)
-        if not matches:
+        search = provider.applications_by_reference(reference, limit=10)
+        resolution = resolve_origin_candidate(
+            search.candidates,
+            authority=authority,
+            postcode=payload.get("site_postcode"),
+            address=payload.get("site_address"),
+            truncated=search.truncated,
+        )
+        candidate_details = [candidate_summary(candidate) for candidate in search.candidates]
+        base_details = {
+            "requests": 1,
+            "provider_query": search.provider_query,
+            "records_returned": search.returned_count,
+            "exact_reference_candidates": len(search.candidates),
+            "candidate_set_truncated": search.truncated,
+            "candidates": candidate_details,
+            "selection_reason": resolution.reason,
+        }
+        if resolution.status == "NOT_FOUND":
             status = "NOT_FOUND"
-            details = {"requests": 1, "records_returned": 0}
+            details = base_details
             result = {"requests": 1, "records_fetched": 0, "signals_queued": 0}
-        elif len(matches) > 1:
+        elif resolution.status == "AMBIGUOUS" or resolution.selected is None:
             status = "AMBIGUOUS"
-            details = {"requests": 1, "records_returned": len(matches)}
+            details = base_details
             result = {
                 "requests": 1,
-                "records_fetched": len(matches),
+                "records_fetched": len(search.candidates),
                 "signals_queued": 0,
             }
         else:
-            record = matches[0]
+            record = resolution.selected
             decision = classify_care_planning(record)
             if not decision.matched:
-                status = "NOT_FOUND"
-                details = {
-                    "requests": 1,
-                    "records_returned": 1,
-                    "candidate_excluded": True,
-                }
+                status = "AMBIGUOUS"
+                details = {**base_details, "selected_candidate_excluded": True}
                 result = {"requests": 1, "records_fetched": 1, "signals_queued": 0}
             else:
                 signal = care_planning_signal(record, decision, historical_source_date=True)
@@ -98,11 +112,16 @@ def recover_planning_origin(settings: Settings, payload: dict[str, Any]) -> dict
                 send_ingestion_message(settings, SignalIngestionMessage.from_json(body))
                 status = "FOUND"
                 details = {
-                    "requests": 1,
-                    "records_returned": 1,
+                    **base_details,
                     "external_id": signal["external_id"],
+                    "selected_candidate_id": record.application_id,
+                    "selected_candidate_authority": record.council,
                 }
-                result = {"requests": 1, "records_fetched": 1, "signals_queued": 1}
+                result = {
+                    "requests": 1,
+                    "records_fetched": len(search.candidates),
+                    "signals_queued": 1,
+                }
     except Exception as exc:
         logger.exception("planning_origin_recovery_failed attempt_id=%s", attempt_id)
         status = "PROVIDER_ERROR"

@@ -160,6 +160,14 @@ class PlanningRecord:
     raw: dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class PlanningReferenceSearchResult:
+    provider_query: str
+    candidates: tuple[PlanningRecord, ...]
+    returned_count: int
+    truncated: bool
+
+
 class PlanningProvider(Protocol):
     def applications(self, query: PlanningQuery) -> Iterator[PlanningRecord]: ...
 
@@ -331,22 +339,21 @@ class PlotaProvider:
                 break
 
     def applications_by_reference(
-        self, reference: str, *, council: str | None = None, limit: int = 10
-    ) -> list[PlanningRecord]:
-        """Perform one bounded provider query and retain exact reference matches only."""
+        self, reference: str, *, limit: int = 10
+    ) -> PlanningReferenceSearchResult:
+        """Search cross-authority by reference and retain exact reference matches only."""
         from app.planning_families import normalize_planning_reference
 
         normalized = normalize_planning_reference(reference)
         if not normalized:
             raise ValueError("invalid planning reference")
+        query_value = str(reference).strip()
         params: dict[str, Any] = {
             "nation": "england",
-            "q": reference,
+            "q": query_value,
             "limit": min(max(int(limit), 1), 10),
             "include_contact": "false",
         }
-        if council:
-            params["council"] = council
         payload = self._page(params)
         matches: list[PlanningRecord] = []
         for row in payload["data"]:
@@ -357,7 +364,12 @@ class PlotaProvider:
                 == normalized
             ):
                 matches.append(record)
-        return matches
+        return PlanningReferenceSearchResult(
+            provider_query=query_value,
+            candidates=tuple(matches),
+            returned_count=len(payload["data"]),
+            truncated=bool((payload.get("meta") or {}).get("next_cursor")),
+        )
 
 
 @dataclass(frozen=True)
