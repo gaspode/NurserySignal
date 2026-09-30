@@ -1010,3 +1010,35 @@ Paid-pilot activation check (2026-09-28):
   changes or infrastructure drift. Next gate: inspect future deterministic QA holdouts and keep the 10% rate until this small
   policy has prospective production evidence; do not broaden into existing-lawfulness or follow-up
   subtypes.
+- `care-planning-taxonomy-v2` is deployed and has reclassified the 74-record pending CareProspect
+  Planning cohort without changing review decisions, AI history or customer publication. The taxonomy
+  now distinguishes mixed-use new homes, material expansion/capacity change and cessation/change away
+  from care; it also applies direction-aware use parsing, recognises broader proposed-lawfulness
+  wording, and gives current variation/discharge purpose precedence over quoted prior permissions.
+  Production preview found 53 semantic changes and no link to a published opportunity. The bounded
+  reclassification completed with 74 rows versioned, 53 changed and zero errors; a repeat invocation
+  made zero writes and reported 74 idempotent skips. Historical classification facts are retained in
+  bounded per-signal history and manually reviewed records remain untouched.
+- The largest corrected transitions were 23 AMBIGUOUS to LAWFULNESS_PROPOSED and six AMBIGUOUS to
+  NEW_HOME_CHANGE_OF_USE. Two reversed-use records moved from NEW_HOME_CHANGE_OF_USE to
+  CESSATION_OR_CHANGE_AWAY_FROM_CARE; one quoted prior permission moved to CONDITION_DISCHARGE; one
+  retrospective application moved to FOLLOW_UP_OTHER; and one explicit mixed scheme moved to
+  NEW_HOME_MIXED_USE. Pending distribution is now: 23 proposed lawfulness, 12 condition discharge,
+  nine change-of-use openings, nine ambiguous, five condition variations, four other follow-ups, four
+  other explicit openings, three existing-use lawfulness, two non-material amendments, two cessations
+  and one mixed-use new home. Rule/AI disagreements fell from 69 to 40; AI-uncertain remains five and
+  manual-review-required is 29. The nine remaining ambiguous records are genuinely unclear or include
+  adult-care/nursery-only, unspecified lawfulness direction, terse C2 wording, or procedural mixed-use
+  references.
+- Existing approval policies were not executed against the reclassified backlog. Read-only preview
+  shows six records would qualify for `care-planning-ai-approval-v1.1` (all non-holdout change-of-use)
+  and 23 for `care-planning-lawfulness-proposed-v1` (21 approvals and two stable QA holdouts).
+  Published CareProspect inventory remains six and customer publication remains manual. Commits
+  `7ce427d` and `543941c` deployed successfully in runs `36690440062` and `36691460482`; 381 backend
+  tests, 78 frontend tests, Ruff, frontend build, Terraform format/validation, API/database and HTTPS
+  health pass. Active ingestion/enrichment queues and their DLQs are empty; the five previously retained
+  collector-manual-run DLQ messages remain untouched. The post-deployment plan contains only package
+  hashes/frontend build artefacts generated locally rather than an infrastructure configuration change.
+  Exact next step: manually inspect the nine remaining AMBIGUOUS records and the non-opening disagreement
+  buckets, then separately decide whether to process the 29 existing-policy candidates; no historical
+  backlog auto-approval occurred in this taxonomy task.
