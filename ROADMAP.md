@@ -1062,3 +1062,33 @@ Paid-pilot activation check (2026-09-28):
   home. No policy scope, holdout rate, unsupported draft opportunity or customer publication rule
   changed. Exact next step: manually review the remaining semantic disagreement categories; no further
   catch-up data work is required.
+- The read-only CareProspect opportunity-hygiene audit inspected the complete 1,143-record
+  CHILDRENS_HOME inventory and made no opportunity, relationship, review or publication changes. The
+  mutually exclusive result is 754 VALID_SUPPORTED, zero DUPLICATE_CANDIDATE, zero
+  SUPERSEDED_CANDIDATE, 345 UNSUPPORTED_ORPHAN_CANDIDATE, 14
+  MANUAL_OR_ADMIN_TOUCHED_PRESERVE and 30 NEEDS_INVESTIGATION. The preserve cohort comprises all six
+  published opportunities plus eight existing merge-chain records; every published opportunity has
+  one current foundational Planning signal and no audit warning. Exact duplicate checks found no
+  unresolved candidate under existing shared-signal, canonical-site or exact operator/postcode/change
+  semantics. The 30 investigation records have active approved Planning evidence but lack decisive
+  current event semantics, so they remain preserved rather than being treated as orphans.
+- The 345 unsupported candidates are all unpublished drafts and have explicit evidence-supported root
+  causes: 295 SIGNAL_REJECTED, 32 OLD_CREATION_RULE, nine PLANNING_REFUSED, five PLANNING_WITHDRAWN
+  and four TAXONOMY_RECLASSIFIED. This broader inventory explains why it is larger than both previous
+  diagnostics: the earlier approximately-20 figure covered only draft shells linked to one bounded
+  refusal-cleanup batch with no other active support, while the approximately-96 query covered drafts
+  supported only by negative/follow-up Planning subtypes. Neither included the full 295-record rejected-
+  signal shell population, so the three figures are not directly comparable. A hypothetical lifecycle-
+  safe cleanup would preview 345 retire/inactivate candidates, zero new merge or supersede candidates,
+  and 44 preserve-for-human-review records; hard deletion is not recommended and no cleanup was run.
+- Inventory composition is 1,137 draft and six published; 1,088 OPENING, 52 EXPANSION and three
+  RELOCATION; active source mix is 1,135 Planning and eight none (the existing merged shells). A broad
+  factual customer-readiness screen finds 749 supported unpublished records with usable geography,
+  opening/expansion semantics and no duplicate, supersession or warning; only a bounded 25-record set is
+  returned for later manual publication review and this is not a publication recommendation by itself.
+  Audit commits `455b849` and `3c4d552` deployed successfully in runs `36698309484` and `36699380921`.
+  Backend tests pass (387), frontend tests pass (78), Ruff/build/Terraform format and validation pass,
+  API/database and CareProspect HTTPS health pass. Active queues and non-collector DLQs are empty; the
+  five retained collector-manual-run DLQ messages remain untouched. Exact next step: review the 30
+  unresolved cases and a bounded sample of each orphan root-cause cohort before authorising any
+  lifecycle mutation; customer publication remains manual.
