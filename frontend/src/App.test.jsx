@@ -1037,6 +1037,47 @@ describe("admin frontend", () => {
     expect(window.location.hash).toBe("#/opportunities/opp-1?from=opportunity-hygiene&page=2");
   });
 
+  it("shows authoritative Planning semantics without cluttering non-Planning evidence", async () => {
+    const apiClient = vi.fn().mockResolvedValue({
+      id: "opp-planning-semantics",
+      name: "New children's home — Exampletown",
+      lifecycle_stage: "PLANNING",
+      change_type: "OPENING",
+      confidence: 0.95,
+      signals: [
+        { id: "approved", source_type: "planning", title: "C3 to C2 change", relationship_status: "ACTIVE", planning_outcome: "APPROVED", planning_decision_raw: "Grant Permission Subject To Conditions", planning_status_raw: "Decided", planning_subtype: "NEW_HOME_CHANGE_OF_USE", opportunity_creation_decision: "CREATE_OPPORTUNITY" },
+        { id: "followup", source_type: "planning", title: "Condition details", relationship_status: "ACTIVE", planning_outcome: "APPROVED", planning_subtype: "CONDITION_DISCHARGE", opportunity_creation_decision: "SUPPORT_EXISTING_ONLY" },
+        { id: "refused", source_type: "planning", title: "Refused opening", relationship_status: "ACTIVE", planning_outcome: "REFUSED", planning_decision_raw: "Refused LUC", planning_subtype: "NEW_HOME_OTHER_EXPLICIT", opportunity_creation_decision: "CREATE_OPPORTUNITY", planning_consistency_warning: true },
+        { id: "withdrawn", source_type: "planning", title: "Withdrawn application", relationship_status: "ACTIVE", planning_outcome: "WITHDRAWN", planning_subtype: "AMBIGUOUS", opportunity_creation_decision: "REVIEW" },
+        { id: "pending", source_type: "planning", title: "Pending lawfulness", relationship_status: "ACTIVE", planning_outcome: "PENDING", planning_subtype: "LAWFULNESS_PROPOSED", opportunity_creation_decision: "CREATE_OPPORTUNITY" },
+        { id: "missing", source_type: "planning", title: "Historical planning record", relationship_status: "ACTIVE", planning_outcome: "UNKNOWN", planning_subtype: null, opportunity_creation_decision: null },
+        { id: "recruitment", source_type: "recruitment", title: "Registered manager vacancy", relationship_status: "ACTIVE" },
+      ],
+    });
+
+    render(<OpportunityDetail opportunityId="opp-planning-semantics" apiClient={apiClient} onBack={vi.fn()} />);
+
+    const approved = (await screen.findByText("C3 to C2 change")).closest("article");
+    expect(approved).toHaveTextContent("Decision: Approved");
+    expect(approved).toHaveTextContent("Explicit new home — change of use");
+    expect(approved).toHaveTextContent("Opportunity action: Create opportunity");
+    expect(approved).toHaveTextContent("Council decision: Grant Permission Subject To Conditions");
+    expect(approved).toHaveTextContent("Council status: Decided");
+    expect(within(approved).getByText("Approved")).toHaveClass("badge-approved");
+
+    const followup = screen.getByText("Condition details").closest("article");
+    expect(followup).toHaveTextContent("Condition discharge");
+    expect(followup).toHaveTextContent("Support existing only");
+    const refused = screen.getByText("Refused opening").closest("article");
+    expect(within(refused).getByText("Refused")).toHaveClass("badge-rejected");
+    expect(refused).toHaveTextContent("Council decision: Refused LUC");
+    expect(refused).toHaveTextContent("Negative Planning outcome on active opportunity evidence");
+    expect(within(screen.getByText("Withdrawn application").closest("article")).getByText("Withdrawn")).toHaveClass("badge-rejected");
+    expect(within(screen.getByText("Pending lawfulness").closest("article")).getByText("Pending")).toHaveClass("badge-pending");
+    expect(screen.getByText("Historical planning record").closest("article")).toHaveTextContent("Decision: Unknown");
+    expect(screen.getByText("Registered manager vacancy").closest("article")).not.toHaveTextContent("Decision:");
+  });
+
   it("preserves hygiene review context and exposes planning-family recovery", async () => {
     const opportunity = {
       id: "opp-2", name: "Care home evidence", lifecycle_stage: "PLANNING",

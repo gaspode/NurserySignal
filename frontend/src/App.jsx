@@ -92,6 +92,35 @@ function planningSubtypeLabel(value) {
   }[value] || titleCase(value);
 }
 
+function planningOutcomeTone(value) {
+  if (["APPROVED", "APPEAL_ALLOWED"].includes(value)) return "approved";
+  if (["REFUSED", "WITHDRAWN", "APPEAL_DISMISSED"].includes(value)) return "rejected";
+  if (["PENDING", "REFUSED_UNDER_APPEAL"].includes(value)) return "pending";
+  return "neutral";
+}
+
+function planningOutcomeLabel(value) {
+  return {
+    APPROVED: "Approved",
+    REFUSED: "Refused",
+    WITHDRAWN: "Withdrawn",
+    PENDING: "Pending",
+    REFUSED_UNDER_APPEAL: "Refused under appeal",
+    APPEAL_ALLOWED: "Appeal allowed",
+    APPEAL_DISMISSED: "Appeal dismissed",
+    UNKNOWN: "Unknown",
+  }[value] || titleCase(value);
+}
+
+function opportunityActionLabel(value) {
+  return {
+    CREATE_OPPORTUNITY: "Create opportunity",
+    SUPPORT_EXISTING_ONLY: "Support existing only",
+    REVIEW: "Review",
+    IGNORE_FOR_OPPORTUNITY: "Ignore for opportunity",
+  }[value] || titleCase(value);
+}
+
 function verticalName(value) {
   return { NURSERY: "NurserySignal", CHILDRENS_HOME: "CareProspect", DENTAL: "DentalSignal" }[value] || titleCase(value);
 }
@@ -1033,11 +1062,18 @@ function OpportunityEvidenceSupport({ support, activeSignalCount }) {
 
 function PlanningFamilyMeta({ signal, onFindOrigin, busy }) {
   const families = signal.planning_families || [];
-  if (!families.length) return null;
-  return <div className="planning-family-meta">{families.map((family) => {
+  return <><PlanningEvidenceMeta signal={signal} />{families.length > 0 && <div className="planning-family-meta">{families.map((family) => {
     const candidates = family.latest_recovery_details?.candidates || [];
     return <div key={`${family.id}-${family.relationship_type}`}><Badge>{family.relationship_type === "PRIMARY_APPLICATION" ? "Foundational application" : "Supporting follow-up"}</Badge> <span className="cell-subtitle">{family.planning_authority} · {family.raw_reference} · {titleCase(family.origin_status)}</span>{family.latest_recovery_status && <span className="cell-subtitle"> · Lookup: {titleCase(family.latest_recovery_status)}</span>}{family.latest_recovery_status === "AMBIGUOUS" && candidates.length > 0 && <details><summary>Multiple referenced applications found ({candidates.length})</summary><ul>{candidates.map((candidate) => <li key={candidate.provider_id}><strong>{candidate.authority || "Unknown authority"}</strong> · {candidate.application_date || "Date unavailable"} · {candidate.address || candidate.postcode || "Location unavailable"}{candidate.source_url && <>{" "}<a href={safeExternalUrl(candidate.source_url) || undefined} target="_blank" rel="noreferrer">Open candidate</a></>}</li>)}</ul></details>}{family.relationship_type === "REFERENCES_APPLICATION" && ["MISSING", "AMBIGUOUS"].includes(family.origin_status) && <button className="button ghost" disabled={busy || family.latest_recovery_status === "QUEUED" || family.latest_recovery_status === "RUNNING"} onClick={() => onFindOrigin(signal.id, Boolean(family.latest_recovery_status))}>{family.latest_recovery_status ? "Retry lookup" : "Find referenced application"}</button>}</div>;
-  })}</div>;
+  })}</div>}</>;
+}
+
+function PlanningEvidenceMeta({ signal }) {
+  if (signal.source_type !== "planning") return null;
+  const outcome = signal.planning_outcome || "UNKNOWN";
+  const rawDecision = signal.planning_decision_raw;
+  const rawStatus = signal.planning_status_raw;
+  return <div className="planning-evidence-block"><div className="planning-evidence-meta"><span>Decision: <Badge tone={planningOutcomeTone(outcome)}>{planningOutcomeLabel(outcome)}</Badge></span><span>{planningSubtypeLabel(signal.planning_subtype)}</span><span>Opportunity action: {opportunityActionLabel(signal.opportunity_creation_decision)}</span></div>{rawDecision && <span className="cell-subtitle">Council decision: {rawDecision}</span>}{rawStatus && rawStatus !== rawDecision && <span className="cell-subtitle">Council status: {rawStatus}</span>}{signal.planning_consistency_warning && <p className="hygiene-warning">Negative Planning outcome on active opportunity evidence</p>}</div>;
 }
 
 export function CustomersPage({ apiClient }) {

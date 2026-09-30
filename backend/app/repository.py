@@ -53,7 +53,11 @@ from app.correlation import (
 )
 from app.customer_projection import generated_customer_summary, generated_customer_title
 from app.db import connection
-from app.evidence_support import EvidenceSupport, classify_evidence_support
+from app.evidence_support import (
+    EvidenceSupport,
+    classify_evidence_support,
+    planning_timeline_projection,
+)
 from app.ingestion import NormalizedSignal
 from app.opportunity_hygiene import (
     HYGIENE_CATEGORIES,
@@ -7958,6 +7962,7 @@ def opportunity_detail(settings: Settings, opportunity_id: str) -> dict[str, Any
         )
     for signal in signals:
         signal["planning_families"] = family_by_signal.get(str(signal["id"]), [])
+        signal.update(planning_timeline_projection(signal))
     active_signals = [signal for signal in signals if signal["relationship_status"] == "ACTIVE"]
     support_states = [classify_evidence_support(signal) for signal in active_signals]
     foundational_count = support_states.count(EvidenceSupport.FOUNDATIONAL)

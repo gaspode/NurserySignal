@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import pytest
-from app.evidence_support import EvidenceSupport, classify_evidence_support
+from app.evidence_support import (
+    EvidenceSupport,
+    classify_evidence_support,
+    planning_timeline_projection,
+)
 from app.opportunity_hygiene import audit_opportunities
 
 
@@ -169,3 +173,45 @@ def test_hygiene_uses_same_foundational_semantics() -> None:
     assert classify_evidence_support(relationship) is EvidenceSupport.FOUNDATIONAL
     assert report["items"][0]["category"] == "VALID_SUPPORTED"
     assert report["items"][0]["supporting_signal_count"] == 1
+
+
+def test_planning_timeline_projects_canonical_and_raw_semantics() -> None:
+    signal = planning_signal(subtype="NEW_HOME_CHANGE_OF_USE")
+    signal["metadata"] = {
+        "decision": "Grant Permission Subject To Conditions",
+        "planning_status": "Decided",
+    }
+
+    projection = planning_timeline_projection(signal)
+
+    assert projection == {
+        "planning_outcome": "APPROVED",
+        "planning_outcome_policy_version": "planning-outcome-v1",
+        "planning_decision_raw": "Grant Permission Subject To Conditions",
+        "planning_status_raw": "Decided",
+        "planning_subtype": "NEW_HOME_CHANGE_OF_USE",
+        "opportunity_creation_decision": "CREATE_OPPORTUNITY",
+        "evidence_support_classification": "FOUNDATIONAL",
+        "planning_consistency_warning": False,
+    }
+
+
+def test_planning_timeline_flags_negative_create_semantics() -> None:
+    signal = planning_signal(planning_status="Refused")
+    projection = planning_timeline_projection(signal)
+    assert projection["planning_outcome"] == "REFUSED"
+    assert projection["planning_status_raw"] == "Refused"
+    assert projection["planning_consistency_warning"] is True
+
+
+def test_planning_timeline_missing_fields_and_non_planning_degrade_cleanly() -> None:
+    signal = planning_signal()
+    signal["metadata"] = {}
+    signal["extracted_facts"] = {}
+    projection = planning_timeline_projection(signal)
+    assert projection["planning_outcome"] == "UNKNOWN"
+    assert projection["planning_decision_raw"] is None
+    assert projection["planning_status_raw"] is None
+    assert projection["planning_subtype"] is None
+    assert projection["opportunity_creation_decision"] is None
+    assert planning_timeline_projection({"source_type": "recruitment"}) == {}

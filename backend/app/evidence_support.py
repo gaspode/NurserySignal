@@ -3,7 +3,12 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Any
 
-from app.planning_outcomes import PlanningOutcome, canonical_planning_outcome
+from app.planning_outcomes import (
+    PLANNING_OUTCOME_POLICY_VERSION,
+    PlanningOutcome,
+    canonical_planning_outcome,
+    structured_planning_fields,
+)
 
 
 class EvidenceSupport(StrEnum):
@@ -108,3 +113,45 @@ def classify_evidence_support(signal: dict[str, Any]) -> EvidenceSupport:
     if decision == "SUPPORT_EXISTING_ONLY" or "REFERENCES_APPLICATION" in family_relationships:
         return EvidenceSupport.SUPPORTING_FOLLOWUP
     return EvidenceSupport.NON_SUPPORTING
+
+
+def planning_timeline_projection(signal: dict[str, Any]) -> dict[str, Any]:
+    """Project compact, authoritative Planning semantics for the admin timeline."""
+    if str(signal.get("source_type") or "").lower() != "planning":
+        return {}
+    metadata = signal.get("metadata") if isinstance(signal.get("metadata"), dict) else {}
+    facts = (
+        signal.get("extracted_facts")
+        if isinstance(signal.get("extracted_facts"), dict)
+        else {}
+    )
+    outcome = canonical_planning_outcome(metadata)
+    raw_fields = {
+        field: value
+        for field, value in structured_planning_fields(metadata)
+        if isinstance(value, (str, int, float)) and str(value).strip()
+    }
+    decision_raw = raw_fields.get("decision") or raw_fields.get(
+        "provider_record.decision.outcome"
+    )
+    status_raw = (
+        raw_fields.get("planning_status")
+        or raw_fields.get("status")
+        or raw_fields.get("provider_record.status")
+    )
+    support = classify_evidence_support(signal)
+    decision = str(facts.get("opportunity_creation_decision") or "") or None
+    return {
+        "planning_outcome": outcome.outcome.value,
+        "planning_outcome_policy_version": PLANNING_OUTCOME_POLICY_VERSION,
+        "planning_decision_raw": str(decision_raw) if decision_raw is not None else None,
+        "planning_status_raw": str(status_raw) if status_raw is not None else None,
+        "planning_subtype": facts.get("planning_subtype"),
+        "opportunity_creation_decision": decision,
+        "evidence_support_classification": support.value,
+        "planning_consistency_warning": (
+            signal.get("relationship_status") == "ACTIVE"
+            and decision == "CREATE_OPPORTUNITY"
+            and outcome.outcome in NEGATIVE_PLANNING_OUTCOMES
+        ),
+    }
