@@ -70,6 +70,7 @@ from app.organisation_types import (
 )
 from app.planning_families import (
     PLANNING_FAMILY_POLICY_VERSION,
+    SUPPORT_ONLY_SUBTYPES,
     PlanningFamilyIdentity,
     followup_can_support_opportunity,
     is_foundational_planning_signal,
@@ -108,6 +109,8 @@ from app.verticals import (
     validate_vertical,
     validate_vertical_filter,
 )
+
+PLANNING_FAMILY_HISTORICAL_BACKFILL_VERSION = "planning-family-historical-backfill-v1"
 
 
 def record_admin_audit(
@@ -4834,6 +4837,238 @@ def planning_family_historical_preview(settings: Settings, *, limit: int = 2500)
         "external_provider_requests": 0,
         "read_only": True,
     }
+
+
+def backfill_historical_planning_family_metadata(
+    settings: Settings,
+    *,
+    actor: str,
+    preview: bool = True,
+    limit: int = 100,
+    offset: int = 0,
+) -> dict[str, Any]:
+    """Create local family provenance for historical Care Planning follow-ups only."""
+    bounded_limit = min(max(int(limit), 1), 100)
+    bounded_offset = max(int(offset), 0)
+    subtype_values = sorted(SUPPORT_ONLY_SUBTYPES)
+    with connection(settings) as conn:
+        rows = conn.execute(
+            """SELECT rs.id, rs.external_id, rs.title, rs.raw_text, rs.metadata,
+                      se.extracted_facts
+               FROM raw_signals rs JOIN signal_enrichments se ON se.raw_signal_id = rs.id
+               WHERE rs.vertical = 'CHILDRENS_HOME' AND rs.source_type = 'planning'
+                 AND se.extracted_facts->>'planning_subtype' = ANY(%s)
+               ORDER BY rs.created_at, rs.id LIMIT %s OFFSET %s""",
+            (subtype_values, bounded_limit, bounded_offset),
+        ).fetchall()
+        candidate_rows = conn.execute(
+            """SELECT rs.id, rs.external_id, rs.metadata, se.extracted_facts
+               FROM raw_signals rs JOIN signal_enrichments se ON se.raw_signal_id = rs.id
+               WHERE rs.vertical = 'CHILDRENS_HOME' AND rs.source_type = 'planning'"""
+        ).fetchall()
+
+        primaries: dict[tuple[str, str], list[tuple[Any, dict[str, Any], dict[str, Any]]]] = {}
+        for candidate_id, external_id, metadata, facts in candidate_rows:
+            metadata = metadata if isinstance(metadata, dict) else {}
+            authority_key = normalize_planning_authority(planning_authority(metadata))
+            reference = primary_planning_reference(external_id, metadata)
+            if authority_key and reference:
+                primaries.setdefault((authority_key, reference), []).append(
+                    (
+                        candidate_id,
+                        metadata,
+                        facts if isinstance(facts, dict) else {},
+                    )
+                )
+
+        result = {
+            "preview": bool(preview),
+            "policy_version": PLANNING_FAMILY_HISTORICAL_BACKFILL_VERSION,
+            "signals_inspected": len(rows),
+            "usable_prior_reference_signals": 0,
+            "already_family_linked": 0,
+            "missing_family_metadata": 0,
+            "exact_stored_origins_available": 0,
+            "families_created": 0,
+            "families_reused": 0,
+            "references_relationships_created": 0,
+            "origins_marked_missing": 0,
+            "stored_origins_resolved_locally": 0,
+            "ambiguous_or_conflicting": 0,
+            "missing_authority_or_reference": 0,
+            "multiple_reference_signals": 0,
+            "skipped": 0,
+            "failures": 0,
+            "plota_requests": 0,
+            "plota_records_consumed": 0,
+            "external_provider_calls": 0,
+            "limit": bounded_limit,
+            "offset": bounded_offset,
+        }
+        seen_existing_signals: set[str] = set()
+        seen_missing_signals: set[str] = set()
+        counted_origin_keys: set[tuple[str, str]] = set()
+        counted_family_keys: set[tuple[str, str]] = set()
+        counted_missing_keys: set[tuple[str, str]] = set()
+
+        for signal_id, external_id, title, raw_text, metadata, facts in rows:
+            metadata = metadata if isinstance(metadata, dict) else {}
+            facts = facts if isinstance(facts, dict) else {}
+            raw = {
+                "id": signal_id,
+                "external_id": external_id,
+                "title": title,
+                "raw_text": raw_text,
+                "metadata": metadata,
+            }
+            authority = planning_authority(metadata)
+            authority_key = normalize_planning_authority(authority)
+            references = prior_planning_references(raw, facts)
+            if not authority_key or not references:
+                result["missing_authority_or_reference"] += 1
+                result["skipped"] += 1
+                continue
+            result["usable_prior_reference_signals"] += 1
+            if len(references) > 1:
+                result["multiple_reference_signals"] += 1
+            signal_has_existing = True
+            signal_has_missing = False
+            for raw_reference, normalized_reference in references:
+                identity = PlanningFamilyIdentity.create(authority, raw_reference)
+                if identity is None:
+                    result["missing_authority_or_reference"] += 1
+                    result["skipped"] += 1
+                    continue
+                key = (identity.normalized_authority, identity.normalized_reference)
+                candidates = [
+                    candidate
+                    for candidate in primaries.get(key, [])
+                    if candidate[0] != signal_id
+                ]
+                foundations = [
+                    candidate
+                    for candidate in candidates
+                    if is_foundational_planning_signal(
+                        candidate[2].get("planning_subtype"), candidate[1]
+                    )
+                ]
+                negatives = [
+                    candidate
+                    for candidate in candidates
+                    if canonical_planning_outcome(candidate[1]).outcome
+                    in {
+                        PlanningOutcome.REFUSED,
+                        PlanningOutcome.WITHDRAWN,
+                        PlanningOutcome.APPEAL_DISMISSED,
+                    }
+                ]
+                if len(foundations) > 1 or len(negatives) > 1:
+                    result["ambiguous_or_conflicting"] += 1
+                    result["skipped"] += 1
+                    continue
+                if (foundations or negatives) and key not in counted_origin_keys:
+                    result["exact_stored_origins_available"] += 1
+                    counted_origin_keys.add(key)
+
+                family = conn.execute(
+                    """SELECT id, origin_status FROM planning_application_families
+                       WHERE vertical = 'CHILDRENS_HOME' AND normalized_authority = %s
+                         AND normalized_reference = %s""",
+                    key,
+                ).fetchone()
+                relationship = None
+                if family:
+                    relationship = conn.execute(
+                        """SELECT 1 FROM planning_signal_family_relationships
+                           WHERE family_id = %s AND raw_signal_id = %s
+                             AND relationship_type = 'REFERENCES_APPLICATION'""",
+                        (family[0], signal_id),
+                    ).fetchone()
+                if relationship:
+                    continue
+                signal_has_existing = False
+                signal_has_missing = True
+                if not family and key not in counted_family_keys:
+                    result["families_created"] += 1
+                    counted_family_keys.add(key)
+                elif family and key not in counted_family_keys:
+                    result["families_reused"] += 1
+                    counted_family_keys.add(key)
+                result["references_relationships_created"] += 1
+                if not foundations and not negatives and key not in counted_missing_keys:
+                    result["origins_marked_missing"] += 1
+                    counted_missing_keys.add(key)
+                if foundations and key not in counted_missing_keys:
+                    result["stored_origins_resolved_locally"] += 1
+                    counted_missing_keys.add(key)
+
+                if preview:
+                    continue
+                try:
+                    family = family or _planning_family_row(conn, identity, "CHILDRENS_HOME")
+                    conn.execute(
+                        """INSERT INTO planning_signal_family_relationships
+                             (family_id, raw_signal_id, relationship_type, provenance)
+                           VALUES (%s, %s, 'REFERENCES_APPLICATION', %s)
+                           ON CONFLICT DO NOTHING""",
+                        (
+                            family[0],
+                            signal_id,
+                            Jsonb(
+                                {
+                                    "method": PLANNING_FAMILY_HISTORICAL_BACKFILL_VERSION,
+                                    "raw_reference": raw_reference,
+                                    "backfilled_at": datetime.now(UTC).isoformat(),
+                                }
+                            ),
+                        ),
+                    )
+                    origin = foundations[0] if foundations else negatives[0] if negatives else None
+                    if origin:
+                        origin_status = "RESOLVED" if foundations else "NEGATIVE"
+                        conn.execute(
+                            """UPDATE planning_application_families
+                               SET primary_signal_id = %s, origin_status = %s, updated_at = now()
+                               WHERE id = %s""",
+                            (origin[0], origin_status, family[0]),
+                        )
+                        conn.execute(
+                            """INSERT INTO planning_signal_family_relationships
+                                 (family_id, raw_signal_id, relationship_type, provenance)
+                               VALUES (%s, %s, 'PRIMARY_APPLICATION', %s)
+                               ON CONFLICT DO NOTHING""",
+                            (
+                                family[0],
+                                origin[0],
+                                Jsonb({"method": PLANNING_FAMILY_HISTORICAL_BACKFILL_VERSION}),
+                            ),
+                        )
+                except Exception:
+                    result["failures"] += 1
+                    raise
+            signal_key = str(signal_id)
+            if signal_has_existing and signal_key not in seen_existing_signals:
+                result["already_family_linked"] += 1
+                seen_existing_signals.add(signal_key)
+            if signal_has_missing and signal_key not in seen_missing_signals:
+                result["missing_family_metadata"] += 1
+                seen_missing_signals.add(signal_key)
+
+        if preview:
+            conn.rollback()
+        else:
+            conn.commit()
+
+    mutation_count = result["references_relationships_created"] - result["failures"]
+    if not preview and mutation_count > 0:
+        record_admin_audit(
+            settings,
+            action="PLANNING_FAMILY_HISTORICAL_METADATA_BACKFILL",
+            actor=actor,
+            target_type="planning_application_family",
+            details={**result, "external_requests": 0, "vertical": "CHILDRENS_HOME"},
+        )
+    return result
 
 
 def reconcile_stored_planning_families(

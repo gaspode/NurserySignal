@@ -1520,3 +1520,38 @@ def test_planning_family_reconciliation_accepts_bounded_explicit_signal_set(monk
     assert response["statusCode"] == 200
     assert captured["signal_ids"] == selected
     assert captured["limit"] == 100
+
+
+def test_planning_family_metadata_backfill_is_admin_only_bounded_and_previewable(
+    monkeypatch,
+) -> None:
+    captured = {}
+    monkeypatch.setattr(
+        "app.handler.backfill_historical_planning_family_metadata",
+        lambda settings, **kwargs: captured.update(kwargs) or {"preview": kwargs["preview"]},
+    )
+
+    denied = handler(
+        event(
+            "/admin/planning/families/backfill",
+            "POST",
+            body=json.dumps({"preview": False}),
+            claims={"sub": "staff", "cognito:groups": ["Other"]},
+        ),
+        None,
+    )
+    assert denied["statusCode"] == 403
+
+    response = handler(
+        event(
+            "/admin/planning/families/backfill",
+            "POST",
+            body=json.dumps({"preview": True, "limit": 500, "offset": 12}),
+            claims={**CLAIMS, "cognito:groups": ["NurserySignalAdmins"]},
+        ),
+        None,
+    )
+    assert response["statusCode"] == 200
+    assert captured["preview"] is True
+    assert captured["limit"] == 100
+    assert captured["offset"] == 12

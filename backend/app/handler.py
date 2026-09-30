@@ -64,6 +64,7 @@ from app.logging import configure_logging
 from app.organisation_lookup import ManualCompanyLookupError, lookup_manual_company_candidate
 from app.planning_backfill import PlanningBackfillBounds, chunk_payload
 from app.repository import (
+    backfill_historical_planning_family_metadata,
     care_opportunity_hygiene_audit,
     care_planning_ai_approval_backlog,
     care_planning_fastpath_backlog,
@@ -335,6 +336,8 @@ def _admin_path(path: str) -> tuple[str, str | None]:
         return "recruitment-planning-diagnostic", None
     if path == "/admin/planning/families":
         return "planning-families", None
+    if path == "/admin/planning/families/backfill":
+        return "planning-families-backfill", None
     if path == "/admin/planning/families/reconcile":
         return "planning-families-reconcile", None
     if path == "/admin/planning/families/recover":
@@ -1527,6 +1530,22 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                     planning_family_historical_preview(
                         settings,
                         limit=min(max(int(_query(event, "limit") or 2500), 1), 5000),
+                    ),
+                )
+            if action == "planning-families-backfill" and method == "POST":
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                payload = parse_json_payload(_raw_body(event))
+                actor = str(claims.get("sub") or claims.get("username") or "unknown")
+                return _response(
+                    200,
+                    backfill_historical_planning_family_metadata(
+                        settings,
+                        actor=actor,
+                        preview=bool(payload.get("preview", True)),
+                        limit=min(max(int(payload.get("limit", 100)), 1), 100),
+                        offset=max(int(payload.get("offset", 0)), 0),
                     ),
                 )
             if action == "planning-families-reconcile" and method == "POST":
