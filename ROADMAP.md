@@ -1317,3 +1317,12 @@ Paid-pilot activation check (2026-09-28):
   API/database health pass. Active ingestion/enrichment queues and non-collector DLQs are empty; the six retained
   shared collector DLQ messages remain untouched. Exact next step: admins can perform publication review directly
   from Opportunity Detail and use Open source only for corroboration or edge cases.
+- Opportunity Detail evidence hierarchy is now ordered for publication review: source/title, prominent
+  foundational/supporting family role, canonical decision/subtype/opportunity action, relationship facts, raw
+  council decision/status, family identity, collapsed low-level relationship provenance, then grouped signal/source/
+  unlink actions. Provider wording is explicitly labelled `Raw council decision` or `Raw council status`, avoiding
+  confusion with the canonical outcome. Ashburton production verification still shows one approved foundational
+  create-opportunity application and one pending supporting condition-discharge record; only presentation changed.
+  Commit `d8b15ba` deployed successfully in run `36787084684`; 514 backend tests, 88 frontend tests, Ruff,
+  frontend build and Terraform fmt/validate pass, and production API/database health is green. No API, evidence,
+  matching, review or publication semantics changed.
