@@ -6438,6 +6438,24 @@ def care_opportunity_hygiene_audit(
                         "after_foundational": corrected_item["foundational_signal_count"],
                         "supporting_followups": corrected_item["supporting_followup_count"],
                         "category": corrected_item["category"],
+                        "planning_signals": [
+                            {
+                                "signal_id": str(relation.get("signal_id")),
+                                "relationship_status": relation.get("status"),
+                                "review_status": relation.get("review_status"),
+                                "planning_subtype": (
+                                    relation.get("extracted_facts") or {}
+                                ).get("planning_subtype"),
+                                "opportunity_creation_decision": (
+                                    relation.get("extracted_facts") or {}
+                                ).get("opportunity_creation_decision"),
+                                "planning_outcome": canonical_planning_outcome(
+                                    relation.get("metadata")
+                                ).outcome.value,
+                                "support_state": classify_evidence_support(relation).value,
+                            }
+                            for relation in active_planning
+                        ],
                     }
                 )
                 break
