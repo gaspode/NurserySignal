@@ -270,3 +270,55 @@ def test_worker_auto_rejects_structured_refusal_without_correlation(monkeypatch)
 
     assert result == {"batchItemFailures": []}
     assert rejected == [(str(raw["id"]), raw["metadata"])]
+
+
+def test_worker_reconciles_care_planning_family_before_and_after_correlation(
+    monkeypatch,
+) -> None:
+    raw = raw_signal(
+        "Change of use from dwelling to a children's home.",
+        title="Change of use to a children's home",
+    )
+    raw["vertical"] = "CHILDRENS_HOME"
+    raw["metadata"] = {
+        "council": "Croydon",
+        "planning_reference": "24/03385/FUL",
+        "planning_status": "approved",
+    }
+    message = {
+        "message_version": "1.0",
+        "signal_id": str(raw["id"]),
+        "schema_version": "1.0",
+        "evidence_bucket": "evidence",
+        "evidence_key": "signals/test/origin.json",
+        "queued_at": "2026-09-24T08:00:00Z",
+    }
+    settings = type(
+        "Settings",
+        (),
+        {
+            "database_url": "configured",
+            "db_secret_arn": None,
+            "ai_shadow_enabled": False,
+        },
+    )()
+    calls = []
+    monkeypatch.setattr("app.worker.Settings.from_env", lambda: settings)
+    monkeypatch.setattr("app.worker.get_raw_signal", lambda *_: raw)
+    monkeypatch.setattr("app.worker.save_enrichment", lambda *_: True)
+    monkeypatch.setattr(
+        "app.worker.reconcile_planning_family_signal",
+        lambda *_: calls.append("family") or {"missing_origins": 0},
+    )
+    monkeypatch.setattr(
+        "app.worker.correlate_signal",
+        lambda *_: calls.append("correlate")
+        or {"opportunity_id": "existing", "linked": True},
+    )
+
+    result = handler(
+        {"Records": [{"messageId": "origin-1", "body": json.dumps(message)}]}, None
+    )
+
+    assert result == {"batchItemFailures": []}
+    assert calls == ["family", "correlate", "family"]

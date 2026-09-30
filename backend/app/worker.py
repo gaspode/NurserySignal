@@ -82,10 +82,17 @@ def process_message(settings: Settings, body: str) -> None:
         and not withdrawn
         and (getattr(settings, "database_url", None) or getattr(settings, "db_secret_arn", None))
     ):
+        if raw.get("vertical") == "CHILDRENS_HOME" and raw.get("source_type") == "planning":
+            # Establish the authority-scoped family before opportunity matching.  A recovered
+            # primary application can then deterministically reuse the opportunity already
+            # carrying its follow-up evidence instead of creating a duplicate shell.
+            reconcile_planning_family_signal(settings, message.signal_id)
         opportunity = correlate_signal(settings, message.signal_id, candidate)
         if raw.get("vertical") == "CHILDRENS_HOME" and raw.get("source_type") == "planning":
-            family_result = reconcile_planning_family_signal(settings, message.signal_id)
-            if family_result.get("missing_origins"):
+            # The normal correlation may have created the origin relationship.  Reconcile a
+            # second time to attach any other family support; both operations are idempotent.
+            after_correlation = reconcile_planning_family_signal(settings, message.signal_id)
+            if after_correlation.get("missing_origins"):
                 queue_planning_origin_recovery(
                     settings,
                     signal_id=message.signal_id,

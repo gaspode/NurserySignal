@@ -5381,6 +5381,49 @@ def correlate_signal(
         match = None
         match_reason = None
         uncertain_matches: list[tuple[Any, float, str]] = []
+        if source_type == "planning":
+            authority = normalize_planning_authority(planning_authority(metadata))
+            reference = primary_planning_reference("", metadata)
+            if authority and reference:
+                family_matches = conn.execute(
+                    """SELECT DISTINCT o.id
+                       FROM planning_application_families f
+                       JOIN planning_signal_family_relationships family_signal
+                         ON family_signal.family_id = f.id
+                       JOIN opportunity_signals os
+                         ON os.raw_signal_id = family_signal.raw_signal_id
+                        AND os.status = 'ACTIVE'
+                       JOIN opportunities o ON o.id = os.opportunity_id
+                       WHERE f.vertical = %s
+                         AND f.normalized_authority = %s
+                         AND f.normalized_reference = %s
+                         AND o.review_status NOT IN ('MERGED', 'REJECTED')
+                       ORDER BY o.id
+                       LIMIT 2""",
+                    (signal_vertical, authority, reference),
+                ).fetchall()
+                if len(family_matches) == 1:
+                    family_opportunity_id = family_matches[0][0]
+                    blocked = conn.execute(
+                        """SELECT 1 FROM opportunity_signals
+                           WHERE opportunity_id = %s AND raw_signal_id = %s
+                             AND status = 'REJECTED'""",
+                        (family_opportunity_id, signal_id),
+                    ).fetchone()
+                    if not blocked:
+                        match = next(
+                            (row for row in existing if row[0] == family_opportunity_id), None
+                        )
+                        match_reason = "exact authority-scoped planning-family reference"
+                elif len(family_matches) > 1:
+                    for family_opportunity_id, *_ in family_matches:
+                        uncertain_matches.append(
+                            (
+                                family_opportunity_id,
+                                0.9,
+                                "planning family is linked to multiple opportunities",
+                            )
+                        )
         prior_references = [
             normalized
             for value in (candidate.get("extracted_facts") or {}).get(
@@ -5388,7 +5431,7 @@ def correlate_signal(
             )
             if (normalized := normalize_planning_reference(value))
         ]
-        if source_type == "planning" and prior_references:
+        if source_type == "planning" and prior_references and match is None:
             authority = normalize_planning_authority(planning_authority(metadata))
             referenced = conn.execute(
                 """
