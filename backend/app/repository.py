@@ -11,6 +11,15 @@ from uuid import UUID
 import boto3
 from psycopg.types.json import Jsonb
 
+from app.care_lifecycle import (
+    CARE_LIFECYCLE_POLICY_VERSION,
+    CARE_PUBLICATION_POLICY_VERSION,
+    CARE_WITHDRAWAL_POLICY_VERSION,
+    CareLifecycle,
+    derive_care_lifecycle,
+    evaluate_publication,
+    evaluate_withdrawal,
+)
 from app.care_planning_review import (
     CARE_PLANNING_AI_APPROVAL_BLOCKED_OUTCOMES,
     CARE_PLANNING_AI_APPROVAL_MIN_CONFIDENCE,
@@ -207,8 +216,8 @@ def _resolve_operator_id(conn: Any, name: Any, metadata: dict[str, Any]) -> Any 
     ).fetchone()
     if alias_match:
         return alias_match[0]
-    organisation_type = PUBLIC_AUTHORITY if public_authority else (
-        PRIVATE_COMPANY if company_number else UNKNOWN
+    organisation_type = (
+        PUBLIC_AUTHORITY if public_authority else (PRIVATE_COMPANY if company_number else UNKNOWN)
     )
     row = conn.execute(
         """INSERT INTO operators
@@ -221,8 +230,11 @@ def _resolve_operator_id(conn: Any, name: Any, metadata: dict[str, Any]) -> Any 
             company_number,
             website,
             organisation_type,
-            "DETERMINISTIC_NAME" if public_authority else "SOURCE_COMPANY_NUMBER"
-            if company_number else "UNCLASSIFIED",
+            "DETERMINISTIC_NAME"
+            if public_authority
+            else "SOURCE_COMPANY_NUMBER"
+            if company_number
+            else "UNCLASSIFIED",
         ),
     ).fetchone()
     if public_authority:
@@ -4585,8 +4597,12 @@ def reconcile_planning_family_signal(settings: Settings, signal_id: str) -> dict
         if not row:
             return result
         raw = {
-            "id": row[0], "external_id": row[1], "title": row[2], "raw_text": row[3],
-            "metadata": row[4] or {}, "vertical": row[5],
+            "id": row[0],
+            "external_id": row[1],
+            "title": row[2],
+            "raw_text": row[3],
+            "metadata": row[4] or {},
+            "vertical": row[5],
         }
         facts = row[6] if isinstance(row[6], dict) else {}
         authority = planning_authority(raw["metadata"])
@@ -4611,7 +4627,9 @@ def reconcile_planning_family_signal(settings: Settings, signal_id: str) -> dict
                        VALUES (%s, %s, %s, %s)
                        ON CONFLICT DO NOTHING""",
                     (
-                        family[0], signal_id, relationship,
+                        family[0],
+                        signal_id,
+                        relationship,
                         Jsonb(
                             {
                                 "method": PLANNING_FAMILY_POLICY_VERSION,
@@ -4627,9 +4645,7 @@ def reconcile_planning_family_signal(settings: Settings, signal_id: str) -> dict
                          AND recovered_signal_id IS NULL""",
                     (signal_id, family[0]),
                 )
-                if is_foundational_planning_signal(
-                    facts.get("planning_subtype"), raw["metadata"]
-                ):
+                if is_foundational_planning_signal(facts.get("planning_subtype"), raw["metadata"]):
                     conn.execute(
                         """UPDATE planning_application_families SET primary_signal_id = %s,
                                   origin_status = 'RESOLVED', updated_at = now() WHERE id = %s""",
@@ -4661,7 +4677,8 @@ def reconcile_planning_family_signal(settings: Settings, signal_id: str) -> dict
                    VALUES (%s, %s, 'REFERENCES_APPLICATION', %s)
                    ON CONFLICT DO NOTHING""",
                 (
-                    family[0], signal_id,
+                    family[0],
+                    signal_id,
                     Jsonb(
                         {
                             "method": PLANNING_FAMILY_POLICY_VERSION,
@@ -4679,14 +4696,17 @@ def reconcile_planning_family_signal(settings: Settings, signal_id: str) -> dict
                 (identity.normalized_authority, identity.normalized_reference, signal_id),
             ).fetchall()
             foundations = [
-                candidate for candidate in candidates
+                candidate
+                for candidate in candidates
                 if is_foundational_planning_signal(
                     (candidate[2] or {}).get("planning_subtype"), candidate[1]
                 )
             ]
             negative_origins = [
-                candidate for candidate in candidates
-                if canonical_planning_outcome(candidate[1]).outcome in {
+                candidate
+                for candidate in candidates
+                if canonical_planning_outcome(candidate[1]).outcome
+                in {
                     PlanningOutcome.REFUSED,
                     PlanningOutcome.WITHDRAWN,
                     PlanningOutcome.APPEAL_DISMISSED,
@@ -4756,8 +4776,11 @@ def planning_family_historical_preview(settings: Settings, *, limit: int = 2500)
     followups: list[dict[str, Any]] = []
     for row in rows:
         raw = {
-            "id": str(row[0]), "external_id": row[1], "title": row[2],
-            "raw_text": row[3], "metadata": row[4] or {},
+            "id": str(row[0]),
+            "external_id": row[1],
+            "title": row[2],
+            "raw_text": row[3],
+            "metadata": row[4] or {},
         }
         authority = planning_authority(raw["metadata"])
         normalized_authority = normalize_planning_authority(authority)
@@ -4782,8 +4805,10 @@ def planning_family_historical_preview(settings: Settings, *, limit: int = 2500)
         "requires_targeted_plota_lookup": 0,
     }
     examples: dict[str, list[dict[str, Any]]] = {
-        "stored_origin_found": [], "no_stored_origin": [],
-        "stored_negative_origin": [], "multiple_candidate_origins": [],
+        "stored_origin_found": [],
+        "no_stored_origin": [],
+        "stored_negative_origin": [],
+        "multiple_candidate_origins": [],
         "no_usable_authority_or_reference": [],
     }
     for item in followups:
@@ -4799,14 +4824,17 @@ def planning_family_historical_preview(settings: Settings, *, limit: int = 2500)
                     if candidate["id"] != item["id"]:
                         candidates[candidate["id"]] = candidate
             foundations = [
-                candidate for candidate in candidates.values()
+                candidate
+                for candidate in candidates.values()
                 if is_foundational_planning_signal(
                     candidate["facts"].get("planning_subtype"), candidate["metadata"]
                 )
             ]
             negatives = [
-                candidate for candidate in candidates.values()
-                if canonical_planning_outcome(candidate["metadata"]).outcome in {
+                candidate
+                for candidate in candidates.values()
+                if canonical_planning_outcome(candidate["metadata"]).outcome
+                in {
                     PlanningOutcome.REFUSED,
                     PlanningOutcome.WITHDRAWN,
                     PlanningOutcome.APPEAL_DISMISSED,
@@ -4954,9 +4982,7 @@ def backfill_historical_planning_family_metadata(
                     continue
                 key = (identity.normalized_authority, identity.normalized_reference)
                 candidates = [
-                    candidate
-                    for candidate in primaries.get(key, [])
-                    if candidate[0] != signal_id
+                    candidate for candidate in primaries.get(key, []) if candidate[0] != signal_id
                 ]
                 foundations = [
                     candidate
@@ -5126,8 +5152,13 @@ def reconcile_stored_planning_families(
                 (bounded_limit,),
             ).fetchall()
     totals = {
-        "signals_inspected": 0, "families_created_or_reused": 0, "origins_resolved": 0,
-        "followups_linked": 0, "origins_linked": 0, "conflicts": 0, "missing_origins": 0,
+        "signals_inspected": 0,
+        "families_created_or_reused": 0,
+        "origins_resolved": 0,
+        "followups_linked": 0,
+        "origins_linked": 0,
+        "conflicts": 0,
+        "missing_origins": 0,
         "errors": 0,
     }
     for signal_id, _ in rows:
@@ -5209,8 +5240,17 @@ def queue_planning_origin_recovery(
         ).fetchall()
         queued: list[dict[str, Any]] = []
         for (
-            family_id, authority, reference, trigger_id, _, _, address, postcode, town,
-            external_id, metadata,
+            family_id,
+            authority,
+            reference,
+            trigger_id,
+            _,
+            _,
+            address,
+            postcode,
+            town,
+            external_id,
+            metadata,
         ) in rows:
             source_metadata = metadata if isinstance(metadata, dict) else {}
             provider_record = source_metadata.get("provider_record")
@@ -5227,20 +5267,26 @@ def queue_planning_origin_recovery(
                 (
                     family_id,
                     trigger_id,
-                    Jsonb({
-                        "reason": "REFERENCED_APPLICATION_MISSING",
-                        "actor": actor,
-                        "policy_version": PLANNING_FAMILY_POLICY_VERSION,
-                        "provider_query": reference,
-                    }),
+                    Jsonb(
+                        {
+                            "reason": "REFERENCED_APPLICATION_MISSING",
+                            "actor": actor,
+                            "policy_version": PLANNING_FAMILY_POLICY_VERSION,
+                            "provider_query": reference,
+                        }
+                    ),
                 ),
             ).fetchone()
             queued.append(
                 {
-                    "attempt_id": str(attempt[0]), "family_id": str(family_id),
-                    "triggering_signal_id": str(trigger_id), "planning_authority": authority,
+                    "attempt_id": str(attempt[0]),
+                    "family_id": str(family_id),
+                    "triggering_signal_id": str(trigger_id),
+                    "planning_authority": authority,
                     "normalized_reference": reference,
-                    "site_address": address, "site_postcode": postcode, "site_town": town,
+                    "site_address": address,
+                    "site_postcode": postcode,
+                    "site_town": town,
                     "triggering_provider_id": triggering_provider_id,
                 }
             )
@@ -5252,7 +5298,8 @@ def queue_planning_origin_recovery(
                 QueueUrl=settings.planning_manual_run_queue_url,
                 MessageBody=json.dumps(
                     {"invocation_source": "planning_origin_recovery", **item},
-                    separators=(",", ":"), sort_keys=True,
+                    separators=(",", ":"),
+                    sort_keys=True,
                 ),
             )
             if response.get("MessageId"):
@@ -6197,6 +6244,251 @@ def list_opportunities(
     }
 
 
+def care_opportunity_lifecycle_preview(settings: Settings) -> dict[str, Any]:
+    """Derive Phase-A lifecycle/publication/withdrawal policy results without mutation."""
+    with connection(settings) as conn:
+        rows = conn.execute(
+            """
+            SELECT o.id, o.name, o.event_type, o.lifecycle_stage, o.confidence,
+                   o.review_status, o.publication_status, o.vertical, o.operator_name,
+                   o.address, o.postcode, o.town, o.merged_into_opportunity_id,
+                   o.change_type, o.stage_reason, o.creation_reason,
+                   o.customer_lifecycle_stage, o.publication_automation_blocked,
+                   o.publication_automation_reason, o.customer_title, o.customer_summary,
+                   o.customer_published_by, o.publication_automation_provenance,
+                   COALESCE(rel.relationships, '[]'::jsonb),
+                   COALESCE(hist.actions, ARRAY[]::text[]),
+                   COALESCE(audit.actions, ARRAY[]::text[]),
+                   COALESCE(matches.pending_count, 0)
+            FROM opportunities o
+            LEFT JOIN LATERAL (
+              SELECT jsonb_agg(jsonb_build_object(
+                'id', rs.id, 'signal_id', rs.id, 'status', os.status,
+                'relationship_status', os.status, 'source_type', rs.source_type,
+                'external_id', rs.external_id,
+                'title', rs.title, 'metadata', rs.metadata,
+                'review_status', se.review_status, 'extracted_facts', se.extracted_facts,
+                'relationship_extracted_facts', os.extracted_facts,
+                'planning_family_relationship_types', COALESCE(
+                  (SELECT jsonb_agg(DISTINCT pfr.relationship_type)
+                   FROM planning_signal_family_relationships pfr
+                   WHERE pfr.raw_signal_id = rs.id), '[]'::jsonb)
+              ) ORDER BY rs.discovered_at, rs.id) AS relationships
+              FROM opportunity_signals os
+              JOIN raw_signals rs ON rs.id = os.raw_signal_id
+              LEFT JOIN signal_enrichments se ON se.raw_signal_id = rs.id
+              WHERE os.opportunity_id = o.id
+            ) rel ON TRUE
+            LEFT JOIN LATERAL (
+              SELECT array_agg(DISTINCT h.action) AS actions
+              FROM opportunity_signal_history h WHERE h.opportunity_id = o.id
+            ) hist ON TRUE
+            LEFT JOIN LATERAL (
+              SELECT array_agg(DISTINCT a.action) AS actions
+              FROM admin_audit_events a
+              WHERE a.target_type IN ('opportunity', 'opportunity_match')
+                AND (a.details->>'opportunity_id' = o.id::text
+                  OR a.details->>'source_opportunity_id' = o.id::text
+                  OR a.details->>'target_opportunity_id' = o.id::text
+                  OR a.details->>'new_opportunity_id' = o.id::text)
+            ) audit ON TRUE
+            LEFT JOIN LATERAL (
+              SELECT count(*) AS pending_count FROM opportunity_match_reviews mr
+              WHERE mr.opportunity_id = o.id AND mr.status = 'PENDING'
+            ) matches ON TRUE
+            WHERE o.vertical = 'CHILDRENS_HOME'
+            ORDER BY o.id LIMIT 5000
+            """
+        ).fetchall()
+        watch_rows = conn.execute(
+            """SELECT count(*), count(*) FILTER (WHERE enabled),
+                      count(*) FILTER (WHERE enabled AND next_eligible_refresh_at <= now()),
+                      count(*) FILTER (WHERE last_checked_at >= now() - interval '24 hours'),
+                      count(*) FILTER (WHERE consecutive_provider_errors > 0)
+               FROM planning_lifecycle_watches"""
+        ).fetchone()
+
+    fields = (
+        "id",
+        "name",
+        "event_type",
+        "lifecycle_stage",
+        "confidence",
+        "review_status",
+        "publication_status",
+        "vertical",
+        "operator_name",
+        "address",
+        "postcode",
+        "town",
+        "merged_into_opportunity_id",
+        "change_type",
+        "stage_reason",
+        "creation_reason",
+        "customer_lifecycle_stage",
+        "publication_automation_blocked",
+        "publication_automation_reason",
+        "customer_title",
+        "customer_summary",
+        "customer_published_by",
+        "publication_automation_provenance",
+        "relationships",
+        "history_actions",
+        "audit_actions",
+        "pending_match_reviews",
+    )
+    opportunities = [dict(zip(fields, row)) for row in rows]
+    hygiene = audit_opportunities(opportunities)
+    hygiene_by_id = {item["opportunity_id"]: item for item in hygiene["items"]}
+    lifecycle_counts: Counter[str] = Counter()
+    stored_lifecycle_counts: Counter[str] = Counter()
+    publication_counts: Counter[str] = Counter()
+    publication_exclusions: Counter[str] = Counter()
+    withdrawal_counts: Counter[str] = Counter()
+    watch_outcomes: Counter[str] = Counter()
+    watched_candidates: set[str] = set()
+    examples: list[dict[str, Any]] = []
+
+    for opportunity in opportunities:
+        opportunity_id = str(opportunity["id"])
+        decision = derive_care_lifecycle(opportunity["relationships"] or [])
+        lifecycle_counts[decision.lifecycle.value] += 1
+        stored_lifecycle_counts[str(opportunity.get("customer_lifecycle_stage") or "UNSET")] += 1
+        item = hygiene_by_id[opportunity_id]
+        projection = {
+            **opportunity,
+            "derived_customer_lifecycle": decision.lifecycle.value,
+            "local_authority": next(
+                (
+                    (signal.get("metadata") or {}).get("local_authority")
+                    or (signal.get("metadata") or {}).get("council")
+                    for signal in opportunity["relationships"] or []
+                    if signal.get("status") == "ACTIVE"
+                    and (
+                        (signal.get("metadata") or {}).get("local_authority")
+                        or (signal.get("metadata") or {}).get("council")
+                    )
+                ),
+                None,
+            ),
+            "region": next(
+                (
+                    (signal.get("metadata") or {}).get("region")
+                    for signal in opportunity["relationships"] or []
+                    if (signal.get("metadata") or {}).get("region")
+                ),
+                None,
+            ),
+            "source_types": item.get("source_types") or [],
+        }
+        safe_title = generated_customer_title(projection)
+        safe_summary = generated_customer_summary(projection)
+        publication = evaluate_publication(
+            projection,
+            decision,
+            opportunity["relationships"] or [],
+            hygiene_category=item["category"],
+            hygiene_warning=item.get("warning"),
+            safe_title=safe_title,
+            safe_summary=safe_summary,
+        )
+        publication_counts[publication.outcome] += 1
+        publication_exclusions.update(publication.exclusions)
+        withdrawal = evaluate_withdrawal(projection, decision)
+        withdrawal_counts[withdrawal.outcome] += 1
+
+        for signal in opportunity["relationships"] or []:
+            if signal.get("source_type") != "planning" or signal.get("status") != "ACTIVE":
+                continue
+            outcome = canonical_planning_outcome(signal.get("metadata") or {}).outcome
+            if outcome not in {
+                PlanningOutcome.PENDING,
+                PlanningOutcome.UNKNOWN,
+                PlanningOutcome.REFUSED_UNDER_APPEAL,
+            }:
+                continue
+            facts = signal.get("extracted_facts") or {}
+            family_roles = set(signal.get("planning_family_relationship_types") or [])
+            eligible_origin = (
+                facts.get("opportunity_creation_decision") == "CREATE_OPPORTUNITY"
+                or (
+                    outcome == PlanningOutcome.REFUSED_UNDER_APPEAL
+                    and "PRIMARY_APPLICATION" in family_roles
+                )
+            )
+            if not eligible_origin or (
+                outcome != PlanningOutcome.REFUSED_UNDER_APPEAL
+                and signal.get("review_status") != "APPROVED"
+            ):
+                continue
+            authority = planning_authority(signal.get("metadata") or {})
+            reference = primary_planning_reference(
+                signal.get("external_id"), signal.get("metadata") or {}
+            )
+            if authority and reference:
+                watched_candidates.add(str(signal["id"]))
+                watch_outcomes[outcome.value] += 1
+        if len(examples) < 25 and (
+            publication.outcome != "NOT_ELIGIBLE"
+            or withdrawal.outcome in {"AUTO_WITHDRAW", "MANUAL_REVIEW"}
+            or decision.lifecycle == CareLifecycle.NEEDS_REVIEW
+        ):
+            examples.append(
+                {
+                    "opportunity_id": opportunity_id,
+                    "name": opportunity.get("name"),
+                    "derived_lifecycle": decision.lifecycle.value,
+                    "lifecycle_reason": decision.reason,
+                    "publication_outcome": publication.outcome,
+                    "publication_exclusions": list(publication.exclusions),
+                    "withdrawal_outcome": withdrawal.outcome,
+                    "publication_status": opportunity.get("publication_status"),
+                }
+            )
+
+    estimated_daily = round(
+        (
+            watch_outcomes[PlanningOutcome.PENDING.value]
+            + watch_outcomes[PlanningOutcome.UNKNOWN.value]
+        )
+        / 3
+        + watch_outcomes[PlanningOutcome.REFUSED_UNDER_APPEAL.value] / 5,
+        1,
+    )
+    return {
+        "preview": True,
+        "mutations": 0,
+        "policy_versions": {
+            "lifecycle": CARE_LIFECYCLE_POLICY_VERSION,
+            "publication": CARE_PUBLICATION_POLICY_VERSION,
+            "withdrawal": CARE_WITHDRAWAL_POLICY_VERSION,
+        },
+        "opportunities_inspected": len(opportunities),
+        "inventory_complete": len(opportunities) < 5000,
+        "derived_lifecycle_counts": dict(sorted(lifecycle_counts.items())),
+        "stored_lifecycle_counts": dict(sorted(stored_lifecycle_counts.items())),
+        "watcher": {
+            "would_watch": len(watched_candidates),
+            "candidate_outcomes": dict(sorted(watch_outcomes.items())),
+            "stored_total": int(watch_rows[0] or 0),
+            "stored_enabled": int(watch_rows[1] or 0),
+            "due": int(watch_rows[2] or 0),
+            "checked_last_24h": int(watch_rows[3] or 0),
+            "provider_errors": int(watch_rows[4] or 0),
+            "estimated_requests_per_day": estimated_daily,
+            "estimated_requests_per_30_days": round(estimated_daily * 30),
+            "provider_requests_executed": 0,
+        },
+        "publication_preview": {
+            "outcomes": dict(sorted(publication_counts.items())),
+            "exclusions": dict(sorted(publication_exclusions.items())),
+        },
+        "withdrawal_preview": dict(sorted(withdrawal_counts.items())),
+        "hygiene_counts": hygiene["category_counts"],
+        "examples": examples,
+    }
+
+
 def care_opportunity_hygiene_audit(
     settings: Settings,
     *,
@@ -6330,9 +6622,7 @@ def care_opportunity_hygiene_audit(
     opportunities = [dict(zip(fields, row)) for row in rows]
     legacy_report = audit_opportunities(opportunities, legacy_support_semantics=True)
     report = audit_opportunities(opportunities)
-    legacy_items_by_id = {
-        item["opportunity_id"]: item for item in legacy_report["items"]
-    }
+    legacy_items_by_id = {item["opportunity_id"]: item for item in legacy_report["items"]}
     corrected_items_by_id = {item["opportunity_id"]: item for item in report["items"]}
     zero_foundation_with_planning = 0
     newly_foundational = 0
@@ -6392,12 +6682,8 @@ def care_opportunity_hygiene_audit(
             ] += 1
             for relation in active_planning:
                 facts = relation.get("extracted_facts") or {}
-                breakdowns["planning_subtype"][
-                    str(facts.get("planning_subtype") or "UNKNOWN")
-                ] += 1
-                breakdowns["review_status"][
-                    str(relation.get("review_status") or "UNKNOWN")
-                ] += 1
+                breakdowns["planning_subtype"][str(facts.get("planning_subtype") or "UNKNOWN")] += 1
+                breakdowns["review_status"][str(relation.get("review_status") or "UNKNOWN")] += 1
                 breakdowns["opportunity_creation_decision"][
                     str(facts.get("opportunity_creation_decision") or "UNKNOWN")
                 ] += 1
@@ -6456,9 +6742,9 @@ def care_opportunity_hygiene_audit(
                                 "signal_id": str(relation.get("signal_id")),
                                 "relationship_status": relation.get("status"),
                                 "review_status": relation.get("review_status"),
-                                "planning_subtype": (
-                                    relation.get("extracted_facts") or {}
-                                ).get("planning_subtype"),
+                                "planning_subtype": (relation.get("extracted_facts") or {}).get(
+                                    "planning_subtype"
+                                ),
                                 "opportunity_creation_decision": (
                                     relation.get("extracted_facts") or {}
                                 ).get("opportunity_creation_decision"),
@@ -6488,8 +6774,7 @@ def care_opportunity_hygiene_audit(
             if subtype == "EXPANSION_OR_CAPACITY_CHANGE" and opportunity_change == "OPENING":
                 drift_reason = "EXPANSION_SIGNAL_ON_OPENING"
             elif (
-                subtype == "CESSATION_OR_CHANGE_AWAY_FROM_CARE"
-                and opportunity_change == "OPENING"
+                subtype == "CESSATION_OR_CHANGE_AWAY_FROM_CARE" and opportunity_change == "OPENING"
             ):
                 drift_reason = "CESSATION_SIGNAL_ON_OPENING"
             elif subtype == "LAWFULNESS_EXISTING" and opportunity_change == "OPENING":
@@ -6503,9 +6788,7 @@ def care_opportunity_hygiene_audit(
                         "signal_id": str(relation.get("signal_id")),
                         "reason": drift_reason,
                         "review_status": relation.get("review_status"),
-                        "opportunity_creation_decision": facts.get(
-                            "opportunity_creation_decision"
-                        ),
+                        "opportunity_creation_decision": facts.get("opportunity_creation_decision"),
                         "opportunity_change_type": opportunity_change,
                         "planning_subtype": subtype,
                     }
@@ -6521,8 +6804,7 @@ def care_opportunity_hygiene_audit(
             f"{legacy_items_by_id[item_id]['category']} -> "
             f"{corrected_items_by_id[item_id]['category']}"
             for item_id in corrected_items_by_id
-            if legacy_items_by_id[item_id]["category"]
-            != corrected_items_by_id[item_id]["category"]
+            if legacy_items_by_id[item_id]["category"] != corrected_items_by_id[item_id]["category"]
         ),
         "zero_foundation_breakdowns": {
             key: dict(sorted(values.items())) for key, values in breakdowns.items()
@@ -6727,9 +7009,7 @@ def care_opportunity_semantic_drift_cleanup(
                    WHERE os.opportunity_id = ANY(%s) FOR UPDATE""",
                 (selected_ids,),
             ).fetchall()
-            current_by_id = {
-                str(item["id"]): item for item in _care_semantic_drift_inventory(conn)
-            }
+            current_by_id = {str(item["id"]): item for item in _care_semantic_drift_inventory(conn)}
             for original in selected:
                 opportunity_id = original["opportunity_id"]
                 current = current_by_id.get(opportunity_id)
@@ -7245,8 +7525,7 @@ def list_organisation_enrichment_candidates(
                 (operator_id, vertical, name),
             )
             if organisation_type == PUBLIC_AUTHORITY or (
-                organisation_type != PRIVATE_COMPANY
-                and is_public_authority_name(operator[0])
+                organisation_type != PRIVATE_COMPANY and is_public_authority_name(operator[0])
             ):
                 if organisation_type == UNKNOWN and not operator[1]:
                     conn.execute(
@@ -7368,8 +7647,7 @@ def organisation_detail(settings: Settings, operator_id: str) -> dict[str, Any] 
         and result.get("organisation_type") != PUBLIC_AUTHORITY
     )
     result["public_authority_conflict"] = bool(
-        result.get("organisation_type") == PUBLIC_AUTHORITY
-        and result.get("companies_house_number")
+        result.get("organisation_type") == PUBLIC_AUTHORITY and result.get("companies_house_number")
     )
     result["aliases"] = [
         {"alias": row[0], "source": row[1], "created_at": row[2]} for row in aliases
@@ -7874,7 +8152,11 @@ def opportunity_detail(settings: Settings, opportunity_id: str) -> dict[str, Any
                       confidence_breakdown, stage_reason, creation_reason, first_seen_at,
                       latest_update_at, location_sensitivity, operator_id,
                       publication_status, customer_title, customer_summary,
-                      customer_published_by, customer_published_at
+                      customer_published_by, customer_published_at,
+                      customer_lifecycle_stage, customer_lifecycle_reason,
+                      customer_lifecycle_policy_version, customer_lifecycle_evaluated_at,
+                      publication_automation_blocked, publication_automation_reason,
+                      publication_automation_provenance
                FROM opportunities WHERE id = %s""",
             (opportunity_id,),
         ).fetchone()
@@ -7919,6 +8201,23 @@ def opportunity_detail(settings: Settings, opportunity_id: str) -> dict[str, Any
                    ORDER BY retrieved_at DESC LIMIT 10""",
                 (opportunity[17],),
             ).fetchall()
+        lifecycle_history = conn.execute(
+            """SELECT old_lifecycle, new_lifecycle, reason, triggering_signal_ids,
+                      source_type, policy_version, actor_type, actor, created_at
+               FROM opportunity_lifecycle_history WHERE opportunity_id = %s
+               ORDER BY created_at DESC LIMIT 25""",
+            (opportunity_id,),
+        ).fetchall()
+        planning_watches = conn.execute(
+            """SELECT w.latest_outcome, w.last_checked_at, w.next_eligible_refresh_at,
+                      w.last_provider_result, w.status_changed_at,
+                      w.consecutive_provider_errors, w.enabled, f.planning_authority,
+                      f.raw_reference
+               FROM planning_lifecycle_watches w
+               JOIN planning_application_families f ON f.id = w.family_id
+               WHERE w.opportunity_id = %s ORDER BY w.next_eligible_refresh_at""",
+            (opportunity_id,),
+        ).fetchall()
     fields = (
         "id",
         "source_type",
@@ -8016,6 +8315,7 @@ def opportunity_detail(settings: Settings, opportunity_id: str) -> dict[str, Any
             {str(signal["source_type"]) for signal in approved_customer_signals}
         ),
     }
+    lifecycle_preview = derive_care_lifecycle(active_signals)
     return {
         "id": opportunity[0],
         "name": opportunity[1],
@@ -8040,6 +8340,16 @@ def opportunity_detail(settings: Settings, opportunity_id: str) -> dict[str, Any
         "customer_summary": opportunity[20],
         "customer_published_by": opportunity[21],
         "customer_published_at": opportunity[22],
+        "customer_lifecycle_stage": opportunity[23],
+        "customer_lifecycle_reason": opportunity[24],
+        "customer_lifecycle_policy_version": opportunity[25],
+        "customer_lifecycle_evaluated_at": opportunity[26],
+        "publication_automation_blocked": opportunity[27],
+        "publication_automation_reason": opportunity[28],
+        "publication_automation_provenance": opportunity[29] or {},
+        "derived_customer_lifecycle": lifecycle_preview.lifecycle.value,
+        "derived_customer_lifecycle_reason": lifecycle_preview.reason,
+        "derived_customer_lifecycle_policy_version": CARE_LIFECYCLE_POLICY_VERSION,
         "default_customer_title": generated_customer_title(customer_projection),
         "default_customer_summary": generated_customer_summary(customer_projection),
         "signals": signals,
@@ -8061,6 +8371,81 @@ def opportunity_detail(settings: Settings, opportunity_id: str) -> dict[str, Any
             }
             for row in organisation_evidence
         ],
+        "lifecycle_history": [
+            {
+                "old_lifecycle": row[0],
+                "new_lifecycle": row[1],
+                "reason": row[2],
+                "triggering_signal_ids": [str(value) for value in (row[3] or [])],
+                "source_type": row[4],
+                "policy_version": row[5],
+                "actor_type": row[6],
+                "actor": row[7],
+                "created_at": row[8],
+            }
+            for row in lifecycle_history
+        ],
+        "planning_lifecycle_watches": [
+            {
+                "latest_outcome": row[0],
+                "last_checked_at": row[1],
+                "next_eligible_refresh_at": row[2],
+                "last_provider_result": row[3],
+                "status_changed_at": row[4],
+                "consecutive_provider_errors": row[5],
+                "enabled": row[6],
+                "planning_authority": row[7],
+                "planning_reference": row[8],
+            }
+            for row in planning_watches
+        ],
+    }
+
+
+def set_opportunity_automation_block(
+    settings: Settings,
+    opportunity_id: str,
+    *,
+    blocked: bool,
+    reason: str | None,
+    actor: str,
+) -> dict[str, Any]:
+    clean_reason = str(reason or "").strip()[:500] or None
+    if blocked and not clean_reason:
+        raise ValueError("automation block reason is required")
+    with connection(settings) as conn:
+        row = conn.execute(
+            """UPDATE opportunities
+               SET publication_automation_blocked = %s,
+                   publication_automation_reason = %s,
+                   updated_at = now()
+               WHERE id = %s AND vertical = 'CHILDRENS_HOME'
+               RETURNING id""",
+            (blocked, clean_reason if blocked else None, opportunity_id),
+        ).fetchone()
+        if not row:
+            raise ValueError("CareProspect opportunity not found")
+        conn.execute(
+            """INSERT INTO admin_audit_events
+               (action, actor, target_type, details, vertical)
+               VALUES ('care_publication_automation_block_changed', %s,
+                       'opportunity', %s, 'CHILDRENS_HOME')""",
+            (
+                actor,
+                Jsonb(
+                    {
+                        "opportunity_id": opportunity_id,
+                        "blocked": blocked,
+                        "reason": clean_reason if blocked else None,
+                    }
+                ),
+            ),
+        )
+        conn.commit()
+    return {
+        "id": opportunity_id,
+        "publication_automation_blocked": blocked,
+        "publication_automation_reason": clean_reason if blocked else None,
     }
 
 

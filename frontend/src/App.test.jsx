@@ -599,6 +599,26 @@ describe("admin frontend", () => {
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
   });
 
+  it("shows the CareProspect lifecycle watcher as a read-only preview", async () => {
+    const apiClient = vi.fn()
+      .mockResolvedValueOnce({ items: [] })
+      .mockResolvedValueOnce({
+        watcher: {
+          would_watch: 42,
+          due: 0,
+          checked_last_24h: 0,
+          provider_errors: 0,
+          estimated_requests_per_day: 14,
+          estimated_requests_per_30_days: 420,
+        },
+      });
+    render(<SourcesPage apiClient={apiClient} selectedVertical="CHILDRENS_HOME" />);
+    expect(await screen.findByRole("heading", { name: "Lifecycle refresh preview" })).toBeInTheDocument();
+    expect(screen.getByText("Preview only")).toBeInTheDocument();
+    expect(screen.getByText(/Automatic refresh, lifecycle bootstrap, publication and withdrawal remain disabled/)).toBeInTheDocument();
+    expect(apiClient).toHaveBeenCalledWith("/admin/opportunities/lifecycle-preview");
+  });
+
   it("runs a bounded CareProspect backfill from stored evidence", async () => {
     const apiClient = vi.fn()
       .mockResolvedValueOnce({ items: [] })
@@ -1180,6 +1200,32 @@ describe("admin frontend", () => {
     await userEvent.click(screen.getByRole("button", { name: "Publish to CareProspect" }));
     await waitFor(() => expect(onNavigate).toHaveBeenCalledWith(expect.stringContaining("/opportunities/opp-next?")));
     expect(onNavigate).toHaveBeenCalledWith(expect.stringContaining("view=publication_candidates"));
+  });
+
+  it("shows the derived CareProspect lifecycle and Planning watch state", async () => {
+    const apiClient = vi.fn().mockResolvedValue({
+      id: "opp-lifecycle", name: "New children's home — Oxford", vertical: "CHILDRENS_HOME",
+      lifecycle_stage: "PLANNING", change_type: "OPENING", confidence: 0.95,
+      publication_status: "DRAFT", signals: [], evidence_support: { foundational: 1, supporting_followups: 0, unresolved_origins: 0 },
+      derived_customer_lifecycle: "PLANNING_PENDING",
+      derived_customer_lifecycle_reason: "A reviewed foundational Planning application is pending or not yet decided.",
+      derived_customer_lifecycle_policy_version: "care-opportunity-lifecycle-v1",
+      publication_automation_blocked: false,
+      planning_lifecycle_watches: [{ planning_authority: "Oxford", planning_reference: "24/1234/FUL", latest_outcome: "PENDING", last_checked_at: null, next_eligible_refresh_at: "2026-10-03T00:00:00Z" }],
+      lifecycle_history: [],
+    });
+    render(<OpportunityDetail opportunityId="opp-lifecycle" apiClient={apiClient} onBack={vi.fn()} />);
+    expect(await screen.findByRole("heading", { name: "Customer lifecycle" })).toBeInTheDocument();
+    expect(screen.getByText(/planning pending/i)).toBeInTheDocument();
+    expect(screen.getByText("24/1234/FUL")).toBeInTheDocument();
+    expect(screen.getByText(/Preview only — not bootstrapped/)).toBeInTheDocument();
+    expect(screen.getByText(/automatic publication is not enabled/i)).toBeInTheDocument();
+    await userEvent.type(screen.getByLabelText("Publication automation block reason"), "Needs manual review");
+    await userEvent.click(screen.getByRole("button", { name: "Block publication automation" }));
+    await waitFor(() => expect(apiClient).toHaveBeenCalledWith(
+      "/admin/opportunities/opp-lifecycle/automation-block",
+      expect.objectContaining({ method: "POST" }),
+    ));
   });
 
   it("shows ambiguous Planning origin candidates without choosing one", async () => {

@@ -1343,3 +1343,16 @@ Paid-pilot activation check (2026-09-28):
   bundle and both read-only production views were verified, API/database health is green, active queues and
   non-collector DLQs are empty, and the six retained collector DLQ messages remain untouched. No review, matching,
   hygiene-classification, publication, organisation-resolution or ingestion business rule changed.
+- CareProspect lifecycle automation Phase A introduces the versioned `care-opportunity-lifecycle-v1` customer
+  lifecycle projection, append-only transition-history and Planning-watch schema, deterministic Planning /
+  Recruitment / Ofsted precedence, and preview-only `care-opportunity-publication-v1` and
+  `care-opportunity-withdrawal-v1` policies. Planning pending is represented explicitly without implying approval;
+  terminal negatives yield STOPPED only when stronger evidence does not keep the opportunity alive; human-published
+  records require manual review before withdrawal. Opportunity Detail now shows the derived/stored lifecycle,
+  watch readiness, transition history and an audited per-opportunity automation block; Sources shows bounded watcher
+  and projected Plota usage metrics. A daily EventBridge coordinator is provisioned DISABLED and rejects execution:
+  lifecycle bootstrap, watch enrollment/provider calls, automatic publication and automatic withdrawal all remain
+  off pending the production read-only preview and explicit subsequent phase approval. The initial publication
+  scope is deliberately limited to reviewed foundational new-home/proposed-lawfulness Planning evidence with safe
+  geography/content and a stable 10% QA holdout. Exact next step: deploy Phase A, run the production preview, record
+  lifecycle/watch/publication/withdrawal counts and provider-cost estimates, then stop for explicit Phase B approval.

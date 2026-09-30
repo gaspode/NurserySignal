@@ -66,6 +66,7 @@ from app.planning_backfill import PlanningBackfillBounds, chunk_payload
 from app.repository import (
     backfill_historical_planning_family_metadata,
     care_opportunity_hygiene_audit,
+    care_opportunity_lifecycle_preview,
     care_opportunity_semantic_drift_cleanup,
     care_planning_ai_approval_backlog,
     care_planning_fastpath_backlog,
@@ -106,6 +107,7 @@ from app.repository import (
     review_signals_bulk,
     review_triage_summary,
     safe_agreement_bulk_approve,
+    set_opportunity_automation_block,
     set_organisation_type,
     signal_detail,
     split_opportunity,
@@ -373,10 +375,14 @@ def _admin_path(path: str) -> tuple[str, str | None]:
         return "opportunity-recalculate", None
     if path == "/admin/opportunities/hygiene-audit":
         return "opportunity-hygiene-audit", None
+    if path == "/admin/opportunities/lifecycle-preview":
+        return "opportunity-lifecycle-preview", None
     if path.startswith("/admin/opportunities/"):
         parts = path[len("/admin/opportunities/") :].split("/")
         if len(parts) == 2 and parts[1] == "publication":
             return "opportunity-publication", parts[0]
+        if len(parts) == 2 and parts[1] == "automation-block":
+            return "opportunity-automation-block", parts[0]
         if len(parts) == 2 and parts[1] in {"link", "unlink", "merge", "split"}:
             return f"opportunity-{parts[1]}", parts[0]
         return "opportunity-detail", parts[0]
@@ -410,6 +416,18 @@ def _admin_path(path: str) -> tuple[str, str | None]:
 
 def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     settings = Settings.from_env()
+    if event.get("operation") == "care_lifecycle_refresh_coordinator" and not event.get(
+        "requestContext"
+    ):
+        if not bool(event.get("preview", True)):
+            raise ValueError("care lifecycle refresh execution is not enabled in Phase A")
+        report = care_opportunity_lifecycle_preview(settings)
+        report["coordinator"] = {
+            "preview": True,
+            "max_due": min(max(int(event.get("max_due") or 50), 1), 100),
+            "provider_requests_queued": 0,
+        }
+        return report
     if event.get("operation") == "customer_pilot_inventory" and not event.get("requestContext"):
         return pilot_curation_inventory(
             settings,
@@ -421,9 +439,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     ):
         report = care_opportunity_hygiene_audit(settings, limit=1)
         return report["support_semantics_diagnostic"]
-    if event.get("operation") == "care_evidence_support_verify" and not event.get(
-        "requestContext"
-    ):
+    if event.get("operation") == "care_evidence_support_verify" and not event.get("requestContext"):
         opportunity_ids = event.get("opportunity_ids")
         if not isinstance(opportunity_ids, list) or not 1 <= len(opportunity_ids) <= 10:
             raise ValueError("opportunity_ids must contain between 1 and 10 IDs")
@@ -445,9 +461,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                         "evidence_support_classification": signal.get(
                             "evidence_support_classification"
                         ),
-                        "planning_consistency_warning": signal.get(
-                            "planning_consistency_warning"
-                        ),
+                        "planning_consistency_warning": signal.get("planning_consistency_warning"),
                     }
                     for signal in detail.get("signals", [])
                     if signal.get("source_type") == "planning"
@@ -1567,9 +1581,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                         actor=actor,
                         preview=bool(payload.get("preview", True)),
                         limit=min(max(int(payload.get("limit", 100)), 1), 100),
-                        taxonomy_catchup_only=bool(
-                            payload.get("taxonomy_catchup_only", False)
-                        ),
+                        taxonomy_catchup_only=bool(payload.get("taxonomy_catchup_only", False)),
                     ),
                 )
             if action == "care-planning-manual-analysis" and method == "GET":
@@ -1646,8 +1658,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                     care_planning_lawfulness_preview(
                         settings,
                         taxonomy_catchup_only=(
-                            str(_query(event, "taxonomy_catchup_only") or "").lower()
-                            == "true"
+                            str(_query(event, "taxonomy_catchup_only") or "").lower() == "true"
                         ),
                     ),
                 )
@@ -1664,9 +1675,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                         actor=actor,
                         preview=bool(payload.get("preview", True)),
                         limit=min(max(int(payload.get("limit", 100)), 1), 100),
-                        taxonomy_catchup_only=bool(
-                            payload.get("taxonomy_catchup_only", False)
-                        ),
+                        taxonomy_catchup_only=bool(payload.get("taxonomy_catchup_only", False)),
                     ),
                 )
             if action == "opportunity-hygiene-audit" and method == "GET":
@@ -1685,6 +1694,27 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                         publication_status=_query(event, "publication_status"),
                         q=_query(event, "q"),
                         view=_query(event, "view") or "inventory",
+                    ),
+                )
+            if action == "opportunity-lifecycle-preview" and method == "GET":
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                return _response(200, care_opportunity_lifecycle_preview(settings))
+            if action == "opportunity-automation-block" and method == "POST" and signal_id:
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                payload = parse_json_payload(_raw_body(event))
+                actor = str(claims.get("sub") or claims.get("username") or "unknown")
+                return _response(
+                    200,
+                    set_opportunity_automation_block(
+                        settings,
+                        str(UUID(signal_id)),
+                        blocked=bool(payload.get("blocked")),
+                        reason=payload.get("reason"),
+                        actor=actor,
                     ),
                 )
             if action == "review-triage-safe-approve" and method == "POST":

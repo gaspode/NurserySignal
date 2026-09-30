@@ -5,6 +5,7 @@ from decimal import Decimal
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
+import pytest
 from app.authorization import normalized_groups
 from app.handler import handler
 from app.repository import ReprocessResult
@@ -1121,9 +1122,7 @@ def test_care_lawfulness_policy_preview_is_admin_only_and_read_only(monkeypatch)
         event(
             "/admin/review-triage/care-planning/lawfulness-approval",
             "POST",
-            body=json.dumps(
-                {"preview": False, "limit": 999, "taxonomy_catchup_only": True}
-            ),
+            body=json.dumps({"preview": False, "limit": 999, "taxonomy_catchup_only": True}),
         ),
         None,
     )
@@ -1139,8 +1138,7 @@ def test_care_opportunity_hygiene_audit_is_admin_only_bounded_and_read_only(
     captured = {}
     monkeypatch.setattr(
         "app.handler.care_opportunity_hygiene_audit",
-        lambda settings, **kwargs: captured.update(kwargs)
-        or {"read_only": True, "total": 10},
+        lambda settings, **kwargs: captured.update(kwargs) or {"read_only": True, "total": 10},
     )
     denied = handler(
         event(
@@ -1177,6 +1175,93 @@ def test_care_opportunity_hygiene_audit_is_admin_only_bounded_and_read_only(
         "publication_status": "DRAFT",
         "q": "Bristol",
         "view": "publication_candidates",
+    }
+
+
+def test_care_opportunity_lifecycle_preview_is_admin_only_and_read_only(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "app.handler.care_opportunity_lifecycle_preview",
+        lambda settings: {"preview": True, "mutations": 0, "opportunities_inspected": 12},
+    )
+    denied = handler(
+        event(
+            "/admin/opportunities/lifecycle-preview",
+            claims={"sub": "staff", "cognito:groups": ["Other"]},
+        ),
+        None,
+    )
+    assert denied["statusCode"] == 403
+    response = handler(event("/admin/opportunities/lifecycle-preview"), None)
+    assert response["statusCode"] == 200
+    assert json.loads(response["body"]) == {
+        "preview": True,
+        "mutations": 0,
+        "opportunities_inspected": 12,
+    }
+
+
+def test_care_lifecycle_coordinator_is_preview_only(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "app.handler.care_opportunity_lifecycle_preview",
+        lambda settings: {"preview": True, "mutations": 0},
+    )
+    result = handler(
+        {
+            "operation": "care_lifecycle_refresh_coordinator",
+            "preview": True,
+            "max_due": 999,
+        },
+        None,
+    )
+    assert result["coordinator"] == {
+        "preview": True,
+        "max_due": 100,
+        "provider_requests_queued": 0,
+    }
+    with pytest.raises(ValueError, match="not enabled"):
+        handler(
+            {"operation": "care_lifecycle_refresh_coordinator", "preview": False},
+            None,
+        )
+
+
+def test_opportunity_publication_automation_block_is_admin_only_and_audited(
+    monkeypatch,
+) -> None:
+    captured = {}
+
+    def fake_block(settings, opportunity_id, **kwargs):
+        captured.update(opportunity_id=opportunity_id, **kwargs)
+        return {"id": opportunity_id, "publication_automation_blocked": True}
+
+    monkeypatch.setattr("app.handler.set_opportunity_automation_block", fake_block)
+    opportunity_id = "00000000-0000-0000-0000-000000000123"
+    denied = handler(
+        event(
+            f"/admin/opportunities/{opportunity_id}/automation-block",
+            "POST",
+            body=json.dumps({"blocked": True, "reason": "Needs review"}),
+            claims={"sub": "staff", "cognito:groups": ["Other"]},
+        ),
+        None,
+    )
+    assert denied["statusCode"] == 403
+    response = handler(
+        event(
+            f"/admin/opportunities/{opportunity_id}/automation-block",
+            "POST",
+            body=json.dumps({"blocked": True, "reason": "Needs review"}),
+        ),
+        None,
+    )
+    assert response["statusCode"] == 200
+    assert captured == {
+        "opportunity_id": opportunity_id,
+        "blocked": True,
+        "reason": "Needs review",
+        "actor": "reviewer-123",
     }
 
 
@@ -1291,9 +1376,7 @@ def test_care_planning_backlog_actions_are_admin_only_and_bounded(monkeypatch) -
         event(
             "/admin/review-triage/care-planning/ai-approval",
             "POST",
-            body=json.dumps(
-                {"preview": True, "limit": 999, "taxonomy_catchup_only": True}
-            ),
+            body=json.dumps({"preview": True, "limit": 999, "taxonomy_catchup_only": True}),
         ),
         None,
     )

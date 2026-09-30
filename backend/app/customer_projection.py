@@ -61,9 +61,7 @@ def customer_safe_location(
 ) -> str | None:
     """Build coarse site geography; caller must not pass provider-office fields."""
     locality = (
-        _safe_place(town)
-        or _safe_place(local_authority, authority=True)
-        or _safe_place(region)
+        _safe_place(town) or _safe_place(local_authority, authority=True) or _safe_place(region)
     )
     district = postcode_district(postcode)
     if locality and district and district.casefold() not in locality.casefold():
@@ -95,6 +93,25 @@ def customer_title(row: dict[str, Any]) -> str:
 def generated_customer_summary(row: dict[str, Any]) -> str:
     sources = set(row.get("source_types") or [])
     change = str(row.get("change_type") or "OTHER_CHANGE")
+    lifecycle = str(
+        row.get("customer_lifecycle_stage")
+        or row.get("derived_customer_lifecycle")
+        or row.get("lifecycle_stage")
+        or ""
+    )
+    if lifecycle == "PLANNING_PENDING":
+        return (
+            "A planning application has been submitted for material children’s-home "
+            "provision and is awaiting a decision."
+        )
+    if lifecycle == "PLANNING_APPROVED":
+        return "Planning permission has been approved for material children’s-home provision."
+    if lifecycle == "APPEAL_PENDING":
+        return "A planning appeal is in progress for proposed children’s-home provision."
+    if lifecycle == "DELIVERY_SIGNAL_DETECTED":
+        return "Reviewed recruitment evidence indicates mobilisation for this opportunity."
+    if lifecycle in {"REGISTRATION_DETECTED", "REGISTERED"}:
+        return "Official Ofsted evidence records regulatory progress for this opportunity."
     if len(sources) >= 2:
         return "Multiple independent public sources support this opportunity."
     if "planning" in sources:

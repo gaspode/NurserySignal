@@ -4,6 +4,7 @@ import pytest
 from app.customer_projection import (
     customer_safe_location,
     customer_title,
+    generated_customer_summary,
     generated_customer_title,
     postcode_district,
     safe_evidence_title,
@@ -35,15 +36,19 @@ def test_postcode_district_redacts_inward_code(postcode, expected) -> None:
     ],
 )
 def test_opening_title_uses_town_and_postcode_district(town, postcode, expected) -> None:
-    assert generated_customer_title(
-        {"town": town, "postcode": postcode, "change_type": "OPENING"}
-    ) == expected
+    assert (
+        generated_customer_title({"town": town, "postcode": postcode, "change_type": "OPENING"})
+        == expected
+    )
 
 
 def test_location_uses_authority_then_region_when_town_is_unavailable() -> None:
-    assert customer_safe_location(
-        local_authority="Sandwell Metropolitan Borough Council", postcode="B68 9TJ"
-    ) == "Sandwell, B68"
+    assert (
+        customer_safe_location(
+            local_authority="Sandwell Metropolitan Borough Council", postcode="B68 9TJ"
+        )
+        == "Sandwell, B68"
+    )
     assert customer_safe_location(region="West Midlands", postcode=None) == "West Midlands"
 
 
@@ -90,20 +95,26 @@ def test_apparent_street_address_is_not_accepted_as_a_town() -> None:
     ],
 )
 def test_title_uses_change_type_wording(change_type, expected) -> None:
-    assert generated_customer_title(
-        {"town": "Nottingham", "postcode": "NG8 1LD", "change_type": change_type}
-    ) == expected
+    assert (
+        generated_customer_title(
+            {"town": "Nottingham", "postcode": "NG8 1LD", "change_type": change_type}
+        )
+        == expected
+    )
 
 
 def test_manual_customer_title_override_is_preserved_exactly() -> None:
-    assert customer_title(
-        {
-            "customer_title": "A deliberately chosen customer title",
-            "town": "Nottingham",
-            "postcode": "NG8 1LD",
-            "change_type": "OPENING",
-        }
-    ) == "A deliberately chosen customer title"
+    assert (
+        customer_title(
+            {
+                "customer_title": "A deliberately chosen customer title",
+                "town": "Nottingham",
+                "postcode": "NG8 1LD",
+                "change_type": "OPENING",
+            }
+        )
+        == "A deliberately chosen customer title"
+    )
 
 
 def test_generated_title_never_contains_street_or_full_postcode() -> None:
@@ -125,3 +136,19 @@ def test_customer_evidence_title_suppresses_exact_location() -> None:
     assert safe_evidence_title("Support worker for a new children’s home in Liverpool") == (
         "Support worker for a new children’s home in Liverpool"
     )
+
+
+def test_generated_summary_is_stage_aware_without_overstating_certainty() -> None:
+    pending = generated_customer_summary(
+        {"customer_lifecycle_stage": "PLANNING_PENDING", "source_types": ["planning"]}
+    )
+    approved = generated_customer_summary(
+        {"customer_lifecycle_stage": "PLANNING_APPROVED", "source_types": ["planning"]}
+    )
+    appeal = generated_customer_summary(
+        {"customer_lifecycle_stage": "APPEAL_PENDING", "source_types": ["planning"]}
+    )
+    assert "awaiting a decision" in pending
+    assert "approved" in approved
+    assert "appeal is in progress" in appeal
+    assert "opening confirmed" not in pending.lower()

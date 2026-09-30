@@ -57,6 +57,14 @@ STAGES = {
     "FIT_OUT": "Preparing to open",
     "OPENING_SOON": "Opening soon",
     "OPEN": "Open / confirmed",
+    "PLANNING_PENDING": "Planning pending",
+    "PLANNING_APPROVED": "Planning approved",
+    "DELIVERY_SIGNAL_DETECTED": "Delivery signal detected",
+    "REGISTRATION_DETECTED": "Registration detected",
+    "REGISTERED": "Registered",
+    "APPEAL_PENDING": "Planning appeal pending",
+    "STOPPED": "Stopped",
+    "NEEDS_REVIEW": "Status under review",
 }
 CHANGE_LABELS = {
     "OPENING": "New opening",
@@ -255,7 +263,7 @@ def list_customer_opportunities(
         (region, "lower(COALESCE(geo.region, '')) = lower(%s)"),
         (local_authority, "lower(COALESCE(geo.local_authority, '')) = lower(%s)"),
         (change_type, "o.change_type = %s"),
-        (stage, "o.lifecycle_stage = %s"),
+        (stage, "COALESCE(o.customer_lifecycle_stage, o.lifecycle_stage) = %s"),
     ):
         if value:
             clauses.append(expression)
@@ -285,7 +293,8 @@ def list_customer_opportunities(
         ).fetchone()[0]
         rows = conn.execute(
             f"""SELECT o.id, o.customer_title, o.customer_summary, o.operator_name,
-                       o.postcode, o.town, o.change_type, o.lifecycle_stage,
+                       o.postcode, o.town, o.change_type,
+                       COALESCE(o.customer_lifecycle_stage, o.lifecycle_stage),
                        o.first_seen_at, o.latest_update_at, o.location_sensitivity,
                        geo.region, geo.local_authority, geo.source_types,
                        (saved.opportunity_id IS NOT NULL) AS saved
@@ -343,7 +352,8 @@ def customer_opportunity_detail(
     with connection(settings) as conn:
         row_value = conn.execute(
             f"""SELECT o.id, o.customer_title, o.customer_summary, o.operator_name,
-                       o.postcode, o.town, o.change_type, o.lifecycle_stage,
+                       o.postcode, o.town, o.change_type,
+                       COALESCE(o.customer_lifecycle_stage, o.lifecycle_stage),
                        o.first_seen_at, o.latest_update_at, o.location_sensitivity,
                        geo.region, geo.local_authority, geo.source_types,
                        EXISTS (SELECT 1 FROM customer_saved_opportunities s
