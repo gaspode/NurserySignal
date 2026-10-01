@@ -56,7 +56,8 @@ Current gate:
   validation emitted no rejection, the remaining boundary is the Cognito token response or its
   returned access-token binding. Safe diagnostics now distinguish those paths using only status,
   standard error code and claim-name/match booleans; authorization codes, PKCE verifiers, assertions
-  and tokens are never logged.
+  and tokens are never logged. Diagnostic commit `b1f5871` passed 40 focused tests and full CI run
+  `36933966389`, then deployed successfully in run `36934090611`.
 - MCP v1 is deployed at the production `/mcp` endpoint with RFC 9728 protected-resource discovery,
   an application-owned 401 Bearer challenge and an OAuth 2.1 authorization-code/PKCE facade. The
   canonical resource is the exact `/mcp` URL and RFC 8707 resource binding is preserved through
