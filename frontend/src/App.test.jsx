@@ -1074,7 +1074,8 @@ describe("admin frontend", () => {
       if (path === "/admin/opportunities/lifecycle-preview") return {
         publication_preview: {
           preview_only: true,
-          policy_version: "care-publication-v2",
+          policy_version: "care-publication-v3",
+          previous_policy_version: "care-publication-v2",
           holdout_version: "care-opportunity-publication-v1",
           outcomes: {
             AUTO_PUBLISH_ELIGIBLE: 120,
@@ -1085,8 +1086,22 @@ describe("admin frontend", () => {
           },
           exclusions: { needs_review_lifecycle: 164, stopped: 219 },
           changed_since_previous_policy_preview: 25,
+          changed_examples: [{
+            opportunity_id: "changed-1",
+            previous_outcome: "MANUAL_REVIEW",
+            current_outcome: "AUTO_PUBLISH_ELIGIBLE",
+          }],
           published_policy_conflict_count: 1,
-          published_policy_conflicts: [{ opportunity_id: "published-1", reasons: ["insufficient_evidence"] }],
+          published_policy_conflicts: [{
+            opportunity_id: "published-1",
+            primary_reason: "pre_taxonomy_strong_opening_excluded",
+          }],
+          published_conflict_analysis: {
+            by_primary_reason: { pre_taxonomy_strong_opening_excluded: 1 },
+          },
+          manual_review_analysis: {
+            cohorts: { strong_pending_opening_pre_taxonomy: 25 },
+          },
         },
       };
       return hygieneResult();
@@ -1096,10 +1111,16 @@ describe("admin frontend", () => {
     await screen.findByRole("heading", { name: "Needs attention" });
     await userEvent.click(screen.getByRole("button", { name: "Publication candidates" }));
     expect(await screen.findByRole("heading", { name: "Automatic publication preview" })).toBeInTheDocument();
-    expect(screen.getByText(/care-publication-v2/)).toHaveTextContent("Preview only");
+    expect(screen.getByText(/care-publication-v3/)).toHaveTextContent("care-publication-v2");
     expect(screen.getByText("Auto-publish eligible").parentElement).toHaveTextContent("120");
     expect(screen.getByText("QA holdouts").parentElement).toHaveTextContent("14");
-    expect(screen.getByText("Changed since v1 preview").parentElement).toHaveTextContent("25");
+    expect(screen.getByText("Changed since v2 preview").parentElement).toHaveTextContent("25");
+    await userEvent.click(screen.getByText("Published conflicts grouped by reason"));
+    expect(screen.getAllByText(/Pre Taxonomy Strong Opening Excluded/)[0].parentElement).toHaveTextContent("1");
+    await userEvent.click(screen.getByText("V2 manual-review cohort"));
+    expect(screen.getByText(/Strong Pending Opening Pre Taxonomy/).parentElement).toHaveTextContent("25");
+    await userEvent.click(screen.getByText("Changed v2 → v3 outcomes"));
+    expect(screen.getByRole("button", { name: /View changed-/ })).toBeInTheDocument();
     await userEvent.click(screen.getByText("Published records requiring policy review"));
     await userEvent.click(screen.getByRole("button", { name: /View publishe/ }));
     expect(onNavigate).toHaveBeenCalledWith("/opportunities/published-1");

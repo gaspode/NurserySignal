@@ -16,8 +16,9 @@ from app.planning_outcomes import (
 )
 
 CARE_LIFECYCLE_POLICY_VERSION = "care-opportunity-lifecycle-v1"
-CARE_PUBLICATION_POLICY_VERSION = "care-publication-v2"
-CARE_PUBLICATION_PREVIOUS_POLICY_VERSION = "care-opportunity-publication-v1"
+CARE_PUBLICATION_POLICY_VERSION = "care-publication-v3"
+CARE_PUBLICATION_PREVIOUS_POLICY_VERSION = "care-publication-v2"
+CARE_PUBLICATION_LEGACY_POLICY_VERSION = "care-opportunity-publication-v1"
 # Holdout identity deliberately remains independent of the policy revision so an
 # opportunity does not drift between QA and automatic cohorts after recalculation.
 CARE_PUBLICATION_HOLDOUT_VERSION = "care-opportunity-publication-v1"
@@ -82,6 +83,16 @@ class PlanningWatchDecision:
     planning_outcome: str
     age_days: int | None
     age_source: str | None
+
+
+@dataclass(frozen=True)
+class PublicationConflictAssessment:
+    primary_reason: str
+    judgement: str
+    customer_useful: bool
+    recommendation: str
+    planning_subtypes: tuple[str, ...]
+    evidence_summary: str
 
 
 def _watch_datetime(value: Any) -> datetime | None:
@@ -600,7 +611,7 @@ def _has_publication_identity(
     return has_site and has_organisation_or_application
 
 
-def evaluate_publication(
+def evaluate_publication_v2(
     opportunity: dict[str, Any],
     lifecycle: str | LifecycleDecision,
     signals: list[dict[str, Any]],
@@ -710,6 +721,223 @@ def evaluate_publication(
         "AUTO_PUBLISH_ELIGIBLE",
         "Current lifecycle, foundational evidence, identity and safe content passed policy.",
     )
+
+
+def _legacy_strong_opening_signal(
+    opportunity: dict[str, Any], signal: dict[str, Any]
+) -> bool:
+    """Recognise safe pre-taxonomy opening facts without reparsing proposal text."""
+    if opportunity.get("change_type") != "OPENING":
+        return False
+    if signal.get("source_type") != "planning" or signal.get("review_status") != "APPROVED":
+        return False
+    if signal.get("relationship_status", signal.get("status")) != "ACTIVE":
+        return False
+    facts = signal.get("extracted_facts") or {}
+    if facts.get("planning_subtype"):
+        return False
+    if facts.get("opportunity_creation_decision") != "CREATE_OPPORTUNITY":
+        return False
+    if facts.get("children_home_relevance") != "RELEVANT_CHANGE":
+        return False
+    if facts.get("commercial_change_evidence") != "STRONG":
+        return False
+    if facts.get("opportunity_change_type") != "OPENING":
+        return False
+    if facts.get("likely_false_positive") is True or facts.get("planning_ambiguity_markers"):
+        return False
+    if classify_evidence_support(signal) != EvidenceSupport.FOUNDATIONAL:
+        return False
+    return (
+        canonical_planning_outcome(signal.get("metadata") or {}).outcome
+        in _PUBLICATION_POSITIVE_OUTCOMES
+    )
+
+
+def legacy_strong_opening_signals(
+    opportunity: dict[str, Any], signals: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    return [signal for signal in signals if _legacy_strong_opening_signal(opportunity, signal)]
+
+
+def deterministic_policy_samples(
+    items: list[dict[str, Any]], *, limit: int = 5
+) -> list[dict[str, Any]]:
+    """Return a reproducible bounded sample without runtime randomness."""
+    return sorted(items, key=lambda item: str(item.get("opportunity_id") or item.get("id") or ""))[
+        :limit
+    ]
+
+
+def classify_publication_conflict(
+    opportunity: dict[str, Any],
+    lifecycle: str,
+    signals: list[dict[str, Any]],
+    *,
+    hygiene_category: str,
+    v2_decision: AutomationDecision,
+) -> PublicationConflictAssessment:
+    active_planning = [
+        signal
+        for signal in signals
+        if signal.get("source_type") == "planning"
+        and signal.get("relationship_status", signal.get("status")) == "ACTIVE"
+    ]
+    subtypes = tuple(
+        sorted(
+            {
+                str((signal.get("extracted_facts") or {}).get("planning_subtype") or "UNSET")
+                for signal in active_planning
+            }
+        )
+    )
+    foundational = sum(
+        classify_evidence_support(signal) == EvidenceSupport.FOUNDATIONAL
+        for signal in active_planning
+    )
+    outcomes = sorted(
+        {
+            canonical_planning_outcome(signal.get("metadata") or {}).outcome.value
+            for signal in active_planning
+        }
+    )
+    summary = (
+        f"{foundational} foundational Planning signal(s); subtypes "
+        f"{', '.join(subtypes) or 'none'}; outcomes {', '.join(outcomes) or 'none'}."
+    )
+    if opportunity.get("merged_into_opportunity_id") or hygiene_category in {
+        "DUPLICATE_CANDIDATE",
+        "SUPERSEDED_CANDIDATE",
+    }:
+        return PublicationConflictAssessment(
+            "superseded_or_duplicate",
+            "VALID_HISTORICAL_OR_MANUAL_EXCEPTION",
+            False,
+            "KEEP_MANUAL_PROTECTION",
+            subtypes,
+            summary,
+        )
+    if lifecycle == CareLifecycle.APPEAL_PENDING.value:
+        return PublicationConflictAssessment(
+            "unresolved_appeal",
+            "AMBIGUOUS_NEEDS_HUMAN_JUDGEMENT",
+            False,
+            "KEEP_MANUAL_PROTECTION",
+            subtypes,
+            summary,
+        )
+    if lifecycle == CareLifecycle.NEEDS_REVIEW.value:
+        return PublicationConflictAssessment(
+            "lifecycle_mismatch",
+            "AMBIGUOUS_NEEDS_HUMAN_JUDGEMENT",
+            foundational > 0,
+            "KEEP_MANUAL_PROTECTION",
+            subtypes,
+            summary,
+        )
+    if legacy_strong_opening_signals(opportunity, signals):
+        return PublicationConflictAssessment(
+            "pre_taxonomy_strong_opening_excluded",
+            "LIKELY_POLICY_DEFECT",
+            True,
+            "REFINE_POLICY",
+            subtypes,
+            summary,
+        )
+    if "EXPANSION_OR_CAPACITY_CHANGE" in subtypes or opportunity.get("change_type") == "EXPANSION":
+        return PublicationConflictAssessment(
+            "expansion_subtype_not_admitted",
+            "AMBIGUOUS_NEEDS_HUMAN_JUDGEMENT",
+            foundational > 0,
+            "KEEP_MANUAL_PROTECTION",
+            subtypes,
+            summary,
+        )
+    if "manual_history_review" in v2_decision.exclusions:
+        return PublicationConflictAssessment(
+            "legacy_manual_history_ambiguity",
+            "VALID_HISTORICAL_OR_MANUAL_EXCEPTION",
+            foundational > 0,
+            "KEEP_MANUAL_PROTECTION",
+            subtypes,
+            summary,
+        )
+    return PublicationConflictAssessment(
+        "insufficient_current_evidence",
+        "VALID_HISTORICAL_OR_MANUAL_EXCEPTION",
+        foundational > 0,
+        "KEEP_MANUAL_PROTECTION",
+        subtypes,
+        summary,
+    )
+
+
+def evaluate_publication(
+    opportunity: dict[str, Any],
+    lifecycle: str | LifecycleDecision,
+    signals: list[dict[str, Any]],
+    *,
+    hygiene_category: str,
+    hygiene_warning: str | None,
+    safe_title: str | None,
+    safe_summary: str | None,
+    respect_existing_publication: bool = True,
+) -> AutomationDecision:
+    """Evaluate v3, narrowly admitting strong pre-taxonomy opening evidence."""
+    v2 = evaluate_publication_v2(
+        opportunity,
+        lifecycle,
+        signals,
+        hygiene_category=hygiene_category,
+        hygiene_warning=hygiene_warning,
+        safe_title=safe_title,
+        safe_summary=safe_summary,
+        respect_existing_publication=respect_existing_publication,
+    )
+    if v2.outcome != "MANUAL_REVIEW" or "insufficient_evidence" not in v2.exclusions:
+        return v2
+    legacy = legacy_strong_opening_signals(opportunity, signals)
+    if not legacy:
+        return v2
+
+    projected_signals: list[dict[str, Any]] = []
+    legacy_ids = {str(signal.get("id")) for signal in legacy}
+    for signal in signals:
+        if str(signal.get("id")) not in legacy_ids:
+            projected_signals.append(signal)
+            continue
+        projected_signals.append(
+            {
+                **signal,
+                "extracted_facts": {
+                    **(signal.get("extracted_facts") or {}),
+                    "planning_subtype": "NEW_HOME_OTHER_EXPLICIT",
+                },
+            }
+        )
+    refined = evaluate_publication_v2(
+        opportunity,
+        lifecycle,
+        projected_signals,
+        hygiene_category=hygiene_category,
+        hygiene_warning=hygiene_warning,
+        safe_title=safe_title,
+        safe_summary=safe_summary,
+        respect_existing_publication=respect_existing_publication,
+    )
+    if refined.outcome == "AUTO_PUBLISH_ELIGIBLE":
+        return AutomationDecision(
+            refined.outcome,
+            "Strong reviewed pre-taxonomy opening evidence passed the v3 compatibility rule.",
+            ("legacy_strong_opening_compatibility",),
+        )
+    if refined.outcome == "QA_HOLDOUT":
+        return AutomationDecision(
+            refined.outcome,
+            refined.reason,
+            ("stable_qa_holdout", "legacy_strong_opening_compatibility"),
+        )
+    return refined
 
 
 def evaluate_withdrawal(

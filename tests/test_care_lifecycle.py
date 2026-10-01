@@ -6,10 +6,13 @@ from app.care_lifecycle import (
     CARE_PUBLICATION_POLICY_VERSION,
     CareLifecycle,
     bootstrap_lifecycle_records,
+    classify_publication_conflict,
     derive_care_lifecycle,
     deterministic_initial_poll_at,
+    deterministic_policy_samples,
     evaluate_planning_watch,
     evaluate_publication,
+    evaluate_publication_v2,
     evaluate_withdrawal,
     project_planning_watch_requests,
     publication_qa_holdout,
@@ -271,10 +274,10 @@ def test_support_only_and_rejected_signals_do_not_create_lifecycle() -> None:
     assert derive_care_lifecycle([rejected_capacity]).lifecycle == CareLifecycle.NEEDS_REVIEW
 
 
-def test_publication_v2_is_safe_stable_versioned_and_idempotent() -> None:
+def test_publication_v2_is_reproducible_safe_stable_and_idempotent() -> None:
     lifecycle = derive_care_lifecycle([planning("Pending")])
     item = opportunity()
-    first = evaluate_publication(
+    first = evaluate_publication_v2(
         item,
         lifecycle,
         [planning("Pending")],
@@ -283,12 +286,12 @@ def test_publication_v2_is_safe_stable_versioned_and_idempotent() -> None:
         safe_title="New children's home — Nottingham, NG8",
         safe_summary="A planning application has been submitted for a children's home.",
     )
-    assert CARE_PUBLICATION_POLICY_VERSION == "care-publication-v2"
+    assert CARE_PUBLICATION_POLICY_VERSION == "care-publication-v3"
     assert CARE_PUBLICATION_HOLDOUT_VERSION == "care-opportunity-publication-v1"
     assert first.outcome in {"AUTO_PUBLISH_ELIGIBLE", "QA_HOLDOUT"}
     assert publication_qa_holdout(item["id"]) == publication_qa_holdout(item["id"])
     assert (
-        evaluate_publication(
+        evaluate_publication_v2(
             item,
             lifecycle,
             [planning("Pending")],
@@ -301,7 +304,7 @@ def test_publication_v2_is_safe_stable_versioned_and_idempotent() -> None:
     )
 
     assert (
-        evaluate_publication(
+        evaluate_publication_v2(
             item,
             lifecycle,
             [planning("Pending")],
@@ -314,7 +317,7 @@ def test_publication_v2_is_safe_stable_versioned_and_idempotent() -> None:
     )
     assert (
         "privacy_or_redaction_issue"
-        in evaluate_publication(
+        in evaluate_publication_v2(
             item,
             lifecycle,
             [planning("Pending")],
@@ -326,7 +329,7 @@ def test_publication_v2_is_safe_stable_versioned_and_idempotent() -> None:
     )
     assert (
         "manual_automation_block"
-        in evaluate_publication(
+        in evaluate_publication_v2(
             opportunity(publication_automation_blocked=True),
             lifecycle,
             [planning("Pending")],
@@ -339,7 +342,7 @@ def test_publication_v2_is_safe_stable_versioned_and_idempotent() -> None:
     existing = planning("Approved", subtype="LAWFULNESS_EXISTING", decision="SUPPORT_EXISTING_ONLY")
     assert (
         "insufficient_evidence"
-        in evaluate_publication(
+        in evaluate_publication_v2(
             item,
             derive_care_lifecycle([existing]),
             [existing],
@@ -349,6 +352,128 @@ def test_publication_v2_is_safe_stable_versioned_and_idempotent() -> None:
             safe_summary="Safe",
         ).exclusions
     )
+
+
+def legacy_strong_opening(outcome: str = "Pending") -> dict:
+    signal = planning(outcome, subtype="")
+    signal["extracted_facts"].update(
+        {
+            "children_home_relevance": "RELEVANT_CHANGE",
+            "commercial_change_evidence": "STRONG",
+            "opportunity_change_type": "OPENING",
+            "likely_false_positive": False,
+            "planning_ambiguity_markers": [],
+        }
+    )
+    return signal
+
+
+def publication_kwargs() -> dict:
+    return {
+        "hygiene_category": "VALID_SUPPORTED",
+        "hygiene_warning": None,
+        "safe_title": "New children's home — Nottingham, NG8",
+        "safe_summary": "A planning application has been submitted for a children's home.",
+    }
+
+
+def test_publication_v3_narrowly_admits_strong_pre_taxonomy_openings() -> None:
+    signal = legacy_strong_opening()
+    v2 = evaluate_publication_v2(
+        opportunity(), "PLANNING_PENDING", [signal], **publication_kwargs()
+    )
+    v3 = evaluate_publication(
+        opportunity(), "PLANNING_PENDING", [signal], **publication_kwargs()
+    )
+    assert v2.outcome == "MANUAL_REVIEW"
+    assert "insufficient_evidence" in v2.exclusions
+    assert v3.outcome in {"AUTO_PUBLISH_ELIGIBLE", "QA_HOLDOUT"}
+    assert "legacy_strong_opening_compatibility" in v3.exclusions
+
+    repeated = evaluate_publication(
+        opportunity(), "PLANNING_PENDING", [signal], **publication_kwargs()
+    )
+    assert repeated == v3
+    assert (v3.outcome == "QA_HOLDOUT") == publication_qa_holdout(opportunity()["id"])
+
+
+def test_publication_v3_does_not_relax_expansion_or_uncertain_lifecycles() -> None:
+    signal = legacy_strong_opening("Approved")
+    expansion = opportunity(change_type="EXPANSION")
+    signal["extracted_facts"]["opportunity_change_type"] = "EXPANSION"
+    assert (
+        evaluate_publication(
+            expansion, "PLANNING_APPROVED", [signal], **publication_kwargs()
+        ).outcome
+        == "MANUAL_REVIEW"
+    )
+
+    opening = legacy_strong_opening("Approved")
+    assert (
+        evaluate_publication(
+            opportunity(), "NEEDS_REVIEW", [opening], **publication_kwargs()
+        ).outcome
+        == "MANUAL_REVIEW"
+    )
+    assert (
+        evaluate_publication(
+            opportunity(), "APPEAL_PENDING", [opening], **publication_kwargs()
+        ).outcome
+        == "MANUAL_REVIEW"
+    )
+
+
+def test_publication_v3_preserves_manual_and_duplicate_protections() -> None:
+    signal = legacy_strong_opening("Approved")
+    manual = opportunity(
+        publication_status="PUBLISHED",
+        customer_published_by="admin@example.com",
+        publication_automation_provenance={},
+    )
+    assert (
+        evaluate_publication(manual, "PLANNING_APPROVED", [signal], **publication_kwargs()).outcome
+        == "MANUAL_PROTECTION"
+    )
+    duplicate = opportunity(merged_into_opportunity_id="canonical")
+    assert (
+        evaluate_publication(
+            duplicate, "PLANNING_APPROVED", [signal], **publication_kwargs()
+        ).outcome
+        == "INELIGIBLE"
+    )
+
+
+def test_publication_conflict_taxonomy_and_sampling_are_deterministic() -> None:
+    signal = legacy_strong_opening()
+    v2 = evaluate_publication_v2(
+        opportunity(), "PLANNING_PENDING", [signal], **publication_kwargs()
+    )
+    conflict = classify_publication_conflict(
+        opportunity(),
+        "PLANNING_PENDING",
+        [signal],
+        hygiene_category="VALID_SUPPORTED",
+        v2_decision=v2,
+    )
+    assert conflict.primary_reason == "pre_taxonomy_strong_opening_excluded"
+    assert conflict.judgement == "LIKELY_POLICY_DEFECT"
+    assert conflict.customer_useful is True
+
+    expansion = classify_publication_conflict(
+        opportunity(change_type="EXPANSION"),
+        "PLANNING_APPROVED",
+        [planning("Approved", subtype="EXPANSION_OR_CAPACITY_CHANGE")],
+        hygiene_category="VALID_SUPPORTED",
+        v2_decision=v2,
+    )
+    assert expansion.primary_reason == "expansion_subtype_not_admitted"
+    assert expansion.recommendation == "KEEP_MANUAL_PROTECTION"
+
+    items = [{"opportunity_id": value} for value in ("c", "a", "b")]
+    assert deterministic_policy_samples(items, limit=2) == [
+        {"opportunity_id": "a"},
+        {"opportunity_id": "b"},
+    ]
 
 
 def test_publication_v2_lifecycle_and_manual_protection_outcomes() -> None:

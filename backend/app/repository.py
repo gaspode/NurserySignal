@@ -16,18 +16,23 @@ from app.care_lifecycle import (
     CARE_PLANNING_WATCHER_POLICY_VERSION,
     CARE_PLANNING_WATCHER_PREVIOUS_MONTHLY_REQUESTS,
     CARE_PUBLICATION_HOLDOUT_VERSION,
+    CARE_PUBLICATION_LEGACY_POLICY_VERSION,
     CARE_PUBLICATION_POLICY_VERSION,
     CARE_PUBLICATION_PREVIOUS_POLICY_VERSION,
     CARE_WITHDRAWAL_POLICY_VERSION,
     CareLifecycle,
     LifecycleDecision,
     bootstrap_lifecycle_records,
+    classify_publication_conflict,
     derive_care_lifecycle,
     deterministic_initial_poll_at,
+    deterministic_policy_samples,
     evaluate_planning_watch,
     evaluate_publication,
     evaluate_publication_v1,
+    evaluate_publication_v2,
     evaluate_withdrawal,
+    legacy_strong_opening_signals,
     planning_watch_snapshot,
     project_planning_watch_requests,
 )
@@ -6410,9 +6415,22 @@ def care_opportunity_lifecycle_preview(settings: Settings) -> dict[str, Any]:
     publication_by_source_mix: dict[str, Counter[str]] = {}
     publication_samples: dict[str, list[dict[str, Any]]] = {}
     previous_publication_counts: Counter[str] = Counter()
+    legacy_publication_counts: Counter[str] = Counter()
     publication_changed_examples: list[dict[str, Any]] = []
+    publication_change_transitions: Counter[str] = Counter()
     publication_changed_count = 0
     published_policy_conflicts: list[dict[str, Any]] = []
+    conflict_primary_reasons: Counter[str] = Counter()
+    conflict_lifecycles: Counter[str] = Counter()
+    conflict_source_mix: Counter[str] = Counter()
+    conflict_change_types: Counter[str] = Counter()
+    conflict_planning_subtypes: Counter[str] = Counter()
+    conflict_judgements: Counter[str] = Counter()
+    conflict_customer_useful: Counter[str] = Counter()
+    conflict_recommendations: Counter[str] = Counter()
+    conflict_samples: dict[str, list[dict[str, Any]]] = {}
+    manual_review_cohorts: Counter[str] = Counter()
+    manual_review_samples: dict[str, list[dict[str, Any]]] = {}
     withdrawal_counts: Counter[str] = Counter()
     published_lifecycle_counts: Counter[str] = Counter()
     watch_outcomes: Counter[str] = Counter()
@@ -6492,7 +6510,17 @@ def care_opportunity_lifecycle_preview(settings: Settings) -> dict[str, Any]:
                 }
             )
 
-        previous = evaluate_publication_v1(
+        previous = evaluate_publication_v2(
+            projection,
+            stored_lifecycle,
+            opportunity["relationships"] or [],
+            hygiene_category=item["category"],
+            hygiene_warning=item.get("warning"),
+            safe_title=safe_title,
+            safe_summary=safe_summary,
+        )
+        previous_publication_counts[previous.outcome] += 1
+        legacy = evaluate_publication_v1(
             projection,
             decision,
             opportunity["relationships"] or [],
@@ -6501,26 +6529,78 @@ def care_opportunity_lifecycle_preview(settings: Settings) -> dict[str, Any]:
             safe_title=safe_title,
             safe_summary=safe_summary,
         )
-        previous_publication_counts[previous.outcome] += 1
-        comparable_previous = {
-            "AUTO_PUBLISH": "AUTO_PUBLISH_ELIGIBLE",
-            "QA_HOLDOUT": "QA_HOLDOUT",
-            "NOT_ELIGIBLE": "INELIGIBLE_OR_REVIEW",
-        }.get(previous.outcome, previous.outcome)
-        comparable_current = (
-            "INELIGIBLE_OR_REVIEW"
-            if publication.outcome in {"INELIGIBLE", "MANUAL_REVIEW"}
-            else publication.outcome
-        )
-        if comparable_previous != comparable_current:
+        legacy_publication_counts[legacy.outcome] += 1
+        if previous.outcome != publication.outcome:
             publication_changed_count += 1
+            publication_change_transitions[f"{previous.outcome}->{publication.outcome}"] += 1
             if len(publication_changed_examples) < 10:
                 publication_changed_examples.append(
                     {
                         "opportunity_id": opportunity_id,
                         "previous_outcome": previous.outcome,
                         "current_outcome": publication.outcome,
+                        "primary_reason": publication.reason,
+                        "policy_rule": (
+                            "legacy_strong_opening_compatibility"
+                            if "legacy_strong_opening_compatibility" in publication.exclusions
+                            else "unchanged_v2_rule"
+                        ),
+                        "lifecycle": stored_lifecycle,
+                        "supporting_evidence_summary": (
+                            f"{item.get('foundational_signal_count') or 0} foundational signal(s); "
+                            f"source mix {source_mix}."
+                        ),
                         "current_reasons": list(publication.exclusions),
+                    }
+                )
+
+        if previous.outcome == "MANUAL_REVIEW":
+            if stored_lifecycle == "APPEAL_PENDING":
+                cohort = "unresolved_appeal"
+            elif stored_lifecycle == "NEEDS_REVIEW":
+                cohort = "needs_review_lifecycle"
+            elif (
+                opportunity.get("change_type") == "EXPANSION"
+                and stored_lifecycle == "PLANNING_APPROVED"
+            ):
+                cohort = "approved_expansion"
+            elif (
+                opportunity.get("change_type") == "EXPANSION"
+                and stored_lifecycle == "PLANNING_PENDING"
+            ):
+                cohort = "pending_expansion"
+            elif stored_lifecycle == "PLANNING_PENDING" and legacy_strong_opening_signals(
+                projection, opportunity["relationships"] or []
+            ):
+                cohort = "strong_pending_opening_pre_taxonomy"
+            elif stored_lifecycle == "PLANNING_APPROVED":
+                cohort = "approved_other"
+            elif stored_lifecycle == "PLANNING_PENDING":
+                cohort = "pending_other"
+            else:
+                cohort = "other"
+            manual_review_cohorts[cohort] += 1
+            cohort_samples = manual_review_samples.setdefault(cohort, [])
+            if len(cohort_samples) < 5:
+                planning_subtypes = sorted(
+                    {
+                        str(
+                            (signal.get("extracted_facts") or {}).get("planning_subtype")
+                            or "UNSET"
+                        )
+                        for signal in opportunity["relationships"] or []
+                        if signal.get("source_type") == "planning"
+                        and signal.get("status") == "ACTIVE"
+                    }
+                )
+                cohort_samples.append(
+                    {
+                        "opportunity_id": opportunity_id,
+                        "lifecycle": stored_lifecycle,
+                        "change_type": opportunity.get("change_type"),
+                        "planning_subtypes": planning_subtypes,
+                        "v2_reasons": list(previous.exclusions),
+                        "v3_outcome": publication.outcome,
                     }
                 )
 
@@ -6532,7 +6612,7 @@ def care_opportunity_lifecycle_preview(settings: Settings) -> dict[str, Any]:
                 and int(item.get("foundational_signal_count") or 0) > 0
             ):
                 underlying_hygiene_category = "VALID_SUPPORTED"
-            underlying = evaluate_publication(
+            v2_underlying = evaluate_publication_v2(
                 projection,
                 stored_lifecycle,
                 opportunity["relationships"] or [],
@@ -6542,15 +6622,43 @@ def care_opportunity_lifecycle_preview(settings: Settings) -> dict[str, Any]:
                 safe_summary=safe_summary,
                 respect_existing_publication=False,
             )
-            if underlying.outcome not in {"AUTO_PUBLISH_ELIGIBLE", "QA_HOLDOUT"}:
-                published_policy_conflicts.append(
-                    {
-                        "opportunity_id": opportunity_id,
-                        "lifecycle": stored_lifecycle,
-                        "policy_outcome_without_protection": underlying.outcome,
-                        "reasons": list(underlying.exclusions),
-                    }
+            if v2_underlying.outcome not in {"AUTO_PUBLISH_ELIGIBLE", "QA_HOLDOUT"}:
+                assessment = classify_publication_conflict(
+                    projection,
+                    stored_lifecycle,
+                    opportunity["relationships"] or [],
+                    hygiene_category=underlying_hygiene_category,
+                    v2_decision=v2_underlying,
                 )
+                conflict = {
+                    "opportunity_id": opportunity_id,
+                    "lifecycle": stored_lifecycle,
+                    "source_mix": source_mix,
+                    "change_type": opportunity.get("change_type"),
+                    "planning_subtypes": list(assessment.planning_subtypes),
+                    "primary_reason": assessment.primary_reason,
+                    "judgement": assessment.judgement,
+                    "customer_useful": assessment.customer_useful,
+                    "recommendation": assessment.recommendation,
+                    "why_manually_published": (
+                        "An explicit human publication decision predates or overrides "
+                        "the automatic scope."
+                    ),
+                    "v2_outcome_without_protection": v2_underlying.outcome,
+                    "v2_reasons": list(v2_underlying.exclusions),
+                    "evidence_summary": assessment.evidence_summary,
+                }
+                published_policy_conflicts.append(conflict)
+                conflict_primary_reasons[assessment.primary_reason] += 1
+                conflict_lifecycles[stored_lifecycle] += 1
+                conflict_source_mix[source_mix] += 1
+                conflict_change_types[str(opportunity.get("change_type") or "UNKNOWN")] += 1
+                for subtype in assessment.planning_subtypes:
+                    conflict_planning_subtypes[subtype] += 1
+                conflict_judgements[assessment.judgement] += 1
+                conflict_customer_useful[str(assessment.customer_useful).lower()] += 1
+                conflict_recommendations[assessment.recommendation] += 1
+                conflict_samples.setdefault(assessment.primary_reason, []).append(conflict)
         withdrawal = evaluate_withdrawal(projection, decision)
         withdrawal_counts[withdrawal.outcome] += 1
         if opportunity.get("publication_status") == "PUBLISHED":
@@ -6718,6 +6826,7 @@ def care_opportunity_lifecycle_preview(settings: Settings) -> dict[str, Any]:
             "preview_only": True,
             "policy_version": CARE_PUBLICATION_POLICY_VERSION,
             "previous_policy_version": CARE_PUBLICATION_PREVIOUS_POLICY_VERSION,
+            "legacy_policy_version": CARE_PUBLICATION_LEGACY_POLICY_VERSION,
             "holdout_version": CARE_PUBLICATION_HOLDOUT_VERSION,
             "total_evaluated": len(opportunities),
             "currently_published": sum(
@@ -6748,10 +6857,36 @@ def care_opportunity_lifecycle_preview(settings: Settings) -> dict[str, Any]:
             "previous_preview_outcomes_recomputed": dict(
                 sorted(previous_publication_counts.items())
             ),
+            "legacy_v1_preview_outcomes_recomputed": dict(
+                sorted(legacy_publication_counts.items())
+            ),
             "changed_since_previous_policy_preview": publication_changed_count,
+            "change_transitions": dict(sorted(publication_change_transitions.items())),
             "changed_examples": publication_changed_examples,
             "published_policy_conflict_count": len(published_policy_conflicts),
             "published_policy_conflicts": published_policy_conflicts,
+            "published_conflict_analysis": {
+                "by_lifecycle": dict(sorted(conflict_lifecycles.items())),
+                "by_source_mix": dict(sorted(conflict_source_mix.items())),
+                "by_primary_reason": dict(sorted(conflict_primary_reasons.items())),
+                "by_change_type": dict(sorted(conflict_change_types.items())),
+                "by_planning_subtype": dict(sorted(conflict_planning_subtypes.items())),
+                "by_judgement": dict(sorted(conflict_judgements.items())),
+                "customer_useful": dict(sorted(conflict_customer_useful.items())),
+                "recommendations": dict(sorted(conflict_recommendations.items())),
+                "representative_examples": {
+                    reason: deterministic_policy_samples(items, limit=5)
+                    for reason, items in sorted(conflict_samples.items())
+                },
+            },
+            "manual_review_analysis": {
+                "v2_total": sum(manual_review_cohorts.values()),
+                "cohorts": dict(sorted(manual_review_cohorts.items())),
+                "representative_examples": {
+                    cohort: deterministic_policy_samples(items, limit=5)
+                    for cohort, items in sorted(manual_review_samples.items())
+                },
+            },
             "publication_mutations": 0,
             "withdrawal_mutations": 0,
         },
