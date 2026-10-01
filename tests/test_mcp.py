@@ -7,6 +7,7 @@ import pytest
 from app import mcp
 from app.config import Settings
 from cryptography.hazmat.primitives.asymmetric import rsa
+from jwt.algorithms import RSAAlgorithm
 
 REAL_DECODE_ACCESS_TOKEN = mcp._decode_access_token
 
@@ -304,21 +305,21 @@ def test_oauth_token_proxy_preserves_resource_and_validates_admin_token(monkeypa
 
 def test_access_token_validation_accepts_bound_user_and_rejects_wrong_audience(monkeypatch):
     private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-
-    class SigningKey:
-        key = private_key.public_key()
-
-    class Jwks:
-        def get_signing_key_from_jwt(self, token):
-            return SigningKey()
+    public_jwk = json.loads(RSAAlgorithm.to_jwk(private_key.public_key()))
+    public_jwk["kid"] = "test"
 
     settings = Settings(
         mcp_token_issuer="https://tokens.example",
+        mcp_token_jwks=json.dumps({"keys": [public_jwk]}),
         mcp_resource_url="https://api.example/mcp",
         mcp_user_client_id="user-client",
         mcp_service_client_id="service-client",
     )
-    monkeypatch.setitem(mcp._jwk_clients, "https://tokens.example", Jwks())
+    monkeypatch.setattr(
+        mcp.urllib.request,
+        "urlopen",
+        lambda *args, **kwargs: pytest.fail("JWT validation must not require runtime egress"),
+    )
     now = datetime.now(UTC)
     claims = {
         "iss": "https://tokens.example",

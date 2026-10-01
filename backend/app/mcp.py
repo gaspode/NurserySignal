@@ -15,7 +15,7 @@ from typing import Any
 from uuid import UUID
 
 import jwt
-from jwt import PyJWKClient, PyJWTError
+from jwt import PyJWK, PyJWKClient, PyJWTError
 from psycopg.types.json import Jsonb
 
 from app.config import Settings
@@ -839,10 +839,21 @@ def _decode_access_token(token: str, settings: Settings) -> dict[str, Any]:
         if not is_service and audience != settings.mcp_resource_url:
             raise MCPError("unauthorized", "MCP token audience is invalid", rpc_code=-32001)
         issuer = settings.mcp_token_issuer.rstrip("/")
-        jwks = _jwk_clients.setdefault(
-            issuer, PyJWKClient(f"{issuer}/.well-known/jwks.json", cache_keys=True)
-        )
-        key = jwks.get_signing_key_from_jwt(token).key
+        if settings.mcp_token_jwks:
+            try:
+                jwks_document = json.loads(settings.mcp_token_jwks)
+                key_id = jwt.get_unverified_header(token).get("kid")
+                jwk = next(item for item in jwks_document["keys"] if item.get("kid") == key_id)
+                key = PyJWK.from_dict(jwk).key
+            except (json.JSONDecodeError, KeyError, StopIteration, TypeError, ValueError) as exc:
+                raise MCPError(
+                    "unauthorized", "OAuth access token signing key is invalid", rpc_code=-32001
+                ) from exc
+        else:
+            jwks = _jwk_clients.setdefault(
+                issuer, PyJWKClient(f"{issuer}/.well-known/jwks.json", cache_keys=True)
+            )
+            key = jwks.get_signing_key_from_jwt(token).key
         options = {"require": ["exp", "iat", "iss"], "verify_aud": not is_service}
         return jwt.decode(
             token,

@@ -20,6 +20,19 @@ resource "aws_cognito_resource_server" "mcp" {
   }
 }
 
+data "http" "mcp_token_jwks" {
+  url = "https://${aws_cognito_user_pool.main.endpoint}/.well-known/jwks.json"
+  request_headers = {
+    Accept = "application/json"
+  }
+  lifecycle {
+    postcondition {
+      condition     = self.status_code == 200
+      error_message = "Cognito JWKS could not be loaded for MCP token validation."
+    }
+  }
+}
+
 resource "aws_cognito_user_pool_client" "mcp_chatgpt" {
   name                                 = "${local.name_prefix}-mcp-chatgpt"
   user_pool_id                         = aws_cognito_user_pool.main.id
@@ -137,6 +150,7 @@ resource "aws_lambda_function" "mcp" {
       MCP_OAUTH_ISSUER               = aws_apigatewayv2_api.http.api_endpoint
       MCP_OAUTH_AUTHORIZATION_SERVER = "https://${aws_cognito_user_pool_domain.mcp.domain}.auth.${var.aws_region}.amazoncognito.com"
       MCP_TOKEN_ISSUER               = "https://${aws_cognito_user_pool.main.endpoint}"
+      MCP_TOKEN_JWKS                 = data.http.mcp_token_jwks.response_body
       MCP_OAUTH_CALLBACK_URL         = local.mcp_oauth_callback_url
       MCP_USER_CLIENT_ID             = aws_cognito_user_pool_client.mcp_chatgpt.id
       MCP_SERVICE_CLIENT_ID          = aws_cognito_user_pool_client.mcp_service.id
