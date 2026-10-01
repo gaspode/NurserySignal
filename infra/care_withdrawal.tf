@@ -4,7 +4,7 @@ resource "aws_cloudwatch_event_rule" "care_withdrawal" {
   name                = "${local.name_prefix}-care-withdrawal"
   description         = "Bounded CareProspect automatic withdrawal coordinator"
   schedule_expression = "rate(6 hours)"
-  state               = "DISABLED"
+  state               = "ENABLED"
   tags                = local.common_tags
 }
 
