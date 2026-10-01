@@ -32,7 +32,11 @@ tool() {
   local name="$2"
   local arguments="$3"
   rpc "$label" tools/call "{\"name\":\"$name\",\"arguments\":$arguments}"
-  jq -e '.result.isError == false' "$smoke_dir/$label.json" >/dev/null
+  if ! jq -e '.result.isError == false' "$smoke_dir/$label.json" >/dev/null; then
+    jq -c '{isError: .result.isError, error: .result.structuredContent.error,
+      message: .result.structuredContent.message}' "$smoke_dir/$label.json"
+    return 1
+  fi
 }
 
 rpc initialize initialize '{}'
