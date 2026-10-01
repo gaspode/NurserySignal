@@ -1,0 +1,43 @@
+name: MCP production smoke
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: eu-west-1
+  TF_VAR_aws_region: eu-west-1
+  TF_VAR_aws_profile: ""
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: eu-west-1
+          role-to-assume: ${{ vars.NURSERYSIGNAL_AWS_ROLE_ARN }}
+      - name: Obtain short-lived read-only token and smoke MCP
+        shell: bash
+        run: |
+          set -euo pipefail
+          terraform -chdir=infra init -input=false >/dev/null
+          pool_id="$(terraform -chdir=infra output -raw cognito_user_pool_id)"
+          client_id="$(terraform -chdir=infra output -raw mcp_service_client_id)"
+          client_secret="$(aws cognito-idp describe-user-pool-client \
+            --user-pool-id "$pool_id" --client-id "$client_id" \
+            --query 'UserPoolClient.ClientSecret' --output text)"
+          token_url="$(terraform -chdir=infra output -raw mcp_oauth_token_url)"
+          MCP_URL="$(terraform -chdir=infra output -raw mcp_url)"
+          token_json="$(curl -fsS -u "$client_id:$client_secret" \
+            -H 'Content-Type: application/x-www-form-urlencoded' \
+            --data-urlencode 'grant_type=client_credentials' \
+            --data-urlencode 'scope=signalhub-mcp/read' "$token_url")"
+          MCP_ACCESS_TOKEN="$(jq -er '.access_token' <<<"$token_json")"
+          export MCP_URL MCP_ACCESS_TOKEN
+          ./scripts/mcp-smoke.sh

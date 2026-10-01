@@ -47,6 +47,9 @@ The service client exists for controlled non-interactive agents and production s
 its short-lived access token through the authorised operational process; do not copy its persistent
 client secret into an agent configuration.
 
+The manual `MCP production smoke` GitHub Actions workflow uses OIDC to mint such a token, exercises
+all tools with bounded calls, reports counts/latencies only, and never prints the credential.
+
 ## Tool catalogue
 
 - `get_operations_summary` — system-wide operational health and backlogs.

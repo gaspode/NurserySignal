@@ -17,6 +17,11 @@ output "mcp_chatgpt_client_id" {
   value       = aws_cognito_user_pool_client.mcp_chatgpt.id
 }
 
+output "mcp_service_client_id" {
+  description = "Cognito OAuth client ID used for controlled MCP service-agent access."
+  value       = aws_cognito_user_pool_client.mcp_service.id
+}
+
 output "mcp_oauth_authorization_url" {
   description = "OAuth authorization endpoint for the SignalHub MCP."
   value       = "https://${aws_cognito_user_pool_domain.mcp.domain}.auth.${var.aws_region}.amazoncognito.com/oauth2/authorize"
