@@ -1495,7 +1495,12 @@ Paid-pilot activation check (2026-09-28):
   protected manual publications, with no mutation. The first bounded run selected ten and published all ten with zero
   skips, failures or policy transitions and ten audit rows. All ten passed post-publication projection checks: safe
   coarse geography, postcode district only, lifecycle-aware summary and explicit v3/automatic provenance. Published
-  inventory moved from 52 manual to 62 total (ten automatic plus 52 untouched manual); 538 eligible unpublished remain.
-  The independently controlled six-hour recurring coordinator is now enabled and remains capped at 25 publications per
-  invocation. Emergency disable preserves all publication history. Automatic withdrawal remains disabled, and the
-  Phase B3 watcher remains enabled and unchanged at 259 watches with zero requests/errors at activation verification.
+  inventory initially moved from 52 manual to 62 total. Enabling the independently controlled six-hour EventBridge
+  rule triggered its first scheduled bounded run immediately: 25 selected, 25 published and zero skipped/failed. The
+  resulting inventory is 87 published (35 automatic plus 52 untouched manual), with 513 eligible unpublished remaining.
+  Recurrence remains capped at 25 publications per invocation. Emergency disable preserves all publication history.
+  Automatic withdrawal remains disabled, and the Phase B3 watcher remains enabled and unchanged at 259 watches with
+  zero requests/errors at activation verification. API/database and frontend health are green; ingestion/enrichment
+  queues and DLQs are empty, while the six pre-existing collector DLQ messages are unchanged. Runtime commit
+  `87985a3` passed CI run `36856743234` and deployed disabled in run `36856852584`; activation commit `7de8623`
+  passed CI run `36857520034` and deployed in run `36857631101`.
