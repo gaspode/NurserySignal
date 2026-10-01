@@ -1439,19 +1439,20 @@ Paid-pilot activation check (2026-09-28):
   conflict diagnostics, with links to opportunity detail. The preview reconstructs the deployed v1 decision per
   opportunity for an explainable changed-cohort comparison. Publication and withdrawal mutations remain hard zero,
   and the Phase B3 watcher policy/cadence is unchanged. Production preview evaluated all 1,145 opportunities: 408
-  AUTO_PUBLISH_ELIGIBLE, 48 stable QA_HOLDOUT, 428 MANUAL_REVIEW, 228 INELIGIBLE, zero ALREADY_PUBLISHED and 33
+  AUTO_PUBLISH_ELIGIBLE, 48 stable QA_HOLDOUT, 423 MANUAL_REVIEW, 228 INELIGIBLE, zero ALREADY_PUBLISHED and 38
   MANUAL_PROTECTION. The 48 holdouts are 10.5% of the otherwise eligible 456-record cohort. Eligible non-holdouts
   comprise 306 PLANNING_APPROVED and 102 PLANNING_PENDING; holdouts comprise 35 approved and 13 pending. All
-  evidence mixes in this initial narrow cohort are Planning. The non-exclusive reason counts are 656 insufficient
+  evidence mixes in this initial narrow cohort are Planning. The non-exclusive reason counts are 651 insufficient
   evidence, 219 stopped, 157 needs-review lifecycle, nine duplicate/superseded, nine manual-history review and two
   unresolved appeal; no identity, safe-content or privacy failure was found. Reconstructed v1 results exactly match
-  the prior 393/47/705 preview, and 49 records change outcome under v2: all 33 existing manual publications move to
-  explicit protection and 16 additional records pass the refined persisted-state gate. Twenty-eight protected
+  the prior 393/47/705 preview. The final live snapshot reports 54 changed outcomes: all 38 manual publications move
+  to explicit protection and 16 additional records pass the refined persisted-state gate. Thirty-three protected
   publications would not qualify for new automatic publication today and remain untouched for optional human review.
-  Production still has 33 published opportunities; publication and withdrawal changes are zero. The watcher remains
+  Five manual publications occurred independently during the deployment window, moving the live published count
+  from 33 to 38; the Phase C1 preview and watcher both report zero publication/withdrawal mutations. The watcher remains
   ENABLED with 259 watches, zero provider requests/errors so far and unchanged cadence/policy. Commit `d0605b9`
   passed CI run `36850073469` and deployed successfully in run `36850190314`; 542 backend and 94 frontend tests,
   Ruff, frontend build and Terraform fmt/validate/plan/apply pass. API/database and frontend health are green,
   active queues and non-collector DLQs are empty, and the six pre-existing collector DLQ messages remain untouched.
-  Phase C2 remains disabled and requires explicit approval after review of the 28 protected-policy conflicts and
+  Phase C2 remains disabled and requires explicit approval after review of the 33 protected-policy conflicts and
   representative pending/manual cohorts.
