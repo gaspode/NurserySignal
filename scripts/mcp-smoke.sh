@@ -71,15 +71,35 @@ tool automation get_automation_status '{}'
 tool recent get_recent_changes '{"last_hours":24,"limit":20}'
 
 printf 'tools=%s needs_attention=%s qa_holdouts=%s unmatched_strong=%s recent_changes=%s\n' \
-  "$(jq -r '.result.tools | length' "$smoke_dir/tools.json")" \
-  "$(jq -r '.result.structuredContent.total' "$smoke_dir/needs_attention.json")" \
-  "$(jq -r '.result.structuredContent.total' "$smoke_dir/publication_qa.json")" \
-  "$(jq -r '.result.structuredContent.total' "$smoke_dir/unmatched.json")" \
-  "$(jq -r '.result.structuredContent.count' "$smoke_dir/recent.json")"
+  "$(jq -r '.result.tools | length // 0' "$smoke_dir/tools.json")" \
+  "$(jq -r '.result.structuredContent.total // 0' "$smoke_dir/needs_attention.json")" \
+  "$(jq -r '.result.structuredContent.total // 0' "$smoke_dir/publication_qa.json")" \
+  "$(jq -r '.result.structuredContent.total // 0' "$smoke_dir/unmatched.json")" \
+  "$(jq -r '.result.structuredContent.count // 0' "$smoke_dir/recent.json")"
 
 printf '%s\n' "${latencies[@]}" | awk \
   '{sum += $1; if ($1 > max) max = $1; n += 1} END {printf "latency_average=%.3fs latency_max=%.3fs calls=%d\n", sum/n, max, n}'
 
-jq -c '{health: .result.structuredContent.health, watcher: .result.structuredContent.planning_watcher,
-  publication: .result.structuredContent.publication, withdrawal: .result.structuredContent.withdrawal}' \
-  "$smoke_dir/operations.json"
+jq -c '.result.structuredContent | {
+  watcher: {
+    enabled: .watcher.enabled,
+    policy_version: .watcher.policy_version,
+    enabled_watches: .watcher.enabled_watches,
+    provider_requests_today: .watcher.provider_requests_today,
+    provider_requests_current_month: .watcher.provider_requests_current_month,
+    failed_polls: .watcher.polls.failed
+  },
+  publication: {
+    enabled: .publication.enabled,
+    policy_version: .publication.policy_version,
+    total_published: .publication.total_published,
+    automatically_published: .publication.automatically_published,
+    latest_failed: .publication.latest_execution.failed
+  },
+  withdrawal: {
+    enabled: .withdrawal.enabled,
+    policy_version: .withdrawal.policy_version,
+    total_automatic_withdrawals: .withdrawal.total_automatic_withdrawals,
+    latest_failed: .withdrawal.latest_execution.failed
+  }
+}' "$smoke_dir/automation.json"
