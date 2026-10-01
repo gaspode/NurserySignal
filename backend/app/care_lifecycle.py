@@ -16,7 +16,11 @@ from app.planning_outcomes import (
 )
 
 CARE_LIFECYCLE_POLICY_VERSION = "care-opportunity-lifecycle-v1"
-CARE_PUBLICATION_POLICY_VERSION = "care-opportunity-publication-v1"
+CARE_PUBLICATION_POLICY_VERSION = "care-publication-v2"
+CARE_PUBLICATION_PREVIOUS_POLICY_VERSION = "care-opportunity-publication-v1"
+# Holdout identity deliberately remains independent of the policy revision so an
+# opportunity does not drift between QA and automatic cohorts after recalculation.
+CARE_PUBLICATION_HOLDOUT_VERSION = "care-opportunity-publication-v1"
 CARE_WITHDRAWAL_POLICY_VERSION = "care-opportunity-withdrawal-v1"
 CARE_PLANNING_WATCHER_POLICY_VERSION = "care-planning-watcher-v2"
 CARE_PLANNING_WATCHER_PREVIOUS_MONTHLY_REQUESTS = 3651
@@ -314,7 +318,9 @@ def bootstrap_lifecycle_records(
 
 
 def publication_qa_holdout(opportunity_id: str) -> bool:
-    digest = hashlib.sha256(f"{CARE_PUBLICATION_POLICY_VERSION}:{opportunity_id}".encode()).digest()
+    digest = hashlib.sha256(
+        f"{CARE_PUBLICATION_HOLDOUT_VERSION}:{opportunity_id}".encode()
+    ).digest()
     return int.from_bytes(digest[:8], "big") % 10 == 0
 
 
@@ -459,7 +465,7 @@ ACTIVE_PUBLICATION_LIFECYCLES = {
 }
 
 
-def evaluate_publication(
+def evaluate_publication_v1(
     opportunity: dict[str, Any],
     lifecycle: LifecycleDecision,
     signals: list[dict[str, Any]],
@@ -534,6 +540,175 @@ def evaluate_publication(
     return AutomationDecision(
         "AUTO_PUBLISH",
         "Supported opportunity passed deterministic publication safeguards.",
+    )
+
+
+_PUBLICATION_FOUNDATION_SUBTYPES = {
+    "NEW_HOME_CHANGE_OF_USE",
+    "NEW_HOME_OTHER_EXPLICIT",
+    "LAWFULNESS_PROPOSED",
+}
+_PUBLICATION_POSITIVE_OUTCOMES = {
+    PlanningOutcome.PENDING,
+    PlanningOutcome.APPROVED,
+    PlanningOutcome.APPEAL_ALLOWED,
+}
+_PUBLICATION_NEGATIVE_OUTCOMES = {
+    PlanningOutcome.REFUSED,
+    PlanningOutcome.WITHDRAWN,
+    PlanningOutcome.REFUSED_UNDER_APPEAL,
+    PlanningOutcome.APPEAL_DISMISSED,
+}
+
+
+def _publication_foundations(signals: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    foundations: list[dict[str, Any]] = []
+    for signal in _active_approved(signals):
+        if signal.get("source_type") != "planning":
+            continue
+        facts = signal.get("extracted_facts") or {}
+        if (
+            classify_evidence_support(signal) == EvidenceSupport.FOUNDATIONAL
+            and facts.get("opportunity_creation_decision") == "CREATE_OPPORTUNITY"
+            and facts.get("planning_subtype") in _PUBLICATION_FOUNDATION_SUBTYPES
+            and canonical_planning_outcome(signal.get("metadata") or {}).outcome
+            in _PUBLICATION_POSITIVE_OUTCOMES
+        ):
+            foundations.append(signal)
+    return foundations
+
+
+def _has_publication_identity(
+    opportunity: dict[str, Any], signals: list[dict[str, Any]]
+) -> bool:
+    has_site = bool(
+        opportunity.get("town")
+        or opportunity.get("postcode")
+        or opportunity.get("address")
+        or opportunity.get("local_authority")
+    )
+    has_organisation_or_application = bool(opportunity.get("operator_name")) or any(
+        signal.get("source_type") == "planning"
+        and signal.get("external_id")
+        and (
+            (signal.get("metadata") or {}).get("local_authority")
+            or (signal.get("metadata") or {}).get("council")
+            or (signal.get("metadata") or {}).get("planning_authority")
+        )
+        for signal in signals
+    )
+    return has_site and has_organisation_or_application
+
+
+def evaluate_publication(
+    opportunity: dict[str, Any],
+    lifecycle: str | LifecycleDecision,
+    signals: list[dict[str, Any]],
+    *,
+    hygiene_category: str,
+    hygiene_warning: str | None,
+    safe_title: str | None,
+    safe_summary: str | None,
+    respect_existing_publication: bool = True,
+) -> AutomationDecision:
+    """Evaluate preview-only Care publication v2 from persisted current state."""
+    lifecycle_value = (
+        lifecycle.lifecycle.value if isinstance(lifecycle, LifecycleDecision) else str(lifecycle)
+    )
+    provenance = opportunity.get("publication_automation_provenance") or {}
+    manually_published = bool(opportunity.get("customer_published_by")) and not provenance.get(
+        "policy_version"
+    )
+    if respect_existing_publication and opportunity.get("publication_status") == "PUBLISHED":
+        if manually_published:
+            return AutomationDecision(
+                "MANUAL_PROTECTION",
+                "Existing manual publication is authoritative.",
+                ("manual_publication_protection",),
+            )
+        return AutomationDecision(
+            "ALREADY_PUBLISHED",
+            "Opportunity is already published.",
+            ("already_published",),
+        )
+    if opportunity.get("publication_automation_blocked"):
+        return AutomationDecision(
+            "MANUAL_PROTECTION",
+            "Publication automation is manually blocked.",
+            ("manual_automation_block",),
+        )
+
+    hard_exclusions: list[str] = []
+    review_reasons: list[str] = []
+    if opportunity.get("vertical") != "CHILDRENS_HOME":
+        hard_exclusions.append("wrong_vertical")
+    if opportunity.get("merged_into_opportunity_id") or opportunity.get("review_status") in {
+        "MERGED",
+        "REJECTED",
+    }:
+        hard_exclusions.append("duplicate_or_superseded")
+    if hygiene_category in {"DUPLICATE_CANDIDATE", "SUPERSEDED_CANDIDATE"}:
+        hard_exclusions.append("duplicate_or_superseded")
+    if lifecycle_value == CareLifecycle.STOPPED.value:
+        hard_exclusions.append("stopped")
+    elif lifecycle_value == CareLifecycle.NEEDS_REVIEW.value:
+        review_reasons.append("needs_review_lifecycle")
+    elif lifecycle_value == CareLifecycle.APPEAL_PENDING.value:
+        review_reasons.append("unresolved_appeal")
+    elif lifecycle_value not in {stage.value for stage in ACTIVE_PUBLICATION_LIFECYCLES}:
+        review_reasons.append("unsupported_lifecycle")
+
+    active_planning = [
+        signal
+        for signal in signals
+        if signal.get("source_type") == "planning"
+        and signal.get("relationship_status", signal.get("status")) == "ACTIVE"
+    ]
+    if any(
+        canonical_planning_outcome(signal.get("metadata") or {}).outcome
+        in _PUBLICATION_NEGATIVE_OUTCOMES
+        and classify_evidence_support(signal) == EvidenceSupport.FOUNDATIONAL
+        for signal in active_planning
+    ):
+        review_reasons.append("negative_planning_state")
+
+    foundations = _publication_foundations(signals)
+    if not foundations:
+        review_reasons.append("insufficient_evidence")
+    if hygiene_category == "NEEDS_INVESTIGATION" or hygiene_warning:
+        review_reasons.append("unresolved_evidence_warning")
+    elif hygiene_category == "UNSUPPORTED_ORPHAN_CANDIDATE":
+        review_reasons.append("insufficient_evidence")
+    elif hygiene_category == "MANUAL_OR_ADMIN_TOUCHED_PRESERVE":
+        review_reasons.append("manual_history_review")
+    if not _has_publication_identity(opportunity, signals):
+        review_reasons.append("insufficient_identity")
+    if not safe_title or not safe_summary or len(str(safe_summary).strip()) < 20:
+        review_reasons.append("missing_customer_summary")
+
+    combined = f"{safe_title or ''} {safe_summary or ''}".upper()
+    full_postcode = str(opportunity.get("postcode") or "").strip().upper()
+    address = str(opportunity.get("address") or "").strip().upper()
+    if (full_postcode and full_postcode in combined) or (
+        address and len(address) >= 6 and address in combined
+    ):
+        review_reasons.append("privacy_or_redaction_issue")
+
+    if hard_exclusions:
+        reasons = tuple(dict.fromkeys(hard_exclusions + review_reasons))
+        return AutomationDecision("INELIGIBLE", reasons[0], reasons)
+    if review_reasons:
+        reasons = tuple(dict.fromkeys(review_reasons))
+        return AutomationDecision("MANUAL_REVIEW", reasons[0], reasons)
+    if publication_qa_holdout(str(opportunity["id"])):
+        return AutomationDecision(
+            "QA_HOLDOUT",
+            "Stable 10% publication QA holdout.",
+            ("stable_qa_holdout",),
+        )
+    return AutomationDecision(
+        "AUTO_PUBLISH_ELIGIBLE",
+        "Current lifecycle, foundational evidence, identity and safe content passed policy.",
     )
 
 

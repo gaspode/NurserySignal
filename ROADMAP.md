@@ -1428,3 +1428,15 @@ Paid-pilot activation check (2026-09-28):
   health is green, active Planning/ingestion/enrichment queues and their DLQs are empty, and the six pre-existing
   collector DLQ messages remain untouched. Exact next step: observe naturally due bounded polls and quota/error
   metrics; Phase C publication and Phase D withdrawal automation remain preview-only and disabled.
+- CareProspect Phase C1 introduces preview-only `care-publication-v2`. The policy evaluates persisted customer
+  lifecycle rather than a transient derivation and emits explicit AUTO_PUBLISH_ELIGIBLE, QA_HOLDOUT, MANUAL_REVIEW,
+  INELIGIBLE, ALREADY_PUBLISHED and MANUAL_PROTECTION outcomes. Eligibility requires current reviewed foundational
+  Planning/create-opportunity semantics, a non-negative pending/approved outcome, usable site plus organisation or
+  application identity, valid hygiene, and privacy-safe generated customer content. STOPPED and superseded records
+  are ineligible; NEEDS_REVIEW and active appeals remain manual; existing manual publications and automation blocks
+  are protected. The established 10% holdout hash remains version-stable across lifecycle refreshes. The admin
+  Publication candidates workflow now displays policy outcome, reason, source/lifecycle breakdown and published
+  conflict diagnostics, with links to opportunity detail. The preview reconstructs the deployed v1 decision per
+  opportunity for an explainable changed-cohort comparison. Publication and withdrawal mutations remain hard zero,
+  and the Phase B3 watcher policy/cadence is unchanged. Production preview and deployment results remain to be
+  recorded before Phase C1 is complete; Phase C2 must not be enabled without explicit approval.

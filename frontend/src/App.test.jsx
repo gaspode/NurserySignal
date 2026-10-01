@@ -1062,11 +1062,48 @@ describe("admin frontend", () => {
     await waitFor(() => expect(apiClient).toHaveBeenLastCalledWith(expect.stringContaining("root_cause=SIGNAL_REJECTED")));
 
     await userEvent.click(screen.getByRole("button", { name: "Publication candidates" }));
-    await waitFor(() => expect(apiClient).toHaveBeenLastCalledWith(expect.stringContaining("view=publication_candidates")));
+    await waitFor(() => expect(apiClient).toHaveBeenCalledWith(expect.stringContaining("view=publication_candidates")));
     expect(screen.getByRole("heading", { name: "Publication candidates" })).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "Next" }));
-    await waitFor(() => expect(apiClient).toHaveBeenLastCalledWith(expect.stringContaining("offset=25")));
+    await waitFor(() => expect(apiClient).toHaveBeenCalledWith(expect.stringContaining("offset=25")));
+  });
+
+  it("shows the versioned read-only publication policy preview", async () => {
+    const apiClient = vi.fn().mockImplementation(async (path) => {
+      if (path === "/admin/opportunities/lifecycle-preview") return {
+        publication_preview: {
+          preview_only: true,
+          policy_version: "care-publication-v2",
+          holdout_version: "care-opportunity-publication-v1",
+          outcomes: {
+            AUTO_PUBLISH_ELIGIBLE: 120,
+            QA_HOLDOUT: 14,
+            MANUAL_REVIEW: 200,
+            INELIGIBLE: 778,
+            MANUAL_PROTECTION: 33,
+          },
+          exclusions: { needs_review_lifecycle: 164, stopped: 219 },
+          changed_since_previous_policy_preview: 25,
+          published_policy_conflict_count: 1,
+          published_policy_conflicts: [{ opportunity_id: "published-1", reasons: ["insufficient_evidence"] }],
+        },
+      };
+      return hygieneResult();
+    });
+    const onNavigate = vi.fn();
+    render(<OpportunityHygienePage apiClient={apiClient} onNavigate={onNavigate} />);
+    await screen.findByRole("heading", { name: "Needs attention" });
+    await userEvent.click(screen.getByRole("button", { name: "Publication candidates" }));
+    expect(await screen.findByRole("heading", { name: "Automatic publication preview" })).toBeInTheDocument();
+    expect(screen.getByText(/care-publication-v2/)).toHaveTextContent("Preview only");
+    expect(screen.getByText("Auto-publish eligible").parentElement).toHaveTextContent("120");
+    expect(screen.getByText("QA holdouts").parentElement).toHaveTextContent("14");
+    expect(screen.getByText("Changed since v1 preview").parentElement).toHaveTextContent("25");
+    await userEvent.click(screen.getByText("Published records requiring policy review"));
+    await userEvent.click(screen.getByRole("button", { name: /View publishe/ }));
+    expect(onNavigate).toHaveBeenCalledWith("/opportunities/published-1");
+    expect(screen.queryByRole("button", { name: /Auto-publish/i })).not.toBeInTheDocument();
   });
 
   it("keeps recalculation errors inside the confirmation dialog", async () => {

@@ -15,7 +15,9 @@ from app.care_lifecycle import (
     CARE_LIFECYCLE_POLICY_VERSION,
     CARE_PLANNING_WATCHER_POLICY_VERSION,
     CARE_PLANNING_WATCHER_PREVIOUS_MONTHLY_REQUESTS,
+    CARE_PUBLICATION_HOLDOUT_VERSION,
     CARE_PUBLICATION_POLICY_VERSION,
+    CARE_PUBLICATION_PREVIOUS_POLICY_VERSION,
     CARE_WITHDRAWAL_POLICY_VERSION,
     CareLifecycle,
     LifecycleDecision,
@@ -24,6 +26,7 @@ from app.care_lifecycle import (
     deterministic_initial_poll_at,
     evaluate_planning_watch,
     evaluate_publication,
+    evaluate_publication_v1,
     evaluate_withdrawal,
     planning_watch_snapshot,
     project_planning_watch_requests,
@@ -6403,6 +6406,13 @@ def care_opportunity_lifecycle_preview(settings: Settings) -> dict[str, Any]:
     stored_lifecycle_counts: Counter[str] = Counter()
     publication_counts: Counter[str] = Counter()
     publication_exclusions: Counter[str] = Counter()
+    publication_by_lifecycle: dict[str, Counter[str]] = {}
+    publication_by_source_mix: dict[str, Counter[str]] = {}
+    publication_samples: dict[str, list[dict[str, Any]]] = {}
+    previous_publication_counts: Counter[str] = Counter()
+    publication_changed_examples: list[dict[str, Any]] = []
+    publication_changed_count = 0
+    published_policy_conflicts: list[dict[str, Any]] = []
     withdrawal_counts: Counter[str] = Counter()
     published_lifecycle_counts: Counter[str] = Counter()
     watch_outcomes: Counter[str] = Counter()
@@ -6452,9 +6462,10 @@ def care_opportunity_lifecycle_preview(settings: Settings) -> dict[str, Any]:
         }
         safe_title = generated_customer_title(projection)
         safe_summary = generated_customer_summary(projection)
+        stored_lifecycle = str(opportunity.get("customer_lifecycle_stage") or "NEEDS_REVIEW")
         publication = evaluate_publication(
             projection,
-            decision,
+            stored_lifecycle,
             opportunity["relationships"] or [],
             hygiene_category=item["category"],
             hygiene_warning=item.get("warning"),
@@ -6463,6 +6474,83 @@ def care_opportunity_lifecycle_preview(settings: Settings) -> dict[str, Any]:
         )
         publication_counts[publication.outcome] += 1
         publication_exclusions.update(publication.exclusions)
+        publication_by_lifecycle.setdefault(publication.outcome, Counter())[stored_lifecycle] += 1
+        source_mix = str(item.get("source_mix") or "NONE")
+        publication_by_source_mix.setdefault(publication.outcome, Counter())[source_mix] += 1
+        samples = publication_samples.setdefault(publication.outcome, [])
+        if len(samples) < 5:
+            samples.append(
+                {
+                    "opportunity_id": opportunity_id,
+                    "lifecycle": stored_lifecycle,
+                    "change_type": opportunity.get("change_type"),
+                    "source_mix": source_mix,
+                    "hygiene_category": item["category"],
+                    "reason": publication.reason,
+                    "reasons": list(publication.exclusions),
+                    "publication_status": opportunity.get("publication_status"),
+                }
+            )
+
+        previous = evaluate_publication_v1(
+            projection,
+            decision,
+            opportunity["relationships"] or [],
+            hygiene_category=item["category"],
+            hygiene_warning=item.get("warning"),
+            safe_title=safe_title,
+            safe_summary=safe_summary,
+        )
+        previous_publication_counts[previous.outcome] += 1
+        comparable_previous = {
+            "AUTO_PUBLISH": "AUTO_PUBLISH_ELIGIBLE",
+            "QA_HOLDOUT": "QA_HOLDOUT",
+            "NOT_ELIGIBLE": "INELIGIBLE_OR_REVIEW",
+        }.get(previous.outcome, previous.outcome)
+        comparable_current = (
+            "INELIGIBLE_OR_REVIEW"
+            if publication.outcome in {"INELIGIBLE", "MANUAL_REVIEW"}
+            else publication.outcome
+        )
+        if comparable_previous != comparable_current:
+            publication_changed_count += 1
+            if len(publication_changed_examples) < 10:
+                publication_changed_examples.append(
+                    {
+                        "opportunity_id": opportunity_id,
+                        "previous_outcome": previous.outcome,
+                        "current_outcome": publication.outcome,
+                        "current_reasons": list(publication.exclusions),
+                    }
+                )
+
+        if opportunity.get("publication_status") == "PUBLISHED":
+            underlying_hygiene_category = item["category"]
+            if (
+                underlying_hygiene_category == "MANUAL_OR_ADMIN_TOUCHED_PRESERVE"
+                and set(item.get("admin_touch_types") or []) <= {"manual_publication"}
+                and int(item.get("foundational_signal_count") or 0) > 0
+            ):
+                underlying_hygiene_category = "VALID_SUPPORTED"
+            underlying = evaluate_publication(
+                projection,
+                stored_lifecycle,
+                opportunity["relationships"] or [],
+                hygiene_category=underlying_hygiene_category,
+                hygiene_warning=item.get("warning"),
+                safe_title=safe_title,
+                safe_summary=safe_summary,
+                respect_existing_publication=False,
+            )
+            if underlying.outcome not in {"AUTO_PUBLISH_ELIGIBLE", "QA_HOLDOUT"}:
+                published_policy_conflicts.append(
+                    {
+                        "opportunity_id": opportunity_id,
+                        "lifecycle": stored_lifecycle,
+                        "policy_outcome_without_protection": underlying.outcome,
+                        "reasons": list(underlying.exclusions),
+                    }
+                )
         withdrawal = evaluate_withdrawal(projection, decision)
         withdrawal_counts[withdrawal.outcome] += 1
         if opportunity.get("publication_status") == "PUBLISHED":
@@ -6627,8 +6715,35 @@ def care_opportunity_lifecycle_preview(settings: Settings) -> dict[str, Any]:
             "withdrawal_changes": 0,
         },
         "publication_preview": {
+            "preview_only": True,
+            "policy_version": CARE_PUBLICATION_POLICY_VERSION,
+            "previous_policy_version": CARE_PUBLICATION_PREVIOUS_POLICY_VERSION,
+            "holdout_version": CARE_PUBLICATION_HOLDOUT_VERSION,
+            "total_evaluated": len(opportunities),
+            "currently_published": sum(
+                opportunity.get("publication_status") == "PUBLISHED"
+                for opportunity in opportunities
+            ),
             "outcomes": dict(sorted(publication_counts.items())),
             "exclusions": dict(sorted(publication_exclusions.items())),
+            "outcomes_by_lifecycle": {
+                outcome: dict(sorted(values.items()))
+                for outcome, values in sorted(publication_by_lifecycle.items())
+            },
+            "outcomes_by_source_mix": {
+                outcome: dict(sorted(values.items()))
+                for outcome, values in sorted(publication_by_source_mix.items())
+            },
+            "samples": publication_samples,
+            "previous_preview_outcomes_recomputed": dict(
+                sorted(previous_publication_counts.items())
+            ),
+            "changed_since_previous_policy_preview": publication_changed_count,
+            "changed_examples": publication_changed_examples,
+            "published_policy_conflict_count": len(published_policy_conflicts),
+            "published_policy_conflicts": published_policy_conflicts,
+            "publication_mutations": 0,
+            "withdrawal_mutations": 0,
         },
         "withdrawal_preview": dict(sorted(withdrawal_counts.items())),
         "published_lifecycle_counts": dict(sorted(published_lifecycle_counts.items())),

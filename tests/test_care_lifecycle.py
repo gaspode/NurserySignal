@@ -2,6 +2,8 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from app.care_lifecycle import (
+    CARE_PUBLICATION_HOLDOUT_VERSION,
+    CARE_PUBLICATION_POLICY_VERSION,
     CareLifecycle,
     bootstrap_lifecycle_records,
     derive_care_lifecycle,
@@ -24,10 +26,11 @@ def planning(
 ) -> dict:
     return {
         "id": signal_id,
+        "external_id": "26/00123/FUL",
         "source_type": "planning",
         "relationship_status": "ACTIVE",
         "review_status": review_status,
-        "metadata": {"decision": outcome},
+        "metadata": {"decision": outcome, "local_authority": "Nottingham"},
         "extracted_facts": {
             "planning_subtype": subtype,
             "opportunity_creation_decision": decision,
@@ -44,6 +47,7 @@ def opportunity(**overrides) -> dict:
         "town": "Nottingham",
         "postcode": "NG8 1LD",
         "address": "10 Kingswood Road",
+        "operator_name": "Example Care Ltd",
         "publication_automation_blocked": False,
         **overrides,
     }
@@ -267,7 +271,7 @@ def test_support_only_and_rejected_signals_do_not_create_lifecycle() -> None:
     assert derive_care_lifecycle([rejected_capacity]).lifecycle == CareLifecycle.NEEDS_REVIEW
 
 
-def test_publication_policy_is_safe_stable_and_idempotent() -> None:
+def test_publication_v2_is_safe_stable_versioned_and_idempotent() -> None:
     lifecycle = derive_care_lifecycle([planning("Pending")])
     item = opportunity()
     first = evaluate_publication(
@@ -279,7 +283,9 @@ def test_publication_policy_is_safe_stable_and_idempotent() -> None:
         safe_title="New children's home — Nottingham, NG8",
         safe_summary="A planning application has been submitted for a children's home.",
     )
-    assert first.outcome in {"AUTO_PUBLISH", "QA_HOLDOUT"}
+    assert CARE_PUBLICATION_POLICY_VERSION == "care-publication-v2"
+    assert CARE_PUBLICATION_HOLDOUT_VERSION == "care-opportunity-publication-v1"
+    assert first.outcome in {"AUTO_PUBLISH_ELIGIBLE", "QA_HOLDOUT"}
     assert publication_qa_holdout(item["id"]) == publication_qa_holdout(item["id"])
     assert (
         evaluate_publication(
@@ -304,10 +310,10 @@ def test_publication_policy_is_safe_stable_and_idempotent() -> None:
             safe_title="Safe",
             safe_summary="Safe",
         ).outcome
-        == "NOT_ELIGIBLE"
+        == "MANUAL_REVIEW"
     )
     assert (
-        "FULL_POSTCODE_LEAK"
+        "privacy_or_redaction_issue"
         in evaluate_publication(
             item,
             lifecycle,
@@ -319,7 +325,7 @@ def test_publication_policy_is_safe_stable_and_idempotent() -> None:
         ).exclusions
     )
     assert (
-        "MANUAL_BLOCK"
+        "manual_automation_block"
         in evaluate_publication(
             opportunity(publication_automation_blocked=True),
             lifecycle,
@@ -330,21 +336,9 @@ def test_publication_policy_is_safe_stable_and_idempotent() -> None:
             safe_summary="Safe",
         ).exclusions
     )
-    assert (
-        "INITIAL_POLICY_SCOPE"
-        in evaluate_publication(
-            opportunity(change_type="EXPANSION"),
-            lifecycle,
-            [planning("Pending")],
-            hygiene_category="VALID_SUPPORTED",
-            hygiene_warning=None,
-            safe_title="Safe",
-            safe_summary="Safe",
-        ).exclusions
-    )
     existing = planning("Approved", subtype="LAWFULNESS_EXISTING", decision="SUPPORT_EXISTING_ONLY")
     assert (
-        "INITIAL_POLICY_SCOPE"
+        "insufficient_evidence"
         in evaluate_publication(
             item,
             derive_care_lifecycle([existing]),
@@ -355,6 +349,72 @@ def test_publication_policy_is_safe_stable_and_idempotent() -> None:
             safe_summary="Safe",
         ).exclusions
     )
+
+
+def test_publication_v2_lifecycle_and_manual_protection_outcomes() -> None:
+    signal = planning("Approved")
+    kwargs = {
+        "signals": [signal],
+        "hygiene_category": "VALID_SUPPORTED",
+        "hygiene_warning": None,
+        "safe_title": "New children's home — Nottingham, NG8",
+        "safe_summary": "Planning permission has been approved for a children's home.",
+    }
+    for lifecycle in ("PLANNING_APPROVED", "PLANNING_PENDING"):
+        result = evaluate_publication(opportunity(), lifecycle, **kwargs)
+        assert result.outcome in {"AUTO_PUBLISH_ELIGIBLE", "QA_HOLDOUT"}
+    assert (
+        evaluate_publication(opportunity(), "APPEAL_PENDING", **kwargs).outcome
+        == "MANUAL_REVIEW"
+    )
+    assert (
+        evaluate_publication(opportunity(), "NEEDS_REVIEW", **kwargs).outcome
+        == "MANUAL_REVIEW"
+    )
+    assert evaluate_publication(opportunity(), "STOPPED", **kwargs).outcome == "INELIGIBLE"
+    assert (
+        evaluate_publication(
+            opportunity(merged_into_opportunity_id="other"),
+            "PLANNING_APPROVED",
+            **kwargs,
+        ).outcome
+        == "INELIGIBLE"
+    )
+    manual = opportunity(
+        publication_status="PUBLISHED",
+        customer_published_by="admin@example.com",
+        publication_automation_provenance={},
+    )
+    assert (
+        evaluate_publication(manual, "PLANNING_APPROVED", **kwargs).outcome
+        == "MANUAL_PROTECTION"
+    )
+
+
+def test_publication_v2_requires_strong_evidence_identity_and_safe_content() -> None:
+    signal = planning("Pending")
+    common = {
+        "hygiene_category": "VALID_SUPPORTED",
+        "hygiene_warning": None,
+        "safe_title": "New children's home — Nottingham, NG8",
+        "safe_summary": "A planning application has been submitted for a children's home.",
+    }
+    weak = planning("Pending", review_status="PENDING")
+    decision = evaluate_publication(opportunity(), "PLANNING_PENDING", [weak], **common)
+    assert decision.outcome == "MANUAL_REVIEW"
+    assert "insufficient_evidence" in decision.exclusions
+    identity = opportunity(operator_name=None, address=None, town=None, postcode=None)
+    signal["external_id"] = None
+    signal["metadata"] = {"decision": "Pending"}
+    decision = evaluate_publication(identity, "PLANNING_PENDING", [signal], **common)
+    assert "insufficient_identity" in decision.exclusions
+    decision = evaluate_publication(
+        opportunity(),
+        "PLANNING_PENDING",
+        [planning("Pending")],
+        **{**common, "safe_summary": ""},
+    )
+    assert "missing_customer_summary" in decision.exclusions
 
 
 def test_withdrawal_requires_published_stopped_and_respects_alternatives() -> None:

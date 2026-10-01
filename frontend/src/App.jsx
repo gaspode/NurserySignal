@@ -1008,6 +1008,7 @@ function hygieneListPath(params) {
 export function OpportunityHygienePage({ apiClient, onNavigate, initialQuery = "", basePath = "/opportunity-hygiene" }) {
   const initial = useMemo(() => new URLSearchParams(initialQuery), [initialQuery]);
   const [result, setResult] = useState(null);
+  const [publicationPreview, setPublicationPreview] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [page, setPage] = useState(() => Math.max(Number(initial.get("page") || 0), 0));
@@ -1023,6 +1024,10 @@ export function OpportunityHygienePage({ apiClient, onNavigate, initialQuery = "
       Object.entries(filters).forEach(([key, value]) => value && params.set(key, value));
       if (search) params.set("q", search);
       setResult(await apiClient(`/admin/opportunities/hygiene-audit?${params}`));
+      if (view === "publication_candidates") {
+        const lifecycle = await apiClient("/admin/opportunities/lifecycle-preview");
+        setPublicationPreview(lifecycle.publication_preview || null);
+      }
     } catch (loadError) {
       setError(loadError.message || "Opportunity review could not be loaded.");
     } finally { setLoading(false); }
@@ -1083,6 +1088,7 @@ export function OpportunityHygienePage({ apiClient, onNavigate, initialQuery = "
   }
 
   const publicationCandidates = view === "publication_candidates";
+  const publicationOutcomes = publicationPreview?.outcomes || {};
   const pageTitle = publicationCandidates ? "Publication candidates" : view === "inventory" ? "Opportunity audit" : "Needs attention";
   const pageDescription = publicationCandidates
     ? "Supported unpublished opportunities ready for CareProspect review."
@@ -1095,6 +1101,7 @@ export function OpportunityHygienePage({ apiClient, onNavigate, initialQuery = "
 
   return <section className="opportunity-hygiene-page">
     <div className="page-heading"><div><p className="eyebrow">Opportunities</p><h1>{pageTitle}</h1><p className="muted">{pageDescription}</p></div><div className="page-actions"><RefreshButton busy={loading} onClick={load} /><span className="result-count">{result?.filtered_total ?? "—"} results</span></div></div>
+    {publicationCandidates && publicationPreview && <div className="panel publication-policy-preview"><div className="section-heading"><div><h2>Automatic publication preview</h2><p className="muted">{publicationPreview.policy_version} · Preview only · No publication or withdrawal changes</p></div><Badge tone="pending">Preview only</Badge></div><div className="metric-grid"><div className="metric-card"><strong>{publicationOutcomes.AUTO_PUBLISH_ELIGIBLE || 0}</strong><span className="metric-label">Auto-publish eligible</span></div><div className="metric-card"><strong>{publicationOutcomes.QA_HOLDOUT || 0}</strong><span className="metric-label">QA holdouts</span></div><div className="metric-card"><strong>{publicationOutcomes.MANUAL_REVIEW || 0}</strong><span className="metric-label">Manual review</span></div><div className="metric-card"><strong>{publicationOutcomes.INELIGIBLE || 0}</strong><span className="metric-label">Ineligible</span></div><div className="metric-card"><strong>{publicationOutcomes.ALREADY_PUBLISHED || 0}</strong><span className="metric-label">Already published</span></div><div className="metric-card"><strong>{publicationOutcomes.MANUAL_PROTECTION || 0}</strong><span className="metric-label">Manual protection</span></div></div><div className="detail-grid"><div><span className="detail-label">Changed since v1 preview</span><strong>{publicationPreview.changed_since_previous_policy_preview || 0}</strong></div><div><span className="detail-label">Published policy conflicts</span><strong>{publicationPreview.published_policy_conflict_count || 0}</strong></div><div><span className="detail-label">Stable holdout version</span><strong>{publicationPreview.holdout_version || "—"}</strong></div></div>{Object.keys(publicationPreview.exclusions || {}).length > 0 && <details><summary>Exclusion and review reasons</summary><div className="metadata-list">{Object.entries(publicationPreview.exclusions).map(([reason, count]) => <span key={reason}><strong>{titleCase(reason)}</strong>: {count}</span>)}</div></details>}{publicationPreview.published_policy_conflicts?.length > 0 && <details><summary>Published records requiring policy review</summary><div className="metadata-list">{publicationPreview.published_policy_conflicts.slice(0, 10).map((item) => <button type="button" className="button ghost" key={item.opportunity_id} onClick={() => onNavigate(`/opportunities/${item.opportunity_id}`)}>View {item.opportunity_id.slice(0, 8)} · {item.reasons.map(titleCase).join(", ")}</button>)}</div></details>}</div>}
     {!publicationCandidates && <div className="metric-grid hygiene-metrics" aria-label="Opportunity quality categories">
       {visibleCategories.map(([value, label]) => <button type="button" className={`metric-card clickable${view === "inventory" && filters.category === value ? " active" : ""}`} key={value} onClick={() => selectCategory(value)} aria-pressed={view === "inventory" && filters.category === value}><span className="metric-icon slate" /><strong>{result?.category_counts?.[value] ?? "—"}</strong><span className="metric-label">{label}</span></button>)}
     </div>}
