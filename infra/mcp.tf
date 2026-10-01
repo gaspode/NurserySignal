@@ -114,7 +114,8 @@ resource "aws_dynamodb_table" "mcp_oauth_transactions" {
   server_side_encryption {
     enabled = true
   }
-  tags = local.common_tags
+  tags       = local.common_tags
+  depends_on = [aws_iam_policy.github_actions]
 }
 
 resource "aws_cloudwatch_log_group" "mcp_oauth" {
@@ -158,6 +159,7 @@ resource "aws_iam_role" "mcp_oauth" {
   name               = "${local.name_prefix}-mcp-oauth"
   assume_role_policy = data.aws_iam_policy_document.lambda_assume_role.json
   tags               = local.common_tags
+  depends_on         = [aws_iam_policy.github_actions]
 }
 
 resource "aws_iam_role_policy_attachment" "mcp_oauth_basic" {

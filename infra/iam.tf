@@ -200,6 +200,7 @@ resource "aws_iam_policy" "github_actions" {
           "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.name_prefix}-companies-house-collector",
           "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.name_prefix}-procurement-collector",
           "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.name_prefix}-mcp",
+          "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.name_prefix}-mcp-oauth",
           "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.name_prefix}-customer-digest-sender",
           "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.name_prefix}-customer-provisioner"
         ]
@@ -266,6 +267,16 @@ resource "aws_iam_policy" "github_actions" {
           "dynamodb:ListTagsOfResource"
         ]
         Resource = aws_dynamodb_table.source_runs.arn
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "dynamodb:CreateTable", "dynamodb:DeleteTable", "dynamodb:DescribeContinuousBackups",
+          "dynamodb:DescribeTable", "dynamodb:DescribeTimeToLive", "dynamodb:ListTagsOfResource",
+          "dynamodb:TagResource", "dynamodb:UntagResource", "dynamodb:UpdateContinuousBackups",
+          "dynamodb:UpdateTable", "dynamodb:UpdateTimeToLive"
+        ]
+        Resource = "arn:aws:dynamodb:${var.aws_region}:${data.aws_caller_identity.current.account_id}:table/${local.name_prefix}-mcp-oauth-transactions"
       },
       {
         Effect = "Allow"
