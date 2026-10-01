@@ -1560,16 +1560,55 @@ def _oauth_token(event: dict[str, Any], settings: Settings) -> dict[str, Any]:
             provider_error = json.loads(exc.read(16_384))
         except json.JSONDecodeError:
             provider_error = {"error": "temporarily_unavailable"}
+        logger.warning(
+            "mcp_oauth_provider_token_rejected status=%s error=%s",
+            exc.code,
+            provider_error.get("error") if isinstance(provider_error, dict) else None,
+        )
         return _response(exc.code if 400 <= exc.code < 500 else 503, provider_error)
     except (OSError, json.JSONDecodeError) as exc:
         raise MCPError("unavailable", "OAuth token service unavailable", rpc_code=-32003) from exc
     access_token = payload.get("access_token")
     if not isinstance(access_token, str):
         raise MCPError("unavailable", "OAuth token response invalid", rpc_code=-32003)
-    claims = _decode_access_token(access_token, settings)
+    try:
+        claims = _decode_access_token(access_token, settings)
+    except MCPError as exc:
+        diagnostic_claims: dict[str, Any] = {}
+        diagnostic_header: dict[str, Any] = {}
+        try:
+            diagnostic_claims = jwt.decode(
+                access_token,
+                options={
+                    "verify_signature": False,
+                    "verify_aud": False,
+                    "verify_exp": False,
+                },
+            )
+            diagnostic_header = jwt.get_unverified_header(access_token)
+        except PyJWTError:
+            pass
+        logger.warning(
+            "mcp_oauth_provider_access_token_rejected claim_keys=%s kid_present=%s "
+            "issuer_match=%s audience_match=%s client_match=%s token_use=%s "
+            "scope_present=%s error_code=%s error=%s",
+            sorted(str(key) for key in diagnostic_claims),
+            bool(diagnostic_header.get("kid")),
+            diagnostic_claims.get("iss")
+            == str(settings.mcp_token_issuer or "").rstrip("/"),
+            diagnostic_claims.get("aud") == settings.mcp_resource_url,
+            diagnostic_claims.get("client_id") == settings.mcp_user_client_id,
+            diagnostic_claims.get("token_use"),
+            READ_SCOPE in str(diagnostic_claims.get("scope") or "").split(),
+            exc.code,
+            str(exc),
+        )
+        raise
     if claims.get("client_id") != settings.mcp_user_client_id:
+        logger.warning("mcp_oauth_provider_access_token_client_mismatch")
         raise MCPError("unauthorized", "OAuth token client is invalid", rpc_code=-32001)
     if settings.admin_group not in _claim_groups(claims):
+        logger.warning("mcp_oauth_provider_access_token_admin_group_missing")
         return _response(403, {"error": "access_denied", "message": "Admin access required"})
     return _response(200, payload)
 
