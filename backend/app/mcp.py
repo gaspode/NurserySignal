@@ -14,6 +14,7 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
+import boto3
 import jwt
 from jwt import PyJWK, PyJWKClient, PyJWTError
 from psycopg.types.json import Jsonb
@@ -1039,6 +1040,21 @@ def _store_oauth_transaction(
     client_id: str,
     resource: str,
 ) -> None:
+    if settings.mcp_oauth_transactions_table_name:
+        boto3.client("dynamodb").put_item(
+            TableName=settings.mcp_oauth_transactions_table_name,
+            Item={
+                "state": {"S": state},
+                "original_state": {"S": original_state},
+                "redirect_uri": {"S": redirect_uri},
+                "client_id": {"S": client_id},
+                "resource": {"S": resource},
+                "expires_at": {"N": str(int(time.time()) + 600)},
+            },
+            ConditionExpression="attribute_not_exists(#state)",
+            ExpressionAttributeNames={"#state": "state"},
+        )
+        return
     with connection(settings) as conn:
         conn.execute("DELETE FROM mcp_oauth_transactions WHERE expires_at < now()")
         conn.execute(
@@ -1051,6 +1067,21 @@ def _store_oauth_transaction(
 
 
 def _consume_oauth_transaction(settings: Settings, state: str) -> dict[str, str] | None:
+    if settings.mcp_oauth_transactions_table_name:
+        response = boto3.client("dynamodb").delete_item(
+            TableName=settings.mcp_oauth_transactions_table_name,
+            Key={"state": {"S": state}},
+            ReturnValues="ALL_OLD",
+        )
+        item = response.get("Attributes") or {}
+        if not item or int(item.get("expires_at", {}).get("N", "0")) < int(time.time()):
+            return None
+        return {
+            "original_state": item["original_state"]["S"],
+            "redirect_uri": item["redirect_uri"]["S"],
+            "client_id": item["client_id"]["S"],
+            "resource": item["resource"]["S"],
+        }
     with connection(settings) as conn:
         row = conn.execute(
             """DELETE FROM mcp_oauth_transactions

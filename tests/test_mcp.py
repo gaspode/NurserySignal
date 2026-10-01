@@ -179,6 +179,35 @@ def test_chatgpt_cimd_registration_is_pinned_without_runtime_network(monkeypatch
     assert "none" in metadata["token_endpoint_auth_methods_supported"]
 
 
+def test_oauth_transaction_uses_single_use_ttl_store_without_database(monkeypatch):
+    items = {}
+
+    class Dynamo:
+        def put_item(self, **kwargs):
+            items[kwargs["Item"]["state"]["S"]] = kwargs["Item"]
+
+        def delete_item(self, **kwargs):
+            return {"Attributes": items.pop(kwargs["Key"]["state"]["S"], None)}
+
+    monkeypatch.setattr(mcp.boto3, "client", lambda name: Dynamo())
+    settings = Settings(mcp_oauth_transactions_table_name="oauth-transactions")
+    mcp._store_oauth_transaction(
+        settings,
+        state="facade-state",
+        original_state="chatgpt-state",
+        redirect_uri=mcp.CHATGPT_REDIRECT_URI,
+        client_id=mcp.CHATGPT_CIMD_URL,
+        resource="https://api.example/mcp",
+    )
+    assert mcp._consume_oauth_transaction(settings, "facade-state") == {
+        "original_state": "chatgpt-state",
+        "redirect_uri": mcp.CHATGPT_REDIRECT_URI,
+        "client_id": mcp.CHATGPT_CIMD_URL,
+        "resource": "https://api.example/mcp",
+    }
+    assert mcp._consume_oauth_transaction(settings, "facade-state") is None
+
+
 def test_cimd_authorization_preserves_pkce_scope_and_resource(monkeypatch):
     stored = {}
 

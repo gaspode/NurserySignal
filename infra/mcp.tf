@@ -96,6 +96,33 @@ resource "aws_cloudwatch_log_group" "mcp" {
   tags              = local.common_tags
 }
 
+resource "aws_dynamodb_table" "mcp_oauth_transactions" {
+  name         = "${local.name_prefix}-mcp-oauth-transactions"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "state"
+  attribute {
+    name = "state"
+    type = "S"
+  }
+  ttl {
+    attribute_name = "expires_at"
+    enabled        = true
+  }
+  point_in_time_recovery {
+    enabled = true
+  }
+  server_side_encryption {
+    enabled = true
+  }
+  tags = local.common_tags
+}
+
+resource "aws_cloudwatch_log_group" "mcp_oauth" {
+  name              = "/aws/lambda/${local.name_prefix}-mcp-oauth"
+  retention_in_days = 30
+  tags              = local.common_tags
+}
+
 resource "aws_iam_role" "mcp" {
   name               = "${local.name_prefix}-mcp"
   assume_role_policy = data.aws_iam_policy_document.lambda_assume_role.json
@@ -124,6 +151,33 @@ resource "aws_iam_role_policy" "mcp_readonly" {
         Resource = aws_dynamodb_table.source_runs.arn
       }
     ]
+  })
+}
+
+resource "aws_iam_role" "mcp_oauth" {
+  name               = "${local.name_prefix}-mcp-oauth"
+  assume_role_policy = data.aws_iam_policy_document.lambda_assume_role.json
+  tags               = local.common_tags
+}
+
+resource "aws_iam_role_policy_attachment" "mcp_oauth_basic" {
+  role       = aws_iam_role.mcp_oauth.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+}
+
+resource "aws_iam_role_policy" "mcp_oauth_transactions" {
+  name = "${local.name_prefix}-mcp-oauth-transactions"
+  role = aws_iam_role.mcp_oauth.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = [
+        "dynamodb:PutItem",
+        "dynamodb:DeleteItem",
+      ]
+      Resource = aws_dynamodb_table.mcp_oauth_transactions.arn
+    }]
   })
 }
 
@@ -162,10 +216,50 @@ resource "aws_lambda_function" "mcp" {
   tags       = local.common_tags
 }
 
+resource "aws_lambda_function" "mcp_oauth" {
+  function_name    = "${local.name_prefix}-mcp-oauth"
+  role             = aws_iam_role.mcp_oauth.arn
+  runtime          = "python3.12"
+  handler          = "app.mcp.handler"
+  filename         = data.archive_file.lambda.output_path
+  source_code_hash = data.archive_file.lambda.output_base64sha256
+  timeout          = 30
+  memory_size      = 256
+  environment {
+    variables = {
+      ADMIN_GROUP                       = aws_cognito_user_group.administrators.name
+      APP_ENV                           = var.environment
+      SERVICE_NAME                      = "${local.name_prefix}-mcp-oauth"
+      MCP_RESOURCE_URL                  = local.mcp_resource_url
+      MCP_OAUTH_ISSUER                  = aws_apigatewayv2_api.http.api_endpoint
+      MCP_OAUTH_AUTHORIZATION_SERVER    = "https://${aws_cognito_user_pool_domain.mcp.domain}.auth.${var.aws_region}.amazoncognito.com"
+      MCP_TOKEN_ISSUER                  = "https://${aws_cognito_user_pool.main.endpoint}"
+      MCP_TOKEN_JWKS                    = data.http.mcp_token_jwks.response_body
+      MCP_OAUTH_CALLBACK_URL            = local.mcp_oauth_callback_url
+      MCP_OAUTH_TRANSACTIONS_TABLE_NAME = aws_dynamodb_table.mcp_oauth_transactions.name
+      MCP_USER_CLIENT_ID                = aws_cognito_user_pool_client.mcp_chatgpt.id
+      MCP_SERVICE_CLIENT_ID             = aws_cognito_user_pool_client.mcp_service.id
+    }
+  }
+  depends_on = [
+    aws_cloudwatch_log_group.mcp_oauth,
+    aws_iam_role_policy_attachment.mcp_oauth_basic,
+    aws_iam_role_policy.mcp_oauth_transactions,
+  ]
+  tags = local.common_tags
+}
+
 resource "aws_apigatewayv2_integration" "mcp" {
   api_id                 = aws_apigatewayv2_api.http.id
   integration_type       = "AWS_PROXY"
   integration_uri        = aws_lambda_function.mcp.invoke_arn
+  payload_format_version = "2.0"
+}
+
+resource "aws_apigatewayv2_integration" "mcp_oauth" {
+  api_id                 = aws_apigatewayv2_api.http.id
+  integration_type       = "AWS_PROXY"
+  integration_uri        = aws_lambda_function.mcp_oauth.invoke_arn
   payload_format_version = "2.0"
 }
 
@@ -208,25 +302,33 @@ resource "aws_apigatewayv2_route" "mcp_oidc_metadata" {
 resource "aws_apigatewayv2_route" "mcp_oauth_authorize" {
   api_id    = aws_apigatewayv2_api.http.id
   route_key = "GET /oauth/authorize"
-  target    = "integrations/${aws_apigatewayv2_integration.mcp.id}"
+  target    = "integrations/${aws_apigatewayv2_integration.mcp_oauth.id}"
 }
 
 resource "aws_apigatewayv2_route" "mcp_oauth_callback" {
   api_id    = aws_apigatewayv2_api.http.id
   route_key = "GET /oauth/callback"
-  target    = "integrations/${aws_apigatewayv2_integration.mcp.id}"
+  target    = "integrations/${aws_apigatewayv2_integration.mcp_oauth.id}"
 }
 
 resource "aws_apigatewayv2_route" "mcp_oauth_token" {
   api_id    = aws_apigatewayv2_api.http.id
   route_key = "POST /oauth/token"
-  target    = "integrations/${aws_apigatewayv2_integration.mcp.id}"
+  target    = "integrations/${aws_apigatewayv2_integration.mcp_oauth.id}"
 }
 
 resource "aws_lambda_permission" "mcp_api" {
   statement_id  = "AllowMcpHttpApiInvoke"
   action        = "lambda:InvokeFunction"
   function_name = aws_lambda_function.mcp.function_name
+  principal     = "apigateway.amazonaws.com"
+  source_arn    = "${aws_apigatewayv2_api.http.execution_arn}/*/*"
+}
+
+resource "aws_lambda_permission" "mcp_oauth_api" {
+  statement_id  = "AllowMcpOAuthHttpApiInvoke"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.mcp_oauth.function_name
   principal     = "apigateway.amazonaws.com"
   source_arn    = "${aws_apigatewayv2_api.http.execution_arn}/*/*"
 }
