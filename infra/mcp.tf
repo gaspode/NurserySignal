@@ -111,9 +111,6 @@ resource "aws_dynamodb_table" "mcp_oauth_transactions" {
   point_in_time_recovery {
     enabled = true
   }
-  server_side_encryption {
-    enabled = true
-  }
   tags       = local.common_tags
   depends_on = [aws_iam_policy.github_actions]
 }
