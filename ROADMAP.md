@@ -1555,5 +1555,16 @@ Paid-pilot activation check (2026-09-28):
   prior publication provenance, lifecycle, reason, evidence references, run item and admin audit event. Failure
   isolation, 24-hour/three-failure deferral, conditional update guards and WITHDRAWN exclusion from the publication
   coordinator prevent duplicate history and withdrawal/republication thrashing. Operations now exposes runtime,
-  bounded execution, windows, failures and totals. Infrastructure is deployed disabled first; production dry-run,
-  zero-candidate activation and the six-hour schedule gate remain pending live validation.
+  bounded execution, windows, failures and totals. The disabled-first production preview inspected all 87 publications:
+  35 automatic records remain KEEP_PUBLISHED, 52 manual records remain MANUAL_PROTECTION, and AUTO_WITHDRAW_ELIGIBLE
+  and MANUAL_REVIEW are both zero; no protected publication was selectable. The initial bounded coordinator run and
+  the enabled recurring-path verification both completed 0 selected / 0 withdrawn / 0 skipped / 0 failed, with no
+  audit rows or publication-state changes. Automatic withdrawal is now ENABLED on a six-hour EventBridge schedule,
+  capped at ten records per execution, while the emergency runtime switch preserves all history. Publication v3
+  remains independently ENABLED at 87 published (35 automatic / 52 protected manual); watcher v2 remains ENABLED
+  with 259 watches and zero requests/errors at activation verification. API/database/frontend health is green,
+  active ingestion/enrichment/Planning queues and their DLQs are empty, and the six known collector-DLQ baseline
+  messages remain unchanged. Runtime commit `a5ce03d` passed CI run `36884755223` and deployed disabled in run
+  `36884914021`; activation commit `54fc36b` passed CI run `36885748508` and deployed in run `36885920050`.
+  Backend (571), frontend (95), Ruff, frontend build and Terraform fmt/validate/plan/apply checks pass. Phase D2 is
+  complete; no MCP/agent work was started.
