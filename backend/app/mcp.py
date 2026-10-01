@@ -42,8 +42,16 @@ DEFAULT_LIMIT = 20
 MAX_LIMIT = 100
 CHATGPT_CIMD_URL = "https://chatgpt.com/oauth/client.json"
 CHATGPT_REDIRECT_URI = "https://chatgpt.com/connector_platform_oauth_redirect"
+CHATGPT_CIMD = {
+    "client_id": CHATGPT_CIMD_URL,
+    "client_name": "ChatGPT",
+    "redirect_uris": [CHATGPT_REDIRECT_URI],
+    "grant_types": ["authorization_code"],
+    "response_types": ["code"],
+    "token_endpoint_auth_methods_supported": ["none", "private_key_jwt"],
+    "token_endpoint_auth_method": "private_key_jwt",
+}
 _jwk_clients: dict[str, PyJWKClient] = {}
-_cimd_cache: tuple[float, dict[str, Any]] | None = None
 SOURCE_SCHEDULES = {
     "planning": {"enabled": True, "schedule": "rate(1 day)", "provider": "Plota"},
     "recruitment": {
@@ -1004,33 +1012,11 @@ def _redirect(location: str) -> dict[str, Any]:
 
 
 def _fetch_chatgpt_cimd() -> dict[str, Any]:
-    global _cimd_cache
-    now = time.monotonic()
-    if _cimd_cache and now - _cimd_cache[0] < 3600:
-        return _cimd_cache[1]
-    try:
-        request = urllib.request.Request(
-            CHATGPT_CIMD_URL,
-            headers={"accept": "application/json", "user-agent": "SignalHub-MCP/1"},
-        )
-        with urllib.request.urlopen(request, timeout=5) as response:
-            if response.status != 200:
-                raise ValueError("unexpected CIMD status")
-            value = json.loads(response.read(32_768))
-    except (OSError, ValueError, json.JSONDecodeError) as exc:
-        raise MCPError(
-            "unavailable", "ChatGPT client metadata is unavailable", rpc_code=-32003
-        ) from exc
-    if (
-        value.get("client_id") != CHATGPT_CIMD_URL
-        or CHATGPT_REDIRECT_URI not in value.get("redirect_uris", [])
-        or "authorization_code" not in value.get("grant_types", [])
-        or "code" not in value.get("response_types", [])
-        or "none" not in value.get("token_endpoint_auth_methods_supported", [])
-    ):
-        raise MCPError("unauthorized", "ChatGPT client metadata is not accepted", rpc_code=-32001)
-    _cimd_cache = (now, value)
-    return value
+    # The MCP Lambda deliberately has no public Internet egress. ChatGPT's
+    # official CIMD registration is therefore pinned at deployment rather than
+    # fetched during an authorization request. Only this exact client ID and
+    # redirect URI are accepted below; CI verifies the contract independently.
+    return dict(CHATGPT_CIMD)
 
 
 def _store_oauth_transaction(

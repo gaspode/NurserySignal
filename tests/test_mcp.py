@@ -165,6 +165,19 @@ def test_oauth_server_metadata_advertises_cognito_pkce_facade():
     assert json.loads(oidc["body"])["error"] == "not_supported"
 
 
+def test_chatgpt_cimd_registration_is_pinned_without_runtime_network(monkeypatch):
+    monkeypatch.setattr(
+        mcp.urllib.request,
+        "urlopen",
+        lambda *args, **kwargs: pytest.fail("CIMD validation must not require runtime egress"),
+    )
+    metadata = mcp._fetch_chatgpt_cimd()
+    assert metadata["client_id"] == mcp.CHATGPT_CIMD_URL
+    assert metadata["redirect_uris"] == [mcp.CHATGPT_REDIRECT_URI]
+    assert "authorization_code" in metadata["grant_types"]
+    assert "none" in metadata["token_endpoint_auth_methods_supported"]
+
+
 def test_cimd_authorization_preserves_pkce_scope_and_resource(monkeypatch):
     stored = {}
 
