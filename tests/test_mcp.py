@@ -180,9 +180,10 @@ def test_chatgpt_cimd_registration_is_pinned_without_runtime_network(monkeypatch
 
 
 def test_callback_specific_chatgpt_cimd_is_verified(monkeypatch):
-    callback_id = "connection_abc-123"
-    client_id = f"https://chatgpt.com/oauth/{callback_id}/client.json"
-    redirect_uri = f"https://chatgpt.com/connector/oauth/{callback_id}"
+    client_metadata_id = "client_abc-123"
+    redirect_callback_id = "callback_xyz-789"
+    client_id = f"https://chatgpt.com/oauth/{client_metadata_id}/client.json"
+    redirect_uri = f"https://chatgpt.com/connector/oauth/{redirect_callback_id}"
 
     class Headers:
         @staticmethod

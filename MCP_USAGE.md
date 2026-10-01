@@ -22,7 +22,7 @@ It is intended for investigation and prioritisation; it cannot perform administr
 - OAuth authorization-server discovery: `/.well-known/oauth-authorization-server`
 - Client identification: CIMD with public-client token authentication method `none`
 - Redirect URI: the redirect declared by the verified ChatGPT CIMD document (stable platform redirect
-  or the corresponding connection-specific callback)
+  or a connection-specific callback); opaque client and callback identifiers are not assumed equal
 - The facade pins the official stable ChatGPT registration and securely resolves connection-specific
   CIMD only from an allowlisted `chatgpt.com` URL. It adds RFC 9207 `iss` to successful and error
   callbacks and forwards the exact MCP `resource` through Cognito's RFC 8707 binding.

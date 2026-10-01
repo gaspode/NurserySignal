@@ -1066,14 +1066,20 @@ def _fetch_chatgpt_cimd(client_id: str = CHATGPT_CIMD_URL) -> dict[str, Any]:
         metadata = json.loads(payload)
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise MCPError("invalid_argument", "Invalid OAuth client metadata") from exc
-    callback_id = match.group(1)
-    expected_redirect = f"https://chatgpt.com/connector/oauth/{callback_id}"
+    # The client identifier is the metadata-document URL itself. Do not assume
+    # the opaque identifier in that URL is reused in a redirect URI; the CIMD
+    # redirect_uris property is authoritative for that binding.
+    grant_types = metadata.get("grant_types", ["authorization_code"])
+    response_types = metadata.get("response_types", ["code"])
+    auth_methods = metadata.get("token_endpoint_auth_methods_supported")
+    if auth_methods is None:
+        auth_methods = [metadata.get("token_endpoint_auth_method", "none")]
     if (
-        metadata.get("client_id") != client_id
-        or expected_redirect not in metadata.get("redirect_uris", [])
-        or "authorization_code" not in metadata.get("grant_types", [])
-        or "code" not in metadata.get("response_types", [])
-        or "none" not in metadata.get("token_endpoint_auth_methods_supported", [])
+        not isinstance(metadata.get("redirect_uris"), list)
+        or not metadata["redirect_uris"]
+        or "authorization_code" not in grant_types
+        or "code" not in response_types
+        or "none" not in auth_methods
     ):
         raise MCPError("invalid_argument", "OAuth client metadata rejected")
     return metadata
@@ -1083,8 +1089,21 @@ def _validate_chatgpt_client(
     client_id: str, redirect_uri: str | None = None
 ) -> dict[str, Any]:
     metadata = _fetch_chatgpt_cimd(client_id)
-    if redirect_uri is not None and redirect_uri not in metadata.get("redirect_uris", []):
-        raise MCPError("invalid_argument", "Redirect URI rejected")
+    if redirect_uri is not None:
+        parsed = urllib.parse.urlparse(redirect_uri)
+        callback_path = re.fullmatch(r"/connector/oauth/[A-Za-z0-9_-]{1,200}", parsed.path)
+        safe_redirect = redirect_uri == CHATGPT_REDIRECT_URI or (
+            parsed.scheme == "https"
+            and parsed.hostname == "chatgpt.com"
+            and parsed.port is None
+            and parsed.username is None
+            and parsed.password is None
+            and not parsed.query
+            and not parsed.fragment
+            and callback_path is not None
+        )
+        if not safe_redirect or redirect_uri not in metadata.get("redirect_uris", []):
+            raise MCPError("invalid_argument", "Redirect URI rejected")
     return metadata
 
 

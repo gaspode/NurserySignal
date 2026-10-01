@@ -58,6 +58,10 @@ Current gate:
   the server supports the stable RFC 9207 callback. The OAuth facade now admits both documented modes
   without accepting arbitrary clients or redirects; this fixes the `invalid_client` response while
   preserving PKCE, scope and resource binding.
+- Live follow-up showed that the opaque identifier in a callback-specific CIMD URL is not guaranteed
+  to equal the opaque identifier in its redirect URI. Redirect authorization now follows the fetched
+  CIMD `redirect_uris` allowlist directly, with an independent strict ChatGPT redirect-origin/path
+  check, instead of imposing that undocumented identifier equality.
 
 ## Phase 1 — Foundation — COMPLETE
 
