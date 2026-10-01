@@ -347,6 +347,7 @@ def test_cimd_authorization_preserves_pkce_scope_and_resource(monkeypatch):
     assert query["redirect_uri"] == ["https://api.example/oauth/callback"]
     assert query["resource"] == ["https://api.example/mcp"]
     assert query["code_challenge_method"] == ["S256"]
+    assert query["prompt"] == ["login"]
     assert stored["original_state"] == "chatgpt-state"
 
 

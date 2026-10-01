@@ -66,6 +66,11 @@ Current gate:
   group remain mandatory, and any present wrong audience or any unrelated client remains rejected.
   Commit `a009fc9` passed 611 backend tests, Ruff and full CI run `36934653683`, then deployed
   successfully in run `36934776839`.
+- The next live exchange passed all protocol/token checks and isolated an account mismatch: Cognito
+  had silently reused the `CareSignalCustomers` session for `willypayne@gmail.com`, while MCP requires
+  the existing `NurserySignalAdmins` identity `will@payne.uk`. The admin-only facade now sends
+  Cognito `prompt=login` so each MCP connection requires explicit authentication and cannot inherit
+  a customer portal session. Group membership remains unchanged; no customer was promoted.
 - MCP v1 is deployed at the production `/mcp` endpoint with RFC 9728 protected-resource discovery,
   an application-owned 401 Bearer challenge and an OAuth 2.1 authorization-code/PKCE facade. The
   canonical resource is the exact `/mcp` URL and RFC 8707 resource binding is preserved through

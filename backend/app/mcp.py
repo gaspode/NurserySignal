@@ -1471,6 +1471,9 @@ def _oauth_authorize(event: dict[str, Any], settings: Settings) -> dict[str, Any
         "code_challenge": args["code_challenge"],
         "code_challenge_method": "S256",
         "resource": settings.mcp_resource_url,
+        # MCP is admin-only. Do not silently reuse a Cognito session that may
+        # belong to a customer account in the same user pool.
+        "prompt": "login",
     }
     provider = settings.mcp_oauth_authorization_server.rstrip("/")
     return _redirect(f"{provider}/oauth2/authorize?{urllib.parse.urlencode(provider_args)}")
