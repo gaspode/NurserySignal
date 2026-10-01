@@ -41,6 +41,37 @@ def test_operations_summary_is_admin_only(monkeypatch) -> None:
     assert json.loads(response["body"])["read_only"] is True
 
 
+def test_withdrawal_preview_is_admin_only_and_read_only(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "app.handler.care_withdrawal_preview",
+        lambda settings: {
+            "preview_only": True,
+            "enabled": False,
+            "publication_state_mutations": 0,
+        },
+    )
+    base = {
+        "rawPath": "/admin/opportunities/withdrawal-preview",
+        "requestContext": {
+            "http": {"method": "GET"},
+            "authorizer": {"jwt": {"claims": {"sub": "staff"}}},
+        },
+    }
+    assert handler(base, None)["statusCode"] == 403
+    allowed = {
+        **base,
+        "requestContext": {
+            "http": {"method": "GET"},
+            "authorizer": {
+                "jwt": {"claims": {"sub": "admin", "cognito:groups": ["NurserySignalAdmins"]}}
+            },
+        },
+    }
+    response = handler(allowed, None)
+    assert response["statusCode"] == 200
+    assert json.loads(response["body"])["publication_state_mutations"] == 0
+
+
 def test_options_preflight_does_not_require_application_authentication() -> None:
     response = handler(
         {

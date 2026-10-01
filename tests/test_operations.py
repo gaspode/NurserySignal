@@ -105,6 +105,7 @@ def test_operations_summary_is_versioned_bounded_and_read_only(monkeypatch) -> N
         "postcode": "NG8",
         "publication_status": "DRAFT",
         "publication_automation_blocked": False,
+        "relationships": [],
     }
     monkeypatch.setattr("app.operations.connection", fake_connection)
     monkeypatch.setattr(
@@ -114,7 +115,12 @@ def test_operations_summary_is_versioned_bounded_and_read_only(monkeypatch) -> N
             "decisions": [
                 {
                     "opportunity": opportunity,
-                    "hygiene": {"category": "VALID_SUPPORTED"},
+                    "projection": opportunity,
+                    "hygiene": {
+                        "category": "VALID_SUPPORTED",
+                        "warning": None,
+                        "source_types": [],
+                    },
                     "decision": SimpleNamespace(outcome="AUTO_PUBLISH_ELIGIBLE"),
                 }
             ],
@@ -135,6 +141,8 @@ def test_operations_summary_is_versioned_bounded_and_read_only(monkeypatch) -> N
     assert summary["queues"]["available"] is False
     assert summary["recent_executions"]["collectors"]["available"] is False
     assert summary["withdrawal"]["enabled"] is False
+    assert summary["withdrawal"]["preview_only"] is True
+    assert summary["withdrawal"]["currently_published_total"] == 0
     assert all(statement.startswith(("SELECT", "WITH")) for statement in fake.statements)
     assert "secret" not in str(summary).lower()
 

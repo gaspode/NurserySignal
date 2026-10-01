@@ -77,6 +77,7 @@ from app.repository import (
     care_planning_manual_cohort_analysis,
     care_planning_taxonomy_preview,
     care_publication_automation_preview,
+    care_withdrawal_preview,
     cleanup_refused_planning_signals,
     cleanup_withdrawn_care_planning_signals,
     create_opportunity_from_signal,
@@ -399,6 +400,8 @@ def _admin_path(path: str) -> tuple[str, str | None]:
         return "opportunity-publication-automation-state", None
     if path == "/admin/opportunities/publication-automation-run":
         return "opportunity-publication-automation-run", None
+    if path == "/admin/opportunities/withdrawal-preview":
+        return "opportunity-withdrawal-preview", None
     if path.startswith("/admin/opportunities/"):
         parts = path[len("/admin/opportunities/") :].split("/")
         if len(parts) == 2 and parts[1] == "publication":
@@ -1747,6 +1750,11 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 if admin_error:
                     return admin_error
                 return _response(200, care_opportunity_lifecycle_preview(settings))
+            if action == "opportunity-withdrawal-preview" and method == "GET":
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                return _response(200, care_withdrawal_preview(settings))
             if action == "opportunity-lifecycle-bootstrap" and method == "POST":
                 admin_error = _require_admin(claims, settings)
                 if admin_error:

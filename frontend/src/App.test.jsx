@@ -169,12 +169,16 @@ describe("admin frontend", () => {
       publication: { enabled: true, recurring_enabled: true, policy_version: "care-publication-v3", total_published: 87, automatically_published: 35, manually_protected_published: 52, policy_outcomes: { AUTO_PUBLISH_ELIGIBLE_UNPUBLISHED: 513, QA_HOLDOUT: 68, MANUAL_REVIEW: 249 }, latest_execution: { failed: 0 } },
       data_quality: { needs_review_lifecycle: 164, missing_organisation_identity: 3, missing_site_or_location_identity: 2, duplicate_or_superseded: 0, manual_automation_blocks: 1 },
       queues: { available: false, reason: "Queue telemetry is not cached." },
-      withdrawal: { enabled: false, message: "Phase D automatic withdrawal is not active." },
+      withdrawal: { enabled: false, preview_only: true, policy_version: "care-withdrawal-v1", currently_published_total: 87, outcomes: { KEEP_PUBLISHED: 30, AUTO_WITHDRAW_ELIGIBLE: 5, MANUAL_REVIEW: 0, MANUAL_PROTECTION: 52 }, reason_counts: { stopped: 5 }, automatic_withdrawal_candidates: [{ opportunity_id: "withdraw-1", withdrawal_reason: "stopped" }], message: "Phase D1 is preview-only; no publication state is changed." },
     });
     render(<OperationsPage apiClient={apiClient} onNavigate={onNavigate} />);
     expect(await screen.findByRole("heading", { name: "Operations" })).toBeInTheDocument();
     expect(screen.getByText("259")).toBeInTheDocument();
-    expect(screen.getByText("Phase D automatic withdrawal is not active.")).toBeInTheDocument();
+    expect(screen.getByText("Phase D1 is preview-only; no publication state is changed.")).toBeInTheDocument();
+    expect(screen.getByText("Auto-withdraw eligible")).toBeInTheDocument();
+    expect(screen.getByText("care-withdrawal-v1")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "stopped · View opportunity" }));
+    expect(onNavigate).toHaveBeenCalledWith("/opportunities/withdraw-1");
     expect(screen.getByText("Queue telemetry is not cached.")).toBeInTheDocument();
     await userEvent.click(screen.getAllByRole("button", { name: /Needs attention/ })[0]);
     expect(onNavigate).toHaveBeenCalledWith("/opportunity-hygiene");

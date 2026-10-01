@@ -22,7 +22,7 @@ CARE_PUBLICATION_LEGACY_POLICY_VERSION = "care-opportunity-publication-v1"
 # Holdout identity deliberately remains independent of the policy revision so an
 # opportunity does not drift between QA and automatic cohorts after recalculation.
 CARE_PUBLICATION_HOLDOUT_VERSION = "care-opportunity-publication-v1"
-CARE_WITHDRAWAL_POLICY_VERSION = "care-opportunity-withdrawal-v1"
+CARE_WITHDRAWAL_POLICY_VERSION = "care-withdrawal-v1"
 CARE_PLANNING_WATCHER_POLICY_VERSION = "care-planning-watcher-v2"
 CARE_PLANNING_WATCHER_PREVIOUS_MONTHLY_REQUESTS = 3651
 
@@ -941,22 +941,95 @@ def evaluate_publication(
 
 
 def evaluate_withdrawal(
-    opportunity: dict[str, Any], lifecycle: LifecycleDecision
+    opportunity: dict[str, Any],
+    lifecycle: str | LifecycleDecision,
+    signals: list[dict[str, Any]] | None = None,
+    *,
+    hygiene_category: str | None = None,
+    hygiene_warning: str | None = None,
 ) -> AutomationDecision:
+    """Evaluate published CareProspect records without changing publication state."""
     if opportunity.get("publication_status") != "PUBLISHED":
-        return AutomationDecision("NOT_ELIGIBLE", "NOT_PUBLISHED", ("NOT_PUBLISHED",))
-    if lifecycle.lifecycle != CareLifecycle.STOPPED:
-        return AutomationDecision("KEEP_PUBLISHED", "ACTIVE_OR_UNRESOLVED_LIFECYCLE")
-    if opportunity.get("publication_automation_blocked"):
-        return AutomationDecision("MANUAL_REVIEW", "MANUAL_BLOCK", ("MANUAL_BLOCK",))
+        return AutomationDecision("NOT_ELIGIBLE", "not_published", ("not_published",))
+
+    lifecycle_value = (
+        lifecycle.lifecycle.value if isinstance(lifecycle, LifecycleDecision) else str(lifecycle)
+    )
+    signals = signals or []
     provenance = opportunity.get("publication_automation_provenance") or {}
-    if opportunity.get("customer_published_by") and not provenance.get("policy_version"):
+    automatic_publication = bool(provenance.get("policy_version"))
+    manual_publication = not automatic_publication
+
+    # Human publication and explicit automation blocks are authoritative in D1.
+    if manual_publication:
+        return AutomationDecision(
+            "MANUAL_PROTECTION",
+            "manual_publication_protection",
+            ("manual_publication_protection",),
+        )
+    if opportunity.get("publication_automation_blocked"):
+        return AutomationDecision(
+            "MANUAL_PROTECTION",
+            "manual_automation_block",
+            ("manual_automation_block",),
+        )
+
+    if (
+        opportunity.get("merged_into_opportunity_id")
+        or opportunity.get("review_status") == "MERGED"
+    ):
+        return AutomationDecision("AUTO_WITHDRAW_ELIGIBLE", "merged", ("merged",))
+    if hygiene_category in {"SUPERSEDED_CANDIDATE", "DUPLICATE_CANDIDATE"}:
+        return AutomationDecision(
+            "AUTO_WITHDRAW_ELIGIBLE", "superseded", ("superseded",)
+        )
+
+    if lifecycle_value == CareLifecycle.APPEAL_PENDING.value:
+        return AutomationDecision(
+            "MANUAL_REVIEW", "unresolved_appeal", ("unresolved_appeal",)
+        )
+    if lifecycle_value == CareLifecycle.NEEDS_REVIEW.value:
+        return AutomationDecision("MANUAL_REVIEW", "needs_review", ("needs_review",))
+
+    active_planning = [
+        signal
+        for signal in signals
+        if signal.get("source_type") == "planning"
+        and signal.get("relationship_status", signal.get("status")) == "ACTIVE"
+    ]
+    outcomes = {
+        canonical_planning_outcome(signal.get("metadata") or {}).outcome
+        for signal in active_planning
+    }
+    terminal_reason = "stopped"
+    if PlanningOutcome.APPEAL_DISMISSED in outcomes:
+        terminal_reason = "appeal_unsuccessful"
+    elif PlanningOutcome.WITHDRAWN in outcomes:
+        terminal_reason = "planning_withdrawn"
+    elif PlanningOutcome.REFUSED in outcomes:
+        terminal_reason = "planning_refused"
+
+    # The persisted lifecycle is the aggregate safeguard: it reaches STOPPED only
+    # when no alternative Planning, Recruitment or Ofsted foundation keeps the
+    # real-world project alive.
+    if lifecycle_value == CareLifecycle.STOPPED.value:
+        return AutomationDecision(
+            "AUTO_WITHDRAW_ELIGIBLE",
+            terminal_reason,
+            (terminal_reason,),
+        )
+
+    if hygiene_category in {"NEEDS_INVESTIGATION", "UNSUPPORTED_ORPHAN_CANDIDATE"}:
+        reason = (
+            "provider_state_ambiguous"
+            if hygiene_category == "NEEDS_INVESTIGATION"
+            else "insufficient_current_evidence"
+        )
+        return AutomationDecision("MANUAL_REVIEW", reason, (reason,))
+    if hygiene_warning:
         return AutomationDecision(
             "MANUAL_REVIEW",
-            "MANUAL_PUBLICATION",
-            ("MANUAL_PUBLICATION",),
+            "provider_state_ambiguous",
+            ("provider_state_ambiguous",),
         )
-    return AutomationDecision(
-        "AUTO_WITHDRAW",
-        "Terminal-negative evidence remains without an alternative active foundation.",
-    )
+    return AutomationDecision("KEEP_PUBLISHED", "current_evidence_remains_active")

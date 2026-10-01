@@ -1524,3 +1524,15 @@ Paid-pilot activation check (2026-09-28):
   `36861402104` and deployed successfully in run `36861536640`; 557 backend and 95 frontend tests, Ruff, frontend
   build and Terraform fmt/validate/plan/apply pass. API/database/frontend health is green. Exact next step is to use
   this baseline while designing Phase D; automatic withdrawal remains preview-only and disabled.
+- CareProspect Phase D1 defines preview-only `care-withdrawal-v1`. The deterministic policy evaluates currently
+  published opportunities only and separates KEEP_PUBLISHED, AUTO_WITHDRAW_ELIGIBLE, MANUAL_REVIEW and
+  MANUAL_PROTECTION. Automatic publications become withdrawal candidates only from aggregate persisted STOPPED,
+  merged or superseded semantics; Planning refusal, withdrawal and dismissed-appeal evidence explain terminal
+  reasons, while the aggregate lifecycle prevents one negative application from overriding alternate valid
+  foundations. NEEDS_REVIEW, unresolved appeals, unsupported/ambiguous evidence and provider uncertainty remain
+  manual. Manual publications and explicit automation blocks are always protected. The bounded admin-only preview
+  exposes lifecycle, publication-provenance and reason breakdowns plus privacy-safe samples and affected opportunity
+  links; the Operations summary/UI now carries the same authoritative projection. D1 has no mutation endpoint or
+  controls and makes zero publication, withdrawal, watcher or publication-policy changes. Production cohort and
+  deployment evidence will be recorded after live preview validation; Phase D2 remains blocked pending explicit
+  review of any automatic-withdrawal candidates.

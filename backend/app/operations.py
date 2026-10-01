@@ -13,7 +13,10 @@ from app.care_lifecycle import (
 )
 from app.config import Settings
 from app.db import connection
-from app.repository import _current_care_publication_inventory
+from app.repository import (
+    _care_withdrawal_preview_from_inventory,
+    _current_care_publication_inventory,
+)
 
 OPERATIONS_SUMMARY_SCHEMA_VERSION = "signalhub-operations-summary-v1"
 WINDOWS = ("24h", "7d", "30d")
@@ -69,6 +72,7 @@ def _unavailable(reason: str) -> dict[str, Any]:
 def operations_summary(settings: Settings) -> dict[str, Any]:
     """Return one bounded, read-only operational snapshot from persisted data."""
     inventory = _current_care_publication_inventory(settings)
+    withdrawal_preview = _care_withdrawal_preview_from_inventory(inventory)
     decisions = inventory["decisions"]
     hygiene_counts = Counter(item["hygiene"]["category"] for item in decisions)
     publication_outcomes = Counter(item["decision"].outcome for item in decisions)
@@ -500,10 +504,11 @@ def operations_summary(settings: Settings) -> dict[str, Any]:
             "next_coordinator_run_available": False,
         },
         "withdrawal": {
+            **withdrawal_preview,
             "enabled": False,
             "policy_version": CARE_WITHDRAWAL_POLICY_VERSION,
             "phase": "PREVIEW_ONLY",
-            "message": "Phase D automatic withdrawal is not active.",
+            "message": "Phase D1 is preview-only; no publication state is changed.",
         },
         "queues": queues,
         "data_quality": {

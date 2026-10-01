@@ -6276,7 +6276,8 @@ def _care_policy_opportunities(
                    o.change_type, o.stage_reason, o.creation_reason,
                    o.customer_lifecycle_stage, o.publication_automation_blocked,
                    o.publication_automation_reason, o.customer_title, o.customer_summary,
-                   o.customer_published_by, o.publication_automation_provenance,
+                   o.customer_published_by, o.customer_published_at,
+                   o.publication_automation_provenance,
                    COALESCE(rel.relationships, '[]'::jsonb),
                    COALESCE(hist.actions, ARRAY[]::text[]),
                    COALESCE(audit.actions, ARRAY[]::text[]),
@@ -6348,6 +6349,7 @@ def _care_policy_opportunities(
         "customer_title",
         "customer_summary",
         "customer_published_by",
+        "customer_published_at",
         "publication_automation_provenance",
         "relationships",
         "history_actions",
@@ -6707,7 +6709,13 @@ def care_opportunity_lifecycle_preview(settings: Settings) -> dict[str, Any]:
                 conflict_customer_useful[str(assessment.customer_useful).lower()] += 1
                 conflict_recommendations[assessment.recommendation] += 1
                 conflict_samples.setdefault(assessment.primary_reason, []).append(conflict)
-        withdrawal = evaluate_withdrawal(projection, decision)
+        withdrawal = evaluate_withdrawal(
+            projection,
+            stored_lifecycle,
+            opportunity["relationships"] or [],
+            hygiene_category=item["category"],
+            hygiene_warning=item.get("warning"),
+        )
         withdrawal_counts[withdrawal.outcome] += 1
         if opportunity.get("publication_status") == "PUBLISHED":
             published_lifecycle_counts[decision.lifecycle.value] += 1
@@ -7022,6 +7030,130 @@ def _current_care_publication_inventory(settings: Settings) -> dict[str, Any]:
         "selectable": selectable,
         "deferred_failures": deferred_failures,
     }
+
+
+def _care_withdrawal_preview_from_inventory(inventory: dict[str, Any]) -> dict[str, Any]:
+    """Build a bounded Phase-D preview from an already-loaded publication inventory."""
+    outcomes: Counter[str] = Counter()
+    reasons: Counter[str] = Counter()
+    by_lifecycle: dict[str, Counter[str]] = {}
+    by_provenance: dict[str, Counter[str]] = {}
+    samples: dict[str, list[dict[str, Any]]] = {}
+    auto_candidates: list[dict[str, Any]] = []
+    protected_terminal: list[dict[str, Any]] = []
+
+    for item in inventory["decisions"]:
+        opportunity = item["opportunity"]
+        if opportunity.get("publication_status") != "PUBLISHED":
+            continue
+        projection = item["projection"]
+        hygiene = item["hygiene"]
+        lifecycle = str(opportunity.get("customer_lifecycle_stage") or "NEEDS_REVIEW")
+        provenance = (
+            "AUTOMATIC"
+            if (opportunity.get("publication_automation_provenance") or {}).get(
+                "policy_version"
+            )
+            else "MANUAL_PROTECTED"
+        )
+        decision = evaluate_withdrawal(
+            projection,
+            lifecycle,
+            opportunity.get("relationships") or [],
+            hygiene_category=hygiene.get("category"),
+            hygiene_warning=hygiene.get("warning"),
+        )
+        outcomes[decision.outcome] += 1
+        reasons[decision.reason] += 1
+        by_lifecycle.setdefault(lifecycle, Counter())[decision.outcome] += 1
+        by_provenance.setdefault(provenance, Counter())[decision.outcome] += 1
+
+        planning_outcomes = sorted(
+            {
+                canonical_planning_outcome(signal.get("metadata") or {}).outcome.value
+                for signal in opportunity.get("relationships") or []
+                if signal.get("source_type") == "planning"
+                and signal.get("status") == "ACTIVE"
+            }
+        )
+        evidence_dates = [
+            signal.get("latest_revision_at") or signal.get("discovered_at")
+            for signal in opportunity.get("relationships") or []
+            if signal.get("status") == "ACTIVE"
+            and (signal.get("latest_revision_at") or signal.get("discovered_at"))
+        ]
+        sample = {
+            "opportunity_id": str(opportunity["id"]),
+            "current_lifecycle": lifecycle,
+            "publication_provenance": provenance,
+            "outcome": decision.outcome,
+            "withdrawal_reason": decision.reason,
+            "supporting_evidence": {
+                "foundational_signals": int(hygiene.get("foundational_signal_count") or 0),
+                "supporting_followups": int(hygiene.get("supporting_signal_count") or 0),
+                "source_types": sorted(hygiene.get("source_types") or []),
+                "planning_outcomes": planning_outcomes,
+            },
+            "relevant_dates": {
+                "published_at": opportunity.get("customer_published_at"),
+                "latest_evidence_at": max(evidence_dates) if evidence_dates else None,
+            },
+        }
+        outcome_samples = samples.setdefault(decision.outcome, [])
+        if len(outcome_samples) < 5:
+            outcome_samples.append(sample)
+        if decision.outcome == "AUTO_WITHDRAW_ELIGIBLE" and len(auto_candidates) < 100:
+            auto_candidates.append(sample)
+        if (
+            decision.outcome == "MANUAL_PROTECTION"
+            and (
+                lifecycle == "STOPPED"
+                or opportunity.get("merged_into_opportunity_id")
+                or hygiene.get("category")
+                in {"SUPERSEDED_CANDIDATE", "DUPLICATE_CANDIDATE"}
+            )
+            and len(protected_terminal) < 100
+        ):
+            protected_terminal.append(sample)
+
+    published_total = sum(outcomes.values())
+    return {
+        "preview_only": True,
+        "enabled": False,
+        "policy_version": CARE_WITHDRAWAL_POLICY_VERSION,
+        "currently_published_total": published_total,
+        "outcomes": {
+            outcome: int(outcomes.get(outcome, 0))
+            for outcome in (
+                "KEEP_PUBLISHED",
+                "AUTO_WITHDRAW_ELIGIBLE",
+                "MANUAL_REVIEW",
+                "MANUAL_PROTECTION",
+            )
+        },
+        "by_lifecycle": {
+            key: dict(sorted(value.items())) for key, value in sorted(by_lifecycle.items())
+        },
+        "by_publication_provenance": {
+            key: dict(sorted(value.items())) for key, value in sorted(by_provenance.items())
+        },
+        "reason_counts": dict(sorted(reasons.items())),
+        "automatic_withdrawal_candidates": auto_candidates,
+        "manually_protected_terminal_cases": protected_terminal,
+        "samples": {key: value for key, value in sorted(samples.items())},
+        "changed_since_previous_preview": {
+            "available": False,
+            "reason": "Withdrawal preview outcomes are not persisted in Phase D1.",
+        },
+        "publication_state_mutations": 0,
+    }
+
+
+def care_withdrawal_preview(settings: Settings) -> dict[str, Any]:
+    """Evaluate currently published CareProspect opportunities without mutation."""
+    return _care_withdrawal_preview_from_inventory(
+        _current_care_publication_inventory(settings)
+    )
 
 
 def care_publication_automation_preview(

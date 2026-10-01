@@ -4,6 +4,7 @@ from uuid import UUID
 from app.care_lifecycle import (
     CARE_PUBLICATION_HOLDOUT_VERSION,
     CARE_PUBLICATION_POLICY_VERSION,
+    CARE_WITHDRAWAL_POLICY_VERSION,
     CareLifecycle,
     bootstrap_lifecycle_records,
     classify_publication_conflict,
@@ -542,31 +543,87 @@ def test_publication_v2_requires_strong_evidence_identity_and_safe_content() -> 
     assert "missing_customer_summary" in decision.exclusions
 
 
-def test_withdrawal_requires_published_stopped_and_respects_alternatives() -> None:
-    stopped = derive_care_lifecycle([planning("Refused")])
-    assert (
-        evaluate_withdrawal(opportunity(publication_status="PUBLISHED"), stopped).outcome
-        == "AUTO_WITHDRAW"
+def test_withdrawal_requires_terminal_automatic_publication() -> None:
+    refused = planning("Refused")
+    stopped = derive_care_lifecycle([refused])
+    automated = opportunity(
+        publication_status="PUBLISHED",
+        customer_published_by="automation",
+        publication_automation_provenance={"policy_version": "care-publication-v3"},
     )
-    blocked = opportunity(publication_status="PUBLISHED", publication_automation_blocked=True)
-    assert evaluate_withdrawal(blocked, stopped).outcome == "MANUAL_REVIEW"
+    decision = evaluate_withdrawal(automated, stopped, [refused])
+    assert decision.outcome == "AUTO_WITHDRAW_ELIGIBLE"
+    assert decision.reason == "planning_refused"
+    assert CARE_WITHDRAWAL_POLICY_VERSION == "care-withdrawal-v1"
+
+    withdrawn = planning("Withdrawn")
+    decision = evaluate_withdrawal(automated, "STOPPED", [withdrawn])
+    assert decision.outcome == "AUTO_WITHDRAW_ELIGIBLE"
+    assert decision.reason == "planning_withdrawn"
+
+    dismissed = planning("Appeal dismissed")
+    decision = evaluate_withdrawal(automated, "STOPPED", [dismissed])
+    assert decision.outcome == "AUTO_WITHDRAW_ELIGIBLE"
+    assert decision.reason == "appeal_unsuccessful"
+
+    blocked = {
+        **automated,
+        "publication_automation_blocked": True,
+    }
+    assert evaluate_withdrawal(blocked, stopped, [refused]).outcome == "MANUAL_PROTECTION"
     manual = opportunity(
         publication_status="PUBLISHED",
         customer_published_by="admin@example.com",
         publication_automation_provenance={},
     )
-    assert evaluate_withdrawal(manual, stopped).outcome == "MANUAL_REVIEW"
+    assert evaluate_withdrawal(manual, stopped, [refused]).outcome == "MANUAL_PROTECTION"
+
+
+def test_withdrawal_ambiguous_states_are_conservative_and_deterministic() -> None:
     automated = opportunity(
         publication_status="PUBLISHED",
-        customer_published_by="automation",
-        publication_automation_provenance={"policy_version": "care-opportunity-publication-v1"},
+        publication_automation_provenance={"policy_version": "care-publication-v3"},
     )
-    assert evaluate_withdrawal(automated, stopped).outcome == "AUTO_WITHDRAW"
-    approved = derive_care_lifecycle([planning("Approved")])
-    assert (
-        evaluate_withdrawal(opportunity(publication_status="PUBLISHED"), approved).outcome
-        == "KEEP_PUBLISHED"
+    assert evaluate_withdrawal(automated, "NEEDS_REVIEW").outcome == "MANUAL_REVIEW"
+    assert evaluate_withdrawal(automated, "APPEAL_PENDING").outcome == "MANUAL_REVIEW"
+    first = evaluate_withdrawal(
+        automated,
+        "PLANNING_PENDING",
+        [planning("Pending")],
+        hygiene_category="VALID_SUPPORTED",
     )
+    second = evaluate_withdrawal(
+        automated,
+        "PLANNING_PENDING",
+        [planning("Pending")],
+        hygiene_category="VALID_SUPPORTED",
+    )
+    assert first == second
+    assert first.outcome == "KEEP_PUBLISHED"
+    assert evaluate_withdrawal(
+        automated,
+        "PLANNING_PENDING",
+        [planning("Pending")],
+        hygiene_category="NEEDS_INVESTIGATION",
+    ).outcome == "MANUAL_REVIEW"
+
+
+def test_withdrawal_handles_merged_and_superseded_automatic_publications() -> None:
+    automated = opportunity(
+        publication_status="PUBLISHED",
+        publication_automation_provenance={"policy_version": "care-publication-v3"},
+    )
+    assert evaluate_withdrawal(
+        {**automated, "merged_into_opportunity_id": "canonical"},
+        "PLANNING_APPROVED",
+    ).reason == "merged"
+    superseded = evaluate_withdrawal(
+        automated,
+        "PLANNING_APPROVED",
+        hygiene_category="SUPERSEDED_CANDIDATE",
+    )
+    assert superseded.outcome == "AUTO_WITHDRAW_ELIGIBLE"
+    assert superseded.reason == "superseded"
 
 
 def test_holdout_is_approximately_ten_percent() -> None:
