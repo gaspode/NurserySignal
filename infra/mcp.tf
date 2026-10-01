@@ -133,7 +133,7 @@ resource "aws_lambda_function" "mcp" {
       SERVICE_NAME                   = "${local.name_prefix}-mcp"
       DB_SECRET_ARN                  = aws_secretsmanager_secret.database.arn
       MCP_RESOURCE_URL               = local.mcp_resource_url
-      MCP_OAUTH_ISSUER               = "https://${aws_cognito_user_pool.main.endpoint}"
+      MCP_OAUTH_ISSUER               = aws_apigatewayv2_api.http.api_endpoint
       MCP_OAUTH_AUTHORIZATION_SERVER = "https://${aws_cognito_user_pool_domain.mcp.domain}.auth.${var.aws_region}.amazoncognito.com"
       MCP_USER_CLIENT_ID             = aws_cognito_user_pool_client.mcp_chatgpt.id
       MCP_SERVICE_CLIENT_ID          = aws_cognito_user_pool_client.mcp_service.id
@@ -194,6 +194,18 @@ resource "aws_apigatewayv2_route" "mcp_oauth_metadata" {
 resource "aws_apigatewayv2_route" "mcp_oauth_metadata_path" {
   api_id    = aws_apigatewayv2_api.http.id
   route_key = "GET /.well-known/oauth-protected-resource/mcp"
+  target    = "integrations/${aws_apigatewayv2_integration.mcp.id}"
+}
+
+resource "aws_apigatewayv2_route" "mcp_oauth_server_metadata" {
+  api_id    = aws_apigatewayv2_api.http.id
+  route_key = "GET /.well-known/oauth-authorization-server"
+  target    = "integrations/${aws_apigatewayv2_integration.mcp.id}"
+}
+
+resource "aws_apigatewayv2_route" "mcp_oidc_metadata" {
+  api_id    = aws_apigatewayv2_api.http.id
+  route_key = "GET /.well-known/openid-configuration"
   target    = "integrations/${aws_apigatewayv2_integration.mcp.id}"
 }
 

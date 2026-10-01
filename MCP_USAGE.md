@@ -17,6 +17,9 @@ It is intended for investigation and prioritisation; it cannot perform administr
   `mcp_readonly_secret_arn` output
 - Protected-resource discovery:
   `/.well-known/oauth-protected-resource/mcp`
+- OAuth authorization-server discovery:
+  `/.well-known/oauth-authorization-server` (a metadata facade over the existing Cognito issuer,
+  needed because Cognito supports PKCE but does not advertise `S256` in its own discovery document)
 
 The authenticated capability document is at `/mcp/capabilities`. Never put OAuth client secrets,
 access tokens or refresh tokens in source control, chat messages, screenshots or client-side code.
@@ -34,10 +37,11 @@ PKCE: S256
 ```
 
 In ChatGPT, enable developer mode, create a custom app, provide the production MCP URL and choose
-OAuth. Use the exact redirect URI shown by ChatGPT. The Terraform default includes the stable
-ChatGPT redirect; if ChatGPT displays a connection-specific callback, add that exact URI to
-`mcp_oauth_callback_urls`, deploy, and complete authorization. The OAuth `resource` value is bound
-to the MCP URL and carried in the access-token audience.
+OAuth with the predefined public client ID. Use the exact redirect URI shown by ChatGPT. The
+Terraform default includes the stable ChatGPT redirect; because this authorization server does not
+claim RFC 9207 response-issuer support, a new connection may show a connection-specific callback.
+If so, add that exact URI to `mcp_oauth_callback_urls`, deploy, and complete authorization. The OAuth
+`resource` value is bound to the MCP URL and carried in the access-token audience.
 
 The service client exists for controlled non-interactive agents and production smoke tests. Obtain
 its short-lived access token through the authorised operational process; do not copy its persistent

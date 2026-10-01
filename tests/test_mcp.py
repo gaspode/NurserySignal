@@ -32,7 +32,8 @@ def auth(monkeypatch):
     monkeypatch.setenv("MCP_SERVICE_CLIENT_ID", "service-client")
     monkeypatch.setenv("MCP_USER_CLIENT_ID", "user-client")
     monkeypatch.setenv("MCP_RESOURCE_URL", "https://api.example/mcp")
-    monkeypatch.setenv("MCP_OAUTH_ISSUER", "https://issuer.example/pool")
+    monkeypatch.setenv("MCP_OAUTH_ISSUER", "https://api.example")
+    monkeypatch.setenv("MCP_OAUTH_AUTHORIZATION_SERVER", "https://login.example")
 
 
 def test_authentication_and_read_scope_are_required(monkeypatch):
@@ -97,6 +98,19 @@ def test_oauth_protected_resource_metadata_is_public_and_scoped():
     assert response["statusCode"] == 200
     assert body["resource"] == "https://api.example/mcp"
     assert body["scopes_supported"] == ["signalhub-mcp/read"]
+
+
+def test_oauth_server_metadata_advertises_cognito_pkce_facade():
+    response = mcp.handler(
+        event(authorized=False, method="GET", path="/.well-known/oauth-authorization-server"),
+        None,
+    )
+    body = json.loads(response["body"])
+    assert body["issuer"] == "https://api.example"
+    assert body["authorization_endpoint"] == "https://login.example/oauth2/authorize"
+    assert body["token_endpoint"] == "https://login.example/oauth2/token"
+    assert body["code_challenge_methods_supported"] == ["S256"]
+    assert body["authorization_response_iss_parameter_supported"] is False
 
 
 def test_tool_call_is_structured_audited_and_does_not_call_provider(monkeypatch):

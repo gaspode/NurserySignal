@@ -844,6 +844,28 @@ def protected_resource_metadata(settings: Settings) -> dict[str, Any]:
     }
 
 
+def authorization_server_metadata(settings: Settings) -> dict[str, Any]:
+    if not settings.mcp_oauth_issuer or not settings.mcp_oauth_authorization_server:
+        raise MCPError("unavailable", "MCP OAuth metadata is not configured", rpc_code=-32003)
+    base = settings.mcp_oauth_authorization_server.rstrip("/")
+    return {
+        "issuer": settings.mcp_oauth_issuer,
+        "authorization_endpoint": f"{base}/oauth2/authorize",
+        "token_endpoint": f"{base}/oauth2/token",
+        "revocation_endpoint": f"{base}/oauth2/revoke",
+        "response_types_supported": ["code"],
+        "grant_types_supported": ["authorization_code", "refresh_token"],
+        "code_challenge_methods_supported": ["S256"],
+        "token_endpoint_auth_methods_supported": [
+            "none",
+            "client_secret_basic",
+            "client_secret_post",
+        ],
+        "scopes_supported": ["openid", "email", READ_SCOPE],
+        "authorization_response_iss_parameter_supported": False,
+    }
+
+
 def _auth_challenge(settings: Settings) -> str:
     resource = str(settings.mcp_resource_url or "").rstrip("/")
     origin = resource.removesuffix("/mcp")
@@ -920,6 +942,14 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     }:
         try:
             return _response(200, protected_resource_metadata(settings))
+        except MCPError as exc:
+            return _response(503, {"error": exc.code, "message": exc.message})
+    if method == "GET" and path in {
+        "/.well-known/oauth-authorization-server",
+        "/.well-known/openid-configuration",
+    }:
+        try:
+            return _response(200, authorization_server_metadata(settings))
         except MCPError as exc:
             return _response(503, {"error": exc.code, "message": exc.message})
     try:
