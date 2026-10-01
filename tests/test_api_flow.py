@@ -1242,6 +1242,107 @@ def test_care_lifecycle_coordinator_previews_or_queues_bounded_due_watches(monke
     assert result["enrolment"]["provider_requests"] == 0
 
 
+def test_care_publication_coordinator_is_recurring_bounded_and_separate_from_withdrawal(
+    monkeypatch,
+) -> None:
+    captured = {}
+
+    def fake_execute(settings, **kwargs):
+        captured.update(kwargs)
+        return {"published": 3, "withdrawal_changes": 0}
+
+    monkeypatch.setattr("app.handler.execute_care_publication_batch", fake_execute)
+    result = handler(
+        {"operation": "care_publication_coordinator", "max_due": 999},
+        None,
+    )
+    assert result == {"published": 3, "withdrawal_changes": 0}
+    assert captured == {
+        "actor": "SYSTEM_PUBLICATION_COORDINATOR",
+        "limit": 100,
+        "trigger_source": "SCHEDULED",
+        "require_recurring": True,
+    }
+
+
+def test_care_publication_admin_preview_execution_and_switch_are_admin_only(
+    monkeypatch,
+) -> None:
+    preview_args = {}
+    execution_args = {}
+    state_args = {}
+    monkeypatch.setattr(
+        "app.handler.care_publication_automation_preview",
+        lambda settings, **kwargs: preview_args.update(kwargs)
+        or {"preview": True, "publication_mutations": 0, "withdrawal_mutations": 0},
+    )
+    monkeypatch.setattr(
+        "app.handler.execute_care_publication_batch",
+        lambda settings, **kwargs: execution_args.update(kwargs)
+        or {"published": 1, "withdrawal_changes": 0},
+    )
+    monkeypatch.setattr(
+        "app.handler.set_care_publication_automation_execution",
+        lambda settings, **kwargs: state_args.update(kwargs)
+        or {"execution_enabled": kwargs["enabled"], "publication_changes": 0},
+    )
+
+    denied = handler(
+        event(
+            "/admin/opportunities/publication-automation-run",
+            "POST",
+            body=json.dumps({"preview": False}),
+            claims={"sub": "staff", "cognito:groups": ["Other"]},
+        ),
+        None,
+    )
+    assert denied["statusCode"] == 403
+
+    response = handler(
+        event(
+            "/admin/opportunities/publication-automation-run",
+            "POST",
+            body=json.dumps({"preview": True, "limit": 999}),
+        ),
+        None,
+    )
+    assert response["statusCode"] == 200
+    assert preview_args == {"limit": 100}
+
+    response = handler(
+        event(
+            "/admin/opportunities/publication-automation-run",
+            "POST",
+            body=json.dumps({"preview": False, "limit": 10}),
+        ),
+        None,
+    )
+    assert response["statusCode"] == 200
+    assert execution_args == {
+        "actor": "reviewer-123",
+        "limit": 10,
+        "trigger_source": "ADMIN",
+    }
+
+    response = handler(
+        event(
+            "/admin/opportunities/publication-automation-state",
+            "POST",
+            body=json.dumps(
+                {"enabled": True, "recurring_enabled": False, "reason": "initial batch"}
+            ),
+        ),
+        None,
+    )
+    assert response["statusCode"] == 200
+    assert state_args == {
+        "enabled": True,
+        "recurring_enabled": False,
+        "actor": "reviewer-123",
+        "reason": "initial batch",
+    }
+
+
 def test_care_lifecycle_bootstrap_is_admin_only_and_bounded(monkeypatch) -> None:
     captured = {}
 

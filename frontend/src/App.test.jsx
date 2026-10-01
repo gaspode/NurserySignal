@@ -1102,6 +1102,14 @@ describe("admin frontend", () => {
           manual_review_analysis: {
             cohorts: { strong_pending_opening_pre_taxonomy: 25 },
           },
+          automation: {
+            execution_enabled: false,
+            recurring_enabled: false,
+            max_publications_per_execution: 25,
+            automatically_published: 0,
+            manually_published: 33,
+            last_batch: { selected: 0, published: 0, skipped: 0, failed: 0 },
+          },
         },
       };
       return hygieneResult();
@@ -1110,7 +1118,7 @@ describe("admin frontend", () => {
     render(<OpportunityHygienePage apiClient={apiClient} onNavigate={onNavigate} />);
     await screen.findByRole("heading", { name: "Needs attention" });
     await userEvent.click(screen.getByRole("button", { name: "Publication candidates" }));
-    expect(await screen.findByRole("heading", { name: "Automatic publication preview" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Automatic publication policy" })).toBeInTheDocument();
     expect(screen.getByText(/care-publication-v3/)).toHaveTextContent("care-publication-v2");
     expect(screen.getByText("Auto-publish eligible").parentElement).toHaveTextContent("120");
     expect(screen.getByText("QA holdouts").parentElement).toHaveTextContent("14");
@@ -1125,6 +1133,9 @@ describe("admin frontend", () => {
     await userEvent.click(screen.getByRole("button", { name: /View publishe/ }));
     expect(onNavigate).toHaveBeenCalledWith("/opportunities/published-1");
     expect(screen.queryByRole("button", { name: /Auto-publish/i })).not.toBeInTheDocument();
+    expect(screen.getByText("Automatic publication").parentElement).toHaveTextContent("DISABLED");
+    expect(screen.getByText("Maximum per run").parentElement).toHaveTextContent("25");
+    expect(screen.getByRole("button", { name: "Enable bounded execution" })).toBeInTheDocument();
   });
 
   it("keeps recalculation errors inside the confirmation dialog", async () => {

@@ -75,10 +75,12 @@ from app.repository import (
     care_planning_lawfulness_preview,
     care_planning_manual_cohort_analysis,
     care_planning_taxonomy_preview,
+    care_publication_automation_preview,
     cleanup_refused_planning_signals,
     cleanup_withdrawn_care_planning_signals,
     create_opportunity_from_signal,
     enrol_care_planning_watches,
+    execute_care_publication_batch,
     link_signal_to_opportunity,
     list_match_reviews,
     list_opportunities,
@@ -111,6 +113,7 @@ from app.repository import (
     review_triage_summary,
     safe_agreement_bulk_approve,
     set_care_planning_watcher_execution,
+    set_care_publication_automation_execution,
     set_opportunity_automation_block,
     set_organisation_type,
     signal_detail,
@@ -389,6 +392,10 @@ def _admin_path(path: str) -> tuple[str, str | None]:
         return "opportunity-planning-watcher-state", None
     if path == "/admin/opportunities/planning-watcher-run":
         return "opportunity-planning-watcher-run", None
+    if path == "/admin/opportunities/publication-automation-state":
+        return "opportunity-publication-automation-state", None
+    if path == "/admin/opportunities/publication-automation-run":
+        return "opportunity-publication-automation-run", None
     if path.startswith("/admin/opportunities/"):
         parts = path[len("/admin/opportunities/") :].split("/")
         if len(parts) == 2 and parts[1] == "publication":
@@ -428,6 +435,16 @@ def _admin_path(path: str) -> tuple[str, str | None]:
 
 def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     settings = Settings.from_env()
+    if event.get("operation") == "care_publication_coordinator" and not event.get(
+        "requestContext"
+    ):
+        return execute_care_publication_batch(
+            settings,
+            actor="SYSTEM_PUBLICATION_COORDINATOR",
+            limit=min(max(int(event.get("max_due") or 25), 1), 100),
+            trigger_source="SCHEDULED",
+            require_recurring=True,
+        )
     if event.get("operation") == "care_lifecycle_refresh_coordinator" and not event.get(
         "requestContext"
     ):
@@ -1779,6 +1796,46 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                     queue_due_care_planning_watches(
                         settings,
                         max_due=min(max(int(payload.get("max_due") or 15), 1), 100),
+                    ),
+                )
+            if action == "opportunity-publication-automation-state" and method == "POST":
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                payload = parse_json_payload(_raw_body(event))
+                enabled = payload.get("enabled")
+                recurring_enabled = payload.get("recurring_enabled", False)
+                if not isinstance(enabled, bool) or not isinstance(recurring_enabled, bool):
+                    raise ValueError("enabled and recurring_enabled must be booleans")
+                actor = str(claims.get("sub") or claims.get("username") or "unknown")
+                return _response(
+                    200,
+                    set_care_publication_automation_execution(
+                        settings,
+                        enabled=enabled,
+                        recurring_enabled=recurring_enabled,
+                        actor=actor,
+                        reason=str(payload.get("reason") or "").strip()[:500] or None,
+                    ),
+                )
+            if action == "opportunity-publication-automation-run" and method == "POST":
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                payload = parse_json_payload(_raw_body(event))
+                limit = min(max(int(payload.get("limit") or 25), 1), 100)
+                if bool(payload.get("preview", True)):
+                    return _response(
+                        200, care_publication_automation_preview(settings, limit=limit)
+                    )
+                actor = str(claims.get("sub") or claims.get("username") or "unknown")
+                return _response(
+                    200,
+                    execute_care_publication_batch(
+                        settings,
+                        actor=actor,
+                        limit=limit,
+                        trigger_source="ADMIN",
                     ),
                 )
             if action == "opportunity-automation-block" and method == "POST" and signal_id:

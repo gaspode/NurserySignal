@@ -1485,3 +1485,13 @@ Paid-pilot activation check (2026-09-28):
   API/database health is green, non-collector DLQs are empty, and the six pre-existing collector DLQ messages remain
   untouched. Phase C2 remains disabled; the next gate is explicit review/approval of this v3 cohort, not further
   scope expansion.
+- CareProspect Phase C2 adds a bounded, separately switchable automatic-publication coordinator around the unchanged
+  `care-publication-v3` evaluator. The runtime re-evaluates every selected opportunity immediately before mutation,
+  conditionally publishes only DRAFT/system-eligible records, persists policy/lifecycle/evidence provenance, records
+  per-run and per-opportunity audit outcomes, isolates failures and defers repeated failures. Manual publications,
+  QA holdouts, manual-review/ineligible/protected outcomes, blocks and merged/rejected records remain excluded. The
+  initial database and EventBridge switches deploy disabled; activation requires a production dry-run followed by
+  one bounded ten-record batch. A clean first batch gates the six-hour recurring coordinator, which remains capped at
+  25 publications per invocation. Emergency disable preserves all publication history. Automatic withdrawal remains
+  disabled, and the Phase B3 watcher remains independent. Production activation results will be appended after the
+  disabled-first deployment and bounded validation.

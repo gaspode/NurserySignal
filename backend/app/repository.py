@@ -6260,11 +6260,16 @@ def list_opportunities(
     }
 
 
-def care_opportunity_lifecycle_preview(settings: Settings) -> dict[str, Any]:
-    """Derive Phase-A lifecycle/publication/withdrawal policy results without mutation."""
-    with connection(settings) as conn:
-        rows = conn.execute(
-            """
+def _care_policy_opportunities(
+    conn: Any, *, opportunity_id: str | None = None
+) -> list[dict[str, Any]]:
+    where = "WHERE o.vertical = 'CHILDRENS_HOME'"
+    params: tuple[Any, ...] = ()
+    if opportunity_id:
+        where += " AND o.id = %s"
+        params = (opportunity_id,)
+    rows = conn.execute(
+        f"""
             SELECT o.id, o.name, o.event_type, o.lifecycle_stage, o.confidence,
                    o.review_status, o.publication_status, o.vertical, o.operator_name,
                    o.address, o.postcode, o.town, o.merged_into_opportunity_id,
@@ -6315,10 +6320,94 @@ def care_opportunity_lifecycle_preview(settings: Settings) -> dict[str, Any]:
               SELECT count(*) AS pending_count FROM opportunity_match_reviews mr
               WHERE mr.opportunity_id = o.id AND mr.status = 'PENDING'
             ) matches ON TRUE
-            WHERE o.vertical = 'CHILDRENS_HOME'
+            {where}
             ORDER BY o.id LIMIT 5000
-            """
-        ).fetchall()
+            """,
+        params,
+    ).fetchall()
+    fields = (
+        "id",
+        "name",
+        "event_type",
+        "lifecycle_stage",
+        "confidence",
+        "review_status",
+        "publication_status",
+        "vertical",
+        "operator_name",
+        "address",
+        "postcode",
+        "town",
+        "merged_into_opportunity_id",
+        "change_type",
+        "stage_reason",
+        "creation_reason",
+        "customer_lifecycle_stage",
+        "publication_automation_blocked",
+        "publication_automation_reason",
+        "customer_title",
+        "customer_summary",
+        "customer_published_by",
+        "publication_automation_provenance",
+        "relationships",
+        "history_actions",
+        "audit_actions",
+        "pending_match_reviews",
+    )
+    return [dict(zip(fields, row)) for row in rows]
+
+
+def _care_publication_projection(
+    opportunity: dict[str, Any], hygiene_item: dict[str, Any]
+) -> tuple[dict[str, Any], str | None, str | None, Any]:
+    projection = {
+        **opportunity,
+        "local_authority": next(
+            (
+                (signal.get("metadata") or {}).get("local_authority")
+                or (signal.get("metadata") or {}).get("council")
+                for signal in opportunity["relationships"] or []
+                if signal.get("status") == "ACTIVE"
+                and (
+                    (signal.get("metadata") or {}).get("local_authority")
+                    or (signal.get("metadata") or {}).get("council")
+                )
+            ),
+            None,
+        ),
+        "region": next(
+            (
+                (signal.get("metadata") or {}).get("region")
+                for signal in opportunity["relationships"] or []
+                if (signal.get("metadata") or {}).get("region")
+            ),
+            None,
+        ),
+        "source_types": hygiene_item.get("source_types") or [],
+    }
+    generated_title = generated_customer_title(projection)
+    generated_summary = generated_customer_summary(projection)
+    safe_title = str(opportunity.get("customer_title") or generated_title or "").strip() or None
+    safe_summary = (
+        str(opportunity.get("customer_summary") or generated_summary or "").strip() or None
+    )
+    lifecycle = str(opportunity.get("customer_lifecycle_stage") or "NEEDS_REVIEW")
+    decision = evaluate_publication(
+        projection,
+        lifecycle,
+        opportunity["relationships"] or [],
+        hygiene_category=hygiene_item["category"],
+        hygiene_warning=hygiene_item.get("warning"),
+        safe_title=safe_title,
+        safe_summary=safe_summary,
+    )
+    return projection, safe_title, safe_summary, decision
+
+
+def care_opportunity_lifecycle_preview(settings: Settings) -> dict[str, Any]:
+    """Derive Phase-A lifecycle/publication/withdrawal policy results without mutation."""
+    with connection(settings) as conn:
+        opportunities = _care_policy_opportunities(conn)
         watch_rows = conn.execute(
             """WITH watch AS (
                  SELECT count(*) AS total,
@@ -6374,37 +6463,29 @@ def care_opportunity_lifecycle_preview(settings: Settings) -> dict[str, Any]:
                CROSS JOIN planning_lifecycle_watcher_state state
                WHERE state.singleton"""
         ).fetchone()
-
-    fields = (
-        "id",
-        "name",
-        "event_type",
-        "lifecycle_stage",
-        "confidence",
-        "review_status",
-        "publication_status",
-        "vertical",
-        "operator_name",
-        "address",
-        "postcode",
-        "town",
-        "merged_into_opportunity_id",
-        "change_type",
-        "stage_reason",
-        "creation_reason",
-        "customer_lifecycle_stage",
-        "publication_automation_blocked",
-        "publication_automation_reason",
-        "customer_title",
-        "customer_summary",
-        "customer_published_by",
-        "publication_automation_provenance",
-        "relationships",
-        "history_actions",
-        "audit_actions",
-        "pending_match_reviews",
-    )
-    opportunities = [dict(zip(fields, row)) for row in rows]
+        publication_state = conn.execute(
+            """SELECT execution_enabled, recurring_enabled, emergency_reason,
+                      max_publications_per_execution, policy_version,
+                      last_execution_at, last_selected, last_published,
+                      last_skipped, last_failed, updated_at,
+                      (SELECT count(*) FROM opportunities
+                       WHERE vertical = 'CHILDRENS_HOME'
+                         AND publication_status = 'PUBLISHED'
+                         AND publication_automation_provenance ? 'policy_version'),
+                      (SELECT count(*) FROM opportunities
+                       WHERE vertical = 'CHILDRENS_HOME'
+                         AND publication_status = 'PUBLISHED'
+                         AND NOT (publication_automation_provenance ? 'policy_version')),
+                      (SELECT COALESCE(jsonb_agg(jsonb_build_object(
+                         'run_id', r.id, 'opportunity_id', i.opportunity_id,
+                         'reason', i.reason, 'created_at', i.created_at
+                       ) ORDER BY i.created_at DESC), '[]'::jsonb)
+                       FROM (SELECT * FROM care_publication_run_items
+                             WHERE status = 'FAILED'
+                             ORDER BY created_at DESC LIMIT 5) i
+                       JOIN care_publication_runs r ON r.id = i.run_id)
+               FROM care_publication_automation_state WHERE singleton""",
+        ).fetchone()
     hygiene = audit_opportunities(opportunities)
     hygiene_by_id = {item["opportunity_id"]: item for item in hygiene["items"]}
     lifecycle_counts: Counter[str] = Counter()
@@ -6452,44 +6533,11 @@ def care_opportunity_lifecycle_preview(settings: Settings) -> dict[str, Any]:
         lifecycle_counts[decision.lifecycle.value] += 1
         stored_lifecycle_counts[str(opportunity.get("customer_lifecycle_stage") or "UNSET")] += 1
         item = hygiene_by_id[opportunity_id]
-        projection = {
-            **opportunity,
-            "derived_customer_lifecycle": decision.lifecycle.value,
-            "local_authority": next(
-                (
-                    (signal.get("metadata") or {}).get("local_authority")
-                    or (signal.get("metadata") or {}).get("council")
-                    for signal in opportunity["relationships"] or []
-                    if signal.get("status") == "ACTIVE"
-                    and (
-                        (signal.get("metadata") or {}).get("local_authority")
-                        or (signal.get("metadata") or {}).get("council")
-                    )
-                ),
-                None,
-            ),
-            "region": next(
-                (
-                    (signal.get("metadata") or {}).get("region")
-                    for signal in opportunity["relationships"] or []
-                    if (signal.get("metadata") or {}).get("region")
-                ),
-                None,
-            ),
-            "source_types": item.get("source_types") or [],
-        }
-        safe_title = generated_customer_title(projection)
-        safe_summary = generated_customer_summary(projection)
         stored_lifecycle = str(opportunity.get("customer_lifecycle_stage") or "NEEDS_REVIEW")
-        publication = evaluate_publication(
-            projection,
-            stored_lifecycle,
-            opportunity["relationships"] or [],
-            hygiene_category=item["category"],
-            hygiene_warning=item.get("warning"),
-            safe_title=safe_title,
-            safe_summary=safe_summary,
+        projection, safe_title, safe_summary, publication = _care_publication_projection(
+            opportunity, item
         )
+        projection["derived_customer_lifecycle"] = decision.lifecycle.value
         publication_counts[publication.outcome] += 1
         publication_exclusions.update(publication.exclusions)
         publication_by_lifecycle.setdefault(publication.outcome, Counter())[stored_lifecycle] += 1
@@ -6887,6 +6935,25 @@ def care_opportunity_lifecycle_preview(settings: Settings) -> dict[str, Any]:
                     for cohort, items in sorted(manual_review_samples.items())
                 },
             },
+            "automation": {
+                "status": "ENABLED" if publication_state[0] else "DISABLED",
+                "execution_enabled": bool(publication_state[0]),
+                "recurring_enabled": bool(publication_state[1]),
+                "emergency_reason": publication_state[2],
+                "max_publications_per_execution": int(publication_state[3]),
+                "policy_version": publication_state[4],
+                "last_execution_at": publication_state[5],
+                "last_batch": {
+                    "selected": int(publication_state[6]),
+                    "published": int(publication_state[7]),
+                    "skipped": int(publication_state[8]),
+                    "failed": int(publication_state[9]),
+                },
+                "updated_at": publication_state[10],
+                "automatically_published": int(publication_state[11]),
+                "manually_published": int(publication_state[12]),
+                "recent_failures": publication_state[13] or [],
+            },
             "publication_mutations": 0,
             "withdrawal_mutations": 0,
         },
@@ -6895,6 +6962,417 @@ def care_opportunity_lifecycle_preview(settings: Settings) -> dict[str, Any]:
         "hygiene_counts": hygiene["category_counts"],
         "examples": examples,
     }
+
+
+def _current_care_publication_inventory(settings: Settings) -> dict[str, Any]:
+    with connection(settings) as conn:
+        opportunities = _care_policy_opportunities(conn)
+        failure_rows = conn.execute(
+            """SELECT opportunity_id, count(*), max(created_at)
+               FROM care_publication_run_items WHERE status = 'FAILED'
+               GROUP BY opportunity_id"""
+        ).fetchall()
+    failure_state = {
+        str(row[0]): {"count": int(row[1]), "latest": row[2]} for row in failure_rows
+    }
+    hygiene = audit_opportunities(opportunities)
+    hygiene_by_id = {item["opportunity_id"]: item for item in hygiene["items"]}
+    decisions: list[dict[str, Any]] = []
+    outcomes: Counter[str] = Counter()
+    for opportunity in opportunities:
+        opportunity_id = str(opportunity["id"])
+        item = hygiene_by_id[opportunity_id]
+        projection, safe_title, safe_summary, decision = _care_publication_projection(
+            opportunity, item
+        )
+        outcomes[decision.outcome] += 1
+        decisions.append(
+            {
+                "opportunity": opportunity,
+                "projection": projection,
+                "hygiene": item,
+                "safe_title": safe_title,
+                "safe_summary": safe_summary,
+                "decision": decision,
+            }
+        )
+    eligible = [
+        item
+        for item in decisions
+        if item["decision"].outcome == "AUTO_PUBLISH_ELIGIBLE"
+        and item["opportunity"].get("publication_status") == "DRAFT"
+    ]
+    now = datetime.now(UTC)
+    selectable = []
+    deferred_failures = []
+    for item in eligible:
+        failure = failure_state.get(str(item["opportunity"]["id"]))
+        if failure and (
+            failure["count"] >= 3
+            or (failure["latest"] and failure["latest"] >= now - timedelta(hours=24))
+        ):
+            deferred_failures.append(item)
+        else:
+            selectable.append(item)
+    return {
+        "opportunities": opportunities,
+        "decisions": decisions,
+        "outcomes": dict(sorted(outcomes.items())),
+        "eligible": eligible,
+        "selectable": selectable,
+        "deferred_failures": deferred_failures,
+    }
+
+
+def care_publication_automation_preview(
+    settings: Settings, *, limit: int = 25
+) -> dict[str, Any]:
+    requested_limit = min(max(int(limit), 1), 100)
+    inventory = _current_care_publication_inventory(settings)
+    eligible = inventory["eligible"]
+    selected = inventory["selectable"][:requested_limit]
+    return {
+        "preview": True,
+        "policy_version": CARE_PUBLICATION_POLICY_VERSION,
+        "total_evaluated": len(inventory["opportunities"]),
+        "outcomes": inventory["outcomes"],
+        "eligible_unpublished": len(eligible),
+        "selected": len(selected),
+        "selected_opportunity_ids": [str(item["opportunity"]["id"]) for item in selected],
+        "excluded_non_eligible": len(inventory["opportunities"]) - len(eligible),
+        "deferred_failures": len(inventory["deferred_failures"]),
+        "publication_mutations": 0,
+        "withdrawal_mutations": 0,
+    }
+
+
+def set_care_publication_automation_execution(
+    settings: Settings,
+    *,
+    enabled: bool,
+    recurring_enabled: bool,
+    actor: str,
+    reason: str | None,
+) -> dict[str, Any]:
+    if recurring_enabled and not enabled:
+        raise ValueError("recurring publication requires execution to be enabled")
+    with connection(settings) as conn:
+        row = conn.execute(
+            """UPDATE care_publication_automation_state
+               SET execution_enabled = %s, recurring_enabled = %s,
+                   emergency_reason = %s, updated_by = %s, updated_at = now()
+               WHERE singleton
+               RETURNING execution_enabled, recurring_enabled, emergency_reason,
+                         max_publications_per_execution, policy_version, updated_at""",
+            (enabled, recurring_enabled, reason, actor),
+        ).fetchone()
+        conn.execute(
+            """INSERT INTO admin_audit_events
+                 (actor, action, target_type, details, vertical)
+               VALUES (%s, %s, 'publication_automation', %s, 'CHILDRENS_HOME')""",
+            (
+                actor,
+                "care_publication_automation_enabled"
+                if enabled
+                else "care_publication_automation_disabled",
+                Jsonb(
+                    {
+                        "enabled": enabled,
+                        "recurring_enabled": recurring_enabled,
+                        "reason": reason,
+                        "policy_version": CARE_PUBLICATION_POLICY_VERSION,
+                    }
+                ),
+            ),
+        )
+        conn.commit()
+    return {
+        "execution_enabled": bool(row[0]),
+        "recurring_enabled": bool(row[1]),
+        "emergency_reason": row[2],
+        "max_publications_per_execution": int(row[3]),
+        "policy_version": row[4],
+        "updated_at": row[5],
+        "publication_changes": 0,
+        "withdrawal_changes": 0,
+    }
+
+
+def _record_care_publication_run_item(
+    settings: Settings,
+    *,
+    run_id: str,
+    opportunity_id: str,
+    status: str,
+    policy_outcome: str | None,
+    reason: str,
+    lifecycle: str | None,
+    details: dict[str, Any] | None = None,
+) -> None:
+    with connection(settings) as conn:
+        conn.execute(
+            """INSERT INTO care_publication_run_items
+                 (run_id, opportunity_id, status, policy_outcome, reason,
+                  lifecycle, details)
+               VALUES (%s, %s, %s, %s, %s, %s, %s)
+               ON CONFLICT (run_id, opportunity_id) DO NOTHING""",
+            (
+                run_id,
+                opportunity_id,
+                status,
+                policy_outcome,
+                reason,
+                lifecycle,
+                Jsonb(details or {}),
+            ),
+        )
+        conn.commit()
+
+
+def execute_care_publication_batch(
+    settings: Settings,
+    *,
+    actor: str,
+    limit: int = 25,
+    trigger_source: str = "ADMIN",
+    require_recurring: bool = False,
+) -> dict[str, Any]:
+    requested_limit = min(max(int(limit), 1), 100)
+    with connection(settings) as conn:
+        state = conn.execute(
+            """SELECT execution_enabled, recurring_enabled,
+                      max_publications_per_execution, policy_version, emergency_reason
+               FROM care_publication_automation_state WHERE singleton FOR UPDATE"""
+        ).fetchone()
+        if not state or not state[0] or (require_recurring and not state[1]):
+            conn.rollback()
+            return {
+                "execution_enabled": bool(state and state[0]),
+                "recurring_enabled": bool(state and state[1]),
+                "selected": 0,
+                "published": 0,
+                "skipped": 0,
+                "failed": 0,
+                "reason": state[4] if state else "publication_state_missing",
+                "publication_changes": 0,
+                "withdrawal_changes": 0,
+            }
+        batch_limit = min(requested_limit, int(state[2]))
+        run_id = str(
+            conn.execute(
+                """INSERT INTO care_publication_runs
+                     (policy_version, actor, trigger_source, status, requested_limit)
+                   VALUES (%s, %s, %s, 'RUNNING', %s) RETURNING id""",
+                (CARE_PUBLICATION_POLICY_VERSION, actor, trigger_source, batch_limit),
+            ).fetchone()[0]
+        )
+        conn.commit()
+
+    inventory = _current_care_publication_inventory(settings)
+    selected = inventory["selectable"][:batch_limit]
+    result = {
+        "run_id": run_id,
+        "policy_version": CARE_PUBLICATION_POLICY_VERSION,
+        "execution_enabled": True,
+        "recurring_enabled": bool(state[1]),
+        "selected": len(selected),
+        "published": 0,
+        "skipped": 0,
+        "failed": 0,
+        "audit_rows_created": 0,
+        "unexpected_policy_transitions": 0,
+        "published_opportunity_ids": [],
+        "failures": [],
+        "eligible_unpublished_before": len(inventory["eligible"]),
+        "publication_changes": 0,
+        "withdrawal_changes": 0,
+    }
+    for candidate in selected:
+        opportunity_id = str(candidate["opportunity"]["id"])
+        lifecycle = str(candidate["opportunity"].get("customer_lifecycle_stage") or "")
+        try:
+            with connection(settings) as conn:
+                current_rows = _care_policy_opportunities(conn, opportunity_id=opportunity_id)
+                if not current_rows:
+                    raise ValueError("opportunity_not_found")
+                current = current_rows[0]
+                hygiene_item = audit_opportunities([current])["items"][0]
+                projection, safe_title, safe_summary, decision = _care_publication_projection(
+                    current, hygiene_item
+                )
+                lifecycle = str(current.get("customer_lifecycle_stage") or "")
+                if decision.outcome != "AUTO_PUBLISH_ELIGIBLE":
+                    result["skipped"] += 1
+                    result["unexpected_policy_transitions"] += 1
+                    conn.rollback()
+                    _record_care_publication_run_item(
+                        settings,
+                        run_id=run_id,
+                        opportunity_id=opportunity_id,
+                        status="SKIPPED",
+                        policy_outcome=decision.outcome,
+                        reason=decision.reason,
+                        lifecycle=lifecycle,
+                        details={"exclusions": list(decision.exclusions)},
+                    )
+                    continue
+                evidence = [
+                    {
+                        "signal_id": str(signal.get("id")),
+                        "source_type": signal.get("source_type"),
+                        "planning_subtype": (signal.get("extracted_facts") or {}).get(
+                            "planning_subtype"
+                        ),
+                        "opportunity_creation_decision": (
+                            signal.get("extracted_facts") or {}
+                        ).get("opportunity_creation_decision"),
+                    }
+                    for signal in current.get("relationships") or []
+                    if signal.get("status") == "ACTIVE"
+                ]
+                provenance = {
+                    "policy_version": CARE_PUBLICATION_POLICY_VERSION,
+                    "holdout_version": CARE_PUBLICATION_HOLDOUT_VERSION,
+                    "policy_outcome": decision.outcome,
+                    "policy_reason": decision.reason,
+                    "lifecycle": lifecycle,
+                    "automation_actor": actor,
+                    "trigger_source": trigger_source,
+                    "run_id": run_id,
+                    "evidence": evidence,
+                }
+                updated = conn.execute(
+                    """UPDATE opportunities
+                       SET publication_status = 'PUBLISHED',
+                           customer_title = COALESCE(customer_title, %s),
+                           customer_summary = COALESCE(customer_summary, %s),
+                           customer_published_by = %s,
+                           customer_published_at = now(),
+                           publication_automation_provenance = %s,
+                           updated_at = now()
+                       WHERE id = %s AND vertical = 'CHILDRENS_HOME'
+                         AND publication_status = 'DRAFT'
+                         AND NOT publication_automation_blocked
+                         AND review_status NOT IN ('MERGED', 'REJECTED')
+                         AND merged_into_opportunity_id IS NULL
+                       RETURNING id, publication_status, customer_title,
+                                 customer_summary, customer_published_at""",
+                    (
+                        safe_title,
+                        safe_summary,
+                        "SYSTEM_PUBLICATION_COORDINATOR",
+                        Jsonb(provenance),
+                        opportunity_id,
+                    ),
+                ).fetchone()
+                if not updated:
+                    conn.rollback()
+                    result["skipped"] += 1
+                    _record_care_publication_run_item(
+                        settings,
+                        run_id=run_id,
+                        opportunity_id=opportunity_id,
+                        status="SKIPPED",
+                        policy_outcome="STATE_CHANGED",
+                        reason="conditional_publication_guard_failed",
+                        lifecycle=lifecycle,
+                    )
+                    continue
+                if not updated[2] or not updated[3] or updated[1] != "PUBLISHED":
+                    raise ValueError("post_publication_validation_failed")
+                conn.execute(
+                    """INSERT INTO care_publication_run_items
+                         (run_id, opportunity_id, status, policy_outcome,
+                          reason, lifecycle, details)
+                       VALUES (%s, %s, 'PUBLISHED', %s, %s, %s, %s)""",
+                    (
+                        run_id,
+                        opportunity_id,
+                        decision.outcome,
+                        decision.reason,
+                        lifecycle,
+                        Jsonb({"provenance": provenance, "validated": True}),
+                    ),
+                )
+                conn.execute(
+                    """INSERT INTO admin_audit_events
+                         (actor, action, target_type, details, vertical)
+                       VALUES (%s, 'care_opportunity_auto_published',
+                               'opportunity', %s, 'CHILDRENS_HOME')""",
+                    (
+                        actor,
+                        Jsonb(
+                            {
+                                "opportunity_id": opportunity_id,
+                                "previous_publication_status": "DRAFT",
+                                "publication_status": "PUBLISHED",
+                                **provenance,
+                            }
+                        ),
+                    ),
+                )
+                conn.commit()
+            result["published"] += 1
+            result["audit_rows_created"] += 1
+            result["publication_changes"] += 1
+            result["published_opportunity_ids"].append(opportunity_id)
+        except Exception as error:
+            result["failed"] += 1
+            result["failures"].append(
+                {"opportunity_id": opportunity_id, "error": type(error).__name__}
+            )
+            _record_care_publication_run_item(
+                settings,
+                run_id=run_id,
+                opportunity_id=opportunity_id,
+                status="FAILED",
+                policy_outcome=None,
+                reason=type(error).__name__,
+                lifecycle=lifecycle,
+            )
+
+    run_status = "COMPLETED" if result["failed"] == 0 else "PARTIAL"
+    with connection(settings) as conn:
+        conn.execute(
+            """UPDATE care_publication_runs
+               SET status = %s, selected_count = %s, published_count = %s,
+                   skipped_count = %s, failed_count = %s, details = %s,
+                   completed_at = now() WHERE id = %s""",
+            (
+                run_status,
+                result["selected"],
+                result["published"],
+                result["skipped"],
+                result["failed"],
+                Jsonb(
+                    {
+                        "unexpected_policy_transitions": result[
+                            "unexpected_policy_transitions"
+                        ],
+                        "withdrawal_changes": 0,
+                    }
+                ),
+                run_id,
+            ),
+        )
+        conn.execute(
+            """UPDATE care_publication_automation_state
+               SET last_execution_at = now(), last_selected = %s,
+                   last_published = %s, last_skipped = %s, last_failed = %s,
+                   updated_by = %s, updated_at = now() WHERE singleton""",
+            (
+                result["selected"],
+                result["published"],
+                result["skipped"],
+                result["failed"],
+                actor,
+            ),
+        )
+        conn.commit()
+    result["eligible_unpublished_after"] = max(
+        result["eligible_unpublished_before"] - result["published"], 0
+    )
+    return result
 
 
 def _care_planning_watch_candidates(conn: Any) -> list[dict[str, Any]]:
