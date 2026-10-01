@@ -24,12 +24,25 @@ The MVP succeeds by being trustworthy and actionable, not by maximizing raw sign
 - `MCP_USAGE.md` documents connection, tools and the explicit read-only boundary.
 
 Current gate:
-- code/tests and Terraform validation are complete;
-- initial OIDC apply stopped before MCP exposure because the new role was absent from the explicit
-  IAM role-tag allowlist and the in-flight session could not use its newly added secret permission;
-- a fresh OIDC rollout with the corrected least-privilege allowlist is the exact next step, followed
-  by agent-style smoke tests and final API/database/queue health;
-- mutation tools remain explicitly deferred until read-only use demonstrates narrow safe needs.
+- MCP v1 is deployed at the production `/mcp` endpoint with public OAuth discovery and authenticated
+  tool/capability access. Unauthenticated MCP requests return 401; service smoke uses a short-lived,
+  scoped client-credentials token, while ChatGPT uses administrator authorization-code + PKCE.
+- Production smoke run `36895648892` exercised initialization, discovery and all ten tools, including
+  known signal/opportunity detail, manual-publication reasoning, QA, unmatched-strong, source,
+  automation and 24-hour recent-change workflows. It returned 348 Needs Attention records, 68 QA
+  holdouts, 11 unmatched strong signals and a bounded 20-change page. Representative mean latency was
+  3.061 seconds across 15 calls (7.889 seconds maximum for the heaviest policy-backed QA projection).
+- Runtime health from the same read-only smoke: watcher v2 ENABLED with 259 watches, six requests this
+  month and two historical failed polls; publication v3 ENABLED with 87 published (35 automatic) and
+  no latest-run failures; withdrawal v1 ENABLED with zero automatic withdrawals and no latest-run
+  failures. The smoke itself made zero provider calls and zero business-state mutations.
+- Commit `2f4801b` passed CI run `36895135690` and deployed successfully in run `36895258548`; 586
+  backend tests, 95 frontend tests, Ruff, frontend build and Terraform fmt/validate/plan/apply pass.
+  Production smoke also caught and verified the repair for recent-change policy provenance, which now
+  reads policy versions from parent automation runs rather than item rows.
+- Exact next step: connect the production URL as a ChatGPT custom MCP app using the documented OAuth
+  setup, then operate it read-only long enough to identify genuinely repetitive, narrowly scoped
+  administration. Mutation tools remain explicitly deferred.
 
 ## Phase 1 — Foundation — COMPLETE
 
