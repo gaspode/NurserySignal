@@ -1533,6 +1533,17 @@ Paid-pilot activation check (2026-09-28):
   manual. Manual publications and explicit automation blocks are always protected. The bounded admin-only preview
   exposes lifecycle, publication-provenance and reason breakdowns plus privacy-safe samples and affected opportunity
   links; the Operations summary/UI now carries the same authoritative projection. D1 has no mutation endpoint or
-  controls and makes zero publication, withdrawal, watcher or publication-policy changes. Production cohort and
-  deployment evidence will be recorded after live preview validation; Phase D2 remains blocked pending explicit
-  review of any automatic-withdrawal candidates.
+  controls and makes zero publication, withdrawal, watcher or publication-policy changes. Production preview
+  evaluated all 87 currently published opportunities: 35 automatic publications are KEEP_PUBLISHED and all 52
+  human publications are MANUAL_PROTECTION; AUTO_WITHDRAW_ELIGIBLE and MANUAL_REVIEW are both zero. By persisted
+  lifecycle, the protected cohort is 43 PLANNING_PENDING, two PLANNING_APPROVED and seven NEEDS_REVIEW, while the
+  automatic keep cohort is 11 PLANNING_PENDING and 24 PLANNING_APPROVED. No published opportunity is STOPPED,
+  merged or superseded, so there are no terminal automatic candidates and no protected terminal warnings. The
+  production endpoint and Operations summary both report zero publication-state mutations. Planning watcher and
+  publication schedules remain ENABLED at their unchanged six-hour cadence: watcher v2 still has 259 watches and
+  zero polls/errors, while publication v3 remains at 87 total (35 automatic / 52 manual), with its latest bounded
+  run 25/25 and no failures. Runtime commit `7d8a2b4` passed CI runs `36872477108`/`36872476668` and deployed in
+  run `36872649585`; 562 backend and 95 frontend tests, Ruff, frontend build and Terraform fmt/validate/plan/apply
+  pass. API/database/frontend health is green, active ingestion/enrichment queues and their DLQs are empty, and the
+  six known collector-DLQ baseline messages remain unchanged. Phase D2 remains disabled and requires a separate
+  explicit decision after continued watcher observation produces a real terminal case.
