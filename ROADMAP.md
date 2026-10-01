@@ -1456,3 +1456,32 @@ Paid-pilot activation check (2026-09-28):
   active queues and non-collector DLQs are empty, and the six pre-existing collector DLQ messages remain untouched.
   Phase C2 remains disabled and requires explicit approval after review of the 33 protected-policy conflicts and
   representative pending/manual cohorts.
+- CareProspect Phase C1.1 introduces preview-only `care-publication-v3` after analysing the complete 33-record
+  published-conflict snapshot and deterministic samples of the v2 manual cohort. Of the original 33 conflicts, 16
+  were a narrow policy defect: reviewed, active, strong OPENING/create-opportunity Planning evidence with a positive
+  pending/approved canonical outcome, but no stored subtype because the signal predates taxonomy v2. Seven remain
+  genuinely ambiguous NEEDS_REVIEW cases and ten remain valid historical/manual exceptions (nine with insufficient
+  current evidence and one with manual-history ambiguity). V3 admits only the pre-taxonomy opening shape using
+  stored deterministic facts; it does not parse titles, admit EXPANSION records, relax NEEDS_REVIEW or appeal
+  handling, or change duplicate/superseded, privacy, identity, content, manual-block or negative-state safeguards.
+  The two approved and two pending expansion records sampled in production remain manual because their stored
+  opportunity semantics include stale/mixed cases. The v2 evaluator remains reproducible, policy history is retained,
+  and the existing `care-opportunity-publication-v1` UUID holdout algorithm is unchanged.
+  Production v3 preview evaluated all 1,145 opportunities: 548 AUTO_PUBLISH_ELIGIBLE, 68 QA_HOLDOUT, 249
+  MANUAL_REVIEW, 228 INELIGIBLE and 52 MANUAL_PROTECTION. Relative to the recomputed v2 snapshot (408/48/409/228/52),
+  160 records move only from MANUAL_REVIEW into the eligible cohort (140 automatic candidates and 20 stable QA
+  holdouts); no record moves out of eligibility. The 616-record otherwise-eligible v3 cohort has an 11.0% holdout
+  rate, with all existing v2 holdout assignments preserved. Eligible non-holdouts comprise 367 PLANNING_APPROVED and
+  181 PLANNING_PENDING; holdouts comprise 45 approved and 23 pending. Remaining manual review comprises 148
+  NEEDS_REVIEW, 97 PLANNING_PENDING, two PLANNING_APPROVED expansion cases and two APPEAL_PENDING.
+  Manual publication continued independently during delivery, so the current live inventory is 52 protected
+  publications and 47 v2 conflicts rather than the requested 38/33 snapshot; all original 33 are still present and
+  untouched. The current 47 comprise 28 pre-taxonomy policy defects, ten insufficient-current-evidence exceptions,
+  seven lifecycle ambiguities, one expansion exception and one manual-history exception. Publication and withdrawal
+  mutations remain zero and both automations remain disabled. The Phase B3 watcher remains ENABLED with the unchanged
+  259-watch `care-planning-watcher-v2` cohort/cadence, zero provider requests, zero watcher failures and no lifecycle
+  changes at verification time. Commit `2d01af9` passed CI run `36852587530` and deployed successfully in run
+  `36852753859`; 546 backend and 94 frontend tests, Ruff, frontend build and Terraform fmt/validate/plan/apply pass.
+  API/database health is green, non-collector DLQs are empty, and the six pre-existing collector DLQ messages remain
+  untouched. Phase C2 remains disabled; the next gate is explicit review/approval of this v3 cohort, not further
+  scope expansion.
