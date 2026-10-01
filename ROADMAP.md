@@ -28,11 +28,12 @@ Current gate:
   an application-owned 401 Bearer challenge and an OAuth 2.1 authorization-code/PKCE facade. The
   canonical resource is the exact `/mcp` URL and RFC 8707 resource binding is preserved through
   Cognito into the access-token audience.
-- ChatGPT is identified by its official CIMD client ID (`https://chatgpt.com/oauth/client.json`) and
-  stable redirect (`https://chatgpt.com/connector_platform_oauth_redirect`). RFC 9207 issuer response
-  identification is implemented on both success and error redirects; no connection-specific callback
-  is required. The exact public ChatGPT registration is pinned because the data-plane Lambda has no
-  public egress.
+- ChatGPT is identified using either its official stable CIMD client ID
+  (`https://chatgpt.com/oauth/client.json`) or its documented connection-specific
+  `https://chatgpt.com/oauth/{callback_id}/client.json` identity. The stable registration is pinned;
+  the isolated Internet-facing OAuth facade resolves callback-specific metadata only from a strict
+  `chatgpt.com` URL allowlist and requires its matching redirect. RFC 9207 issuer response
+  identification is implemented on both success and error redirects.
 - OAuth authorization/token exchange is isolated in a non-VPC Lambda with a single-use, ten-minute
   DynamoDB transaction store. The read-only MCP data Lambda remains private in the VPC and validates
   Cognito JWT signatures against deployment-pinned public JWKS, including issuer, audience, scope,
@@ -53,6 +54,10 @@ Current gate:
 - Exact next step: remove the failed ChatGPT custom-app connection, add the production Streamable HTTP
   URL again, complete the Cognito administrator login and verify the first real ChatGPT tool call.
   Continue read-only operation before designing any mutation tools.
+- A real ChatGPT connection exposed that new connections can select callback-specific CIMD even when
+  the server supports the stable RFC 9207 callback. The OAuth facade now admits both documented modes
+  without accepting arbitrary clients or redirects; this fixes the `invalid_client` response while
+  preserving PKCE, scope and resource binding.
 
 ## Phase 1 — Foundation — COMPLETE
 

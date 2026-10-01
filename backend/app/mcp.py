@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import re
 import secrets
 import time
 import urllib.error
@@ -43,6 +44,7 @@ DEFAULT_LIMIT = 20
 MAX_LIMIT = 100
 CHATGPT_CIMD_URL = "https://chatgpt.com/oauth/client.json"
 CHATGPT_REDIRECT_URI = "https://chatgpt.com/connector_platform_oauth_redirect"
+CHATGPT_CALLBACK_CIMD_PATH = re.compile(r"^/oauth/([A-Za-z0-9_-]{1,200})/client\.json$")
 CHATGPT_CIMD = {
     "client_id": CHATGPT_CIMD_URL,
     "client_name": "ChatGPT",
@@ -1023,12 +1025,67 @@ def _redirect(location: str) -> dict[str, Any]:
     }
 
 
-def _fetch_chatgpt_cimd() -> dict[str, Any]:
-    # The MCP Lambda deliberately has no public Internet egress. ChatGPT's
-    # official CIMD registration is therefore pinned at deployment rather than
-    # fetched during an authorization request. Only this exact client ID and
-    # redirect URI are accepted below; CI verifies the contract independently.
-    return dict(CHATGPT_CIMD)
+def _fetch_chatgpt_cimd(client_id: str = CHATGPT_CIMD_URL) -> dict[str, Any]:
+    """Resolve one of ChatGPT's documented CIMD client identifiers.
+
+    The stable client is pinned so the private MCP data plane never needs
+    Internet egress. Callback-specific clients are resolved only by the
+    Internet-facing OAuth facade, with a strict chatgpt.com URL allowlist to
+    prevent this metadata lookup becoming an SSRF primitive.
+    """
+    parsed = urllib.parse.urlparse(client_id)
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname != "chatgpt.com"
+        or parsed.port is not None
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise MCPError("invalid_argument", "Unsupported OAuth client")
+    if client_id == CHATGPT_CIMD_URL:
+        return dict(CHATGPT_CIMD)
+    match = CHATGPT_CALLBACK_CIMD_PATH.fullmatch(parsed.path)
+    if not match:
+        raise MCPError("invalid_argument", "Unsupported OAuth client")
+
+    request = urllib.request.Request(
+        client_id,
+        headers={"Accept": "application/json", "User-Agent": "SignalHub-MCP-OAuth/1"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            content_type = response.headers.get_content_type()
+            payload = response.read(65_537)
+    except (OSError, urllib.error.URLError) as exc:
+        raise MCPError("unavailable", "OAuth client metadata unavailable", rpc_code=-32003) from exc
+    if content_type != "application/json" or len(payload) > 65_536:
+        raise MCPError("invalid_argument", "Invalid OAuth client metadata")
+    try:
+        metadata = json.loads(payload)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise MCPError("invalid_argument", "Invalid OAuth client metadata") from exc
+    callback_id = match.group(1)
+    expected_redirect = f"https://chatgpt.com/connector/oauth/{callback_id}"
+    if (
+        metadata.get("client_id") != client_id
+        or expected_redirect not in metadata.get("redirect_uris", [])
+        or "authorization_code" not in metadata.get("grant_types", [])
+        or "code" not in metadata.get("response_types", [])
+        or "none" not in metadata.get("token_endpoint_auth_methods_supported", [])
+    ):
+        raise MCPError("invalid_argument", "OAuth client metadata rejected")
+    return metadata
+
+
+def _validate_chatgpt_client(
+    client_id: str, redirect_uri: str | None = None
+) -> dict[str, Any]:
+    metadata = _fetch_chatgpt_cimd(client_id)
+    if redirect_uri is not None and redirect_uri not in metadata.get("redirect_uris", []):
+        raise MCPError("invalid_argument", "Redirect URI rejected")
+    return metadata
 
 
 def _store_oauth_transaction(
@@ -1127,11 +1184,12 @@ def _oauth_authorize(event: dict[str, Any], settings: Settings) -> dict[str, Any
     }
     if required - args.keys():
         return _response(400, {"error": "invalid_request", "message": "Missing OAuth parameter"})
-    if args["client_id"] != CHATGPT_CIMD_URL:
-        return _response(400, {"error": "invalid_client", "message": "Unsupported OAuth client"})
-    _fetch_chatgpt_cimd()
-    if args["redirect_uri"] != CHATGPT_REDIRECT_URI:
-        return _response(400, {"error": "invalid_redirect_uri", "message": "Redirect URI rejected"})
+    try:
+        _validate_chatgpt_client(args["client_id"], args["redirect_uri"])
+    except MCPError as exc:
+        status = 503 if exc.code == "unavailable" else 400
+        error = "temporarily_unavailable" if status == 503 else "invalid_client"
+        return _response(status, {"error": error, "message": exc.message})
     if args["response_type"] != "code" or args["code_challenge_method"] != "S256":
         return _oauth_error_redirect(
             settings,
@@ -1217,17 +1275,21 @@ def _oauth_token(event: dict[str, Any], settings: Settings) -> dict[str, Any]:
     grant_type = args.get("grant_type")
     if grant_type not in {"authorization_code", "refresh_token"}:
         return _response(400, {"error": "unsupported_grant_type"})
-    if args.get("client_id") != CHATGPT_CIMD_URL:
-        return _response(401, {"error": "invalid_client"})
-    _fetch_chatgpt_cimd()
+    try:
+        redirect_uri = (
+            str(args.get("redirect_uri") or "")
+            if grant_type == "authorization_code"
+            else None
+        )
+        _validate_chatgpt_client(str(args.get("client_id") or ""), redirect_uri)
+    except MCPError as exc:
+        status = 503 if exc.code == "unavailable" else 401
+        error = "temporarily_unavailable" if status == 503 else "invalid_client"
+        return _response(status, {"error": error})
     if args.get("resource") != settings.mcp_resource_url:
         return _response(400, {"error": "invalid_target"})
     if grant_type == "authorization_code":
-        if (
-            args.get("redirect_uri") != CHATGPT_REDIRECT_URI
-            or not args.get("code")
-            or not args.get("code_verifier")
-        ):
+        if not args.get("code") or not args.get("code_verifier"):
             return _response(400, {"error": "invalid_request"})
     if not settings.mcp_user_client_id or not settings.mcp_oauth_callback_url:
         raise MCPError("unavailable", "OAuth facade is not configured", rpc_code=-32003)

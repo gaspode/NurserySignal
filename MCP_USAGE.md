@@ -11,18 +11,21 @@ It is intended for investigation and prioritisation; it cannot perform administr
 - Transport: MCP Streamable HTTP (JSON-RPC 2.0)
 - Production URL: use the Terraform `mcp_url` output (`.../mcp`)
 - Authentication: OAuth 2.1 bearer token with scope `signalhub-mcp/read`
-- Human/ChatGPT flow: ChatGPT CIMD (`https://chatgpt.com/oauth/client.json`) through the
-  SignalHub OAuth facade, then Cognito authorization code with PKCE; only members of the existing
-  `NurserySignalAdmins` group are accepted
+- Human/ChatGPT flow: ChatGPT CIMD through the SignalHub OAuth facade, then Cognito authorization
+  code with PKCE. Both the stable `https://chatgpt.com/oauth/client.json` identity and ChatGPT's
+  documented connection-specific `https://chatgpt.com/oauth/{callback_id}/client.json` form are
+  supported; only members of the existing `NurserySignalAdmins` group are accepted
 - Service-agent flow: Cognito client credentials held in the Secrets Manager secret from the
   `mcp_readonly_secret_arn` output
 - Protected-resource discovery:
   `/.well-known/oauth-protected-resource/mcp`
 - OAuth authorization-server discovery: `/.well-known/oauth-authorization-server`
 - Client identification: CIMD with public-client token authentication method `none`
-- Redirect URI: `https://chatgpt.com/connector_platform_oauth_redirect`
-- The facade validates ChatGPT's live CIMD document, adds RFC 9207 `iss` to successful and error
-  callbacks, and forwards the exact MCP `resource` through Cognito's RFC 8707 binding.
+- Redirect URI: the redirect declared by the verified ChatGPT CIMD document (stable platform redirect
+  or the corresponding connection-specific callback)
+- The facade pins the official stable ChatGPT registration and securely resolves connection-specific
+  CIMD only from an allowlisted `chatgpt.com` URL. It adds RFC 9207 `iss` to successful and error
+  callbacks and forwards the exact MCP `resource` through Cognito's RFC 8707 binding.
 
 The authenticated capability document is at `/mcp/capabilities`. Never put OAuth client secrets,
 access tokens or refresh tokens in source control, chat messages, screenshots or client-side code.
@@ -40,10 +43,10 @@ PKCE: S256
 ```
 
 In ChatGPT, enable developer mode, create a custom app, choose Streamable HTTP, and provide only the
-production MCP URL. ChatGPT discovers the OAuth endpoints and stable CIMD client automatically,
-then redirects to Cognito login. No client secret, pasted bearer token, predefined client ID or
-connection-specific callback is required. The OAuth `resource` value is bound to the MCP URL and
-must be present as the access-token audience.
+production MCP URL. ChatGPT discovers the OAuth endpoints and supplies either its stable or
+connection-specific CIMD identity automatically, then redirects to Cognito login. No client secret,
+pasted bearer token or predefined client ID is required. The OAuth `resource` value is bound to the
+MCP URL and must be present as the access-token audience.
 
 The service client exists for controlled non-interactive agents and production smoke tests. Obtain
 its short-lived access token through the authorised operational process; do not copy its persistent

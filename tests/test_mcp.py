@@ -179,6 +179,61 @@ def test_chatgpt_cimd_registration_is_pinned_without_runtime_network(monkeypatch
     assert "none" in metadata["token_endpoint_auth_methods_supported"]
 
 
+def test_callback_specific_chatgpt_cimd_is_verified(monkeypatch):
+    callback_id = "connection_abc-123"
+    client_id = f"https://chatgpt.com/oauth/{callback_id}/client.json"
+    redirect_uri = f"https://chatgpt.com/connector/oauth/{callback_id}"
+
+    class Headers:
+        @staticmethod
+        def get_content_type():
+            return "application/json"
+
+    class Response:
+        headers = Headers()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        @staticmethod
+        def read(limit):
+            assert limit == 65_537
+            return json.dumps(
+                {
+                    "client_id": client_id,
+                    "redirect_uris": [redirect_uri],
+                    "grant_types": ["authorization_code"],
+                    "response_types": ["code"],
+                    "token_endpoint_auth_methods_supported": ["none", "private_key_jwt"],
+                }
+            ).encode()
+
+    def urlopen(request, timeout):
+        assert request.full_url == client_id
+        assert timeout == 5
+        return Response()
+
+    monkeypatch.setattr(mcp.urllib.request, "urlopen", urlopen)
+    metadata = mcp._validate_chatgpt_client(client_id, redirect_uri)
+    assert metadata["client_id"] == client_id
+
+
+def test_callback_specific_cimd_rejects_untrusted_client_without_fetch(monkeypatch):
+    monkeypatch.setattr(
+        mcp.urllib.request,
+        "urlopen",
+        lambda *args, **kwargs: pytest.fail("untrusted client must not be fetched"),
+    )
+    with pytest.raises(mcp.MCPError, match="Unsupported OAuth client"):
+        mcp._validate_chatgpt_client(
+            "https://attacker.example/oauth/connection/client.json",
+            "https://chatgpt.com/connector/oauth/connection",
+        )
+
+
 def test_oauth_transaction_uses_single_use_ttl_store_without_database(monkeypatch):
     items = {}
 
@@ -214,7 +269,14 @@ def test_cimd_authorization_preserves_pkce_scope_and_resource(monkeypatch):
     monkeypatch.setattr(
         mcp, "_store_oauth_transaction", lambda settings, **kwargs: stored.update(kwargs)
     )
-    monkeypatch.setattr(mcp, "_fetch_chatgpt_cimd", lambda: {"client_id": mcp.CHATGPT_CIMD_URL})
+    monkeypatch.setattr(
+        mcp,
+        "_fetch_chatgpt_cimd",
+        lambda client_id: {
+            "client_id": client_id,
+            "redirect_uris": [mcp.CHATGPT_REDIRECT_URI],
+        },
+    )
     request = event(method="GET", path="/oauth/authorize", authorized=False)
     request["queryStringParameters"] = {
         "response_type": "code",
@@ -236,6 +298,39 @@ def test_cimd_authorization_preserves_pkce_scope_and_resource(monkeypatch):
     assert query["resource"] == ["https://api.example/mcp"]
     assert query["code_challenge_method"] == ["S256"]
     assert stored["original_state"] == "chatgpt-state"
+
+
+def test_callback_specific_cimd_authorization_is_accepted(monkeypatch):
+    callback_id = "connection_abc-123"
+    client_id = f"https://chatgpt.com/oauth/{callback_id}/client.json"
+    redirect_uri = f"https://chatgpt.com/connector/oauth/{callback_id}"
+    stored = {}
+    monkeypatch.setattr(
+        mcp, "_store_oauth_transaction", lambda settings, **kwargs: stored.update(kwargs)
+    )
+    monkeypatch.setattr(
+        mcp,
+        "_fetch_chatgpt_cimd",
+        lambda requested_client: {
+            "client_id": requested_client,
+            "redirect_uris": [redirect_uri],
+        },
+    )
+    request = event(method="GET", path="/oauth/authorize", authorized=False)
+    request["queryStringParameters"] = {
+        "response_type": "code",
+        "client_id": client_id,
+        "redirect_uri": redirect_uri,
+        "scope": mcp.READ_SCOPE,
+        "state": "chatgpt-state",
+        "code_challenge": "challenge",
+        "code_challenge_method": "S256",
+        "resource": "https://api.example/mcp",
+    }
+    response = mcp.handler(request, None)
+    assert response["statusCode"] == 302
+    assert stored["client_id"] == client_id
+    assert stored["redirect_uri"] == redirect_uri
 
 
 def test_oauth_callback_returns_stable_redirect_and_rfc9207_issuer(monkeypatch):
@@ -263,7 +358,11 @@ def test_oauth_callback_returns_stable_redirect_and_rfc9207_issuer(monkeypatch):
 
 
 def test_oauth_authorization_rejects_wrong_resource_without_provider_call(monkeypatch):
-    monkeypatch.setattr(mcp, "_fetch_chatgpt_cimd", lambda: {})
+    monkeypatch.setattr(
+        mcp,
+        "_fetch_chatgpt_cimd",
+        lambda client_id: {"redirect_uris": [mcp.CHATGPT_REDIRECT_URI]},
+    )
     request = event(method="GET", path="/oauth/authorize", authorized=False)
     request["queryStringParameters"] = {
         "response_type": "code",
@@ -300,7 +399,11 @@ def test_oauth_token_proxy_preserves_resource_and_validates_admin_token(monkeypa
         captured.update(parse_qs(request.data.decode()))
         return Response()
 
-    monkeypatch.setattr(mcp, "_fetch_chatgpt_cimd", lambda: {})
+    monkeypatch.setattr(
+        mcp,
+        "_fetch_chatgpt_cimd",
+        lambda client_id: {"redirect_uris": [mcp.CHATGPT_REDIRECT_URI]},
+    )
     monkeypatch.setattr(mcp.urllib.request, "urlopen", fake_urlopen)
     monkeypatch.setattr(
         mcp,
