@@ -45,6 +45,7 @@ class Settings:
     companies_house_manual_run_queue_url: str | None = None
     companies_house_lookup_function_name: str | None = None
     procurement_manual_run_queue_url: str | None = None
+    care_lifecycle_watcher_schedule_enabled: bool = False
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -112,4 +113,8 @@ class Settings:
             procurement_manual_run_queue_url=(
                 os.getenv("PROCUREMENT_MANUAL_RUN_QUEUE_URL") or None
             ),
+            care_lifecycle_watcher_schedule_enabled=os.getenv(
+                "CARE_LIFECYCLE_WATCHER_SCHEDULE_ENABLED", "false"
+            ).lower()
+            in {"1", "true", "yes"},
         )

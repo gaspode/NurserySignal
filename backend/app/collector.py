@@ -7,12 +7,14 @@ from typing import Any
 import boto3
 
 from app.care import care_planning_signal, classify_care_planning
+from app.care_lifecycle import planning_watch_snapshot
 from app.collector_events import collector_payload
 from app.config import Settings
 from app.logging import configure_logging
 from app.planning import (
     CandidateDecision,
     PlanningProvider,
+    PlanningProviderError,
     PlanningQuery,
     PlanningRateLimitError,
     PlotaProvider,
@@ -22,9 +24,11 @@ from app.planning import (
 from app.planning_backfill import add_counts, bounds_from_chunk, chunk_payload
 from app.planning_origin import candidate_summary, resolve_origin_candidate
 from app.queueing import (
+    PlanningLifecycleWatchResultMessage,
     PlanningOriginRecoveryResultMessage,
     SignalIngestionMessage,
     send_ingestion_message,
+    send_planning_lifecycle_watch_result,
     send_planning_origin_recovery_result,
 )
 from app.secrets import provider_api_key_from_secret
@@ -38,6 +42,103 @@ from app.source_runs import (
 from app.verticals import CHILDRENS_HOME, NURSERY, VERTICAL_REGISTRY, validate_vertical
 
 logger = configure_logging()
+
+
+def refresh_planning_lifecycle_watch(
+    settings: Settings, payload: dict[str, Any]
+) -> dict[str, int]:
+    """Poll one exact Planning application and return its result asynchronously."""
+    run_id = str(payload["run_id"])
+    watch_id = str(payload["watch_id"])
+    reference = str(payload["planning_reference"])
+    authority = str(payload["planning_authority"])
+    provider: PlotaProvider | None = None
+    status = "FAILED"
+    details: dict[str, Any] = {}
+    try:
+        api_key = provider_api_key_from_secret(settings.planning_provider_secret_arn)
+        provider = PlotaProvider(api_key, base_url=settings.planning_provider_base_url)
+        search = provider.applications_by_reference(reference, limit=10)
+        resolution = resolve_origin_candidate(
+            search.candidates,
+            authority=authority,
+            postcode=payload.get("site_postcode"),
+            address=payload.get("site_address"),
+            truncated=search.truncated,
+        )
+        details = {
+            "provider_requests": provider.requests_made,
+            "provider_query": search.provider_query,
+            "records_returned": search.returned_count,
+            "exact_reference_candidates": len(search.candidates),
+            "candidate_set_truncated": search.truncated,
+            "selection_reason": resolution.reason,
+        }
+        if resolution.status != "FOUND" or resolution.selected is None:
+            details["provider_result"] = resolution.status
+            status = "FAILED"
+        else:
+            record = resolution.selected
+            decision = classify_care_planning(record)
+            signal = care_planning_signal(record, decision, historical_source_date=False)
+            snapshot = planning_watch_snapshot(signal["metadata"])
+            details.update(
+                {
+                    "provider_result": "FOUND",
+                    "selected_candidate_id": record.application_id,
+                    "selected_candidate_authority": record.council,
+                    "latest_snapshot": snapshot,
+                }
+            )
+            if snapshot == (payload.get("latest_snapshot") or {}):
+                status = "UNCHANGED"
+            else:
+                send_ingestion_message(
+                    settings,
+                    SignalIngestionMessage(
+                        message_version="1.0",
+                        signal=signal,
+                        raw_provider_record=record.raw,
+                    ),
+                )
+                status = "CHANGED"
+                details["signal_external_id"] = signal["external_id"]
+    except PlanningRateLimitError as exc:
+        status = "RATE_LIMITED"
+        details = {
+            "provider_requests": provider.requests_made if provider else 1,
+            "error_type": type(exc).__name__,
+        }
+    except PlanningProviderError as exc:
+        status = "FAILED"
+        details = {
+            "provider_requests": provider.requests_made if provider else 1,
+            "error_type": type(exc).__name__,
+        }
+    except Exception as exc:
+        logger.exception("planning_lifecycle_watch_failed watch_id=%s", watch_id)
+        status = "FAILED"
+        details = {
+            "provider_requests": provider.requests_made if provider else 0,
+            "error_type": type(exc).__name__,
+        }
+    send_planning_lifecycle_watch_result(
+        settings,
+        PlanningLifecycleWatchResultMessage(
+            message_version="1.0",
+            message_type="planning_lifecycle_watch_result",
+            run_id=run_id,
+            watch_id=watch_id,
+            status=status,
+            details=details,
+        ),
+    )
+    return {
+        "requests": int(details.get("provider_requests") or 0),
+        "changed": int(status == "CHANGED"),
+        "unchanged": int(status == "UNCHANGED"),
+        "failed": int(status in {"FAILED", "RATE_LIMITED"}),
+    }
 
 
 def recover_planning_origin(settings: Settings, payload: dict[str, Any]) -> dict[str, int]:
@@ -346,6 +447,8 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, int]:
     payload = collector_payload(event)
     if payload.get("invocation_source") == "planning_origin_recovery":
         return recover_planning_origin(settings, payload)
+    if payload.get("invocation_source") == "planning_lifecycle_watch":
+        return refresh_planning_lifecycle_watch(settings, payload)
     if payload.get("invocation_source") != "historical_backfill":
         return collect_planning(settings, payload)
 

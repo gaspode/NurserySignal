@@ -1,9 +1,9 @@
-# Phase A only: the coordinator schedule is provisioned disabled. Enabling it and
-# queueing targeted provider refreshes is a separate Phase B production gate.
+# Phase B3 coordinator: deployed disabled first, then enabled only after the
+# durable cohort and deterministic initial stagger have been verified.
 resource "aws_cloudwatch_event_rule" "care_lifecycle_refresh" {
   name                = "${local.name_prefix}-care-lifecycle-refresh"
   description         = "Bounded CareProspect Planning lifecycle refresh coordinator"
-  schedule_expression = "rate(1 day)"
+  schedule_expression = "rate(6 hours)"
   state               = "DISABLED"
   tags                = local.common_tags
 }
@@ -14,8 +14,8 @@ resource "aws_cloudwatch_event_target" "care_lifecycle_refresh" {
   arn       = aws_lambda_function.backend.arn
   input = jsonencode({
     operation = "care_lifecycle_refresh_coordinator"
-    preview   = true
-    max_due   = 50
+    preview   = false
+    max_due   = 15
   })
 }
 

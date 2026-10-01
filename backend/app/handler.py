@@ -78,6 +78,7 @@ from app.repository import (
     cleanup_refused_planning_signals,
     cleanup_withdrawn_care_planning_signals,
     create_opportunity_from_signal,
+    enrol_care_planning_watches,
     link_signal_to_opportunity,
     list_match_reviews,
     list_opportunities,
@@ -92,6 +93,7 @@ from app.repository import (
     planning_family_historical_preview,
     planning_outcome_dry_run,
     public_authority_backfill,
+    queue_due_care_planning_watches,
     queue_planning_origin_recovery,
     recalculate_opportunity_creation,
     reclassify_pending_care_planning,
@@ -108,6 +110,7 @@ from app.repository import (
     review_signals_bulk,
     review_triage_summary,
     safe_agreement_bulk_approve,
+    set_care_planning_watcher_execution,
     set_opportunity_automation_block,
     set_organisation_type,
     signal_detail,
@@ -380,6 +383,12 @@ def _admin_path(path: str) -> tuple[str, str | None]:
         return "opportunity-lifecycle-preview", None
     if path == "/admin/opportunities/lifecycle-bootstrap":
         return "opportunity-lifecycle-bootstrap", None
+    if path == "/admin/opportunities/planning-watcher-enrolment":
+        return "opportunity-planning-watcher-enrolment", None
+    if path == "/admin/opportunities/planning-watcher-state":
+        return "opportunity-planning-watcher-state", None
+    if path == "/admin/opportunities/planning-watcher-run":
+        return "opportunity-planning-watcher-run", None
     if path.startswith("/admin/opportunities/"):
         parts = path[len("/admin/opportunities/") :].split("/")
         if len(parts) == 2 and parts[1] == "publication":
@@ -422,15 +431,24 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     if event.get("operation") == "care_lifecycle_refresh_coordinator" and not event.get(
         "requestContext"
     ):
-        if not bool(event.get("preview", True)):
-            raise ValueError("care lifecycle refresh execution is not enabled in Phase A")
-        report = care_opportunity_lifecycle_preview(settings)
-        report["coordinator"] = {
-            "preview": True,
-            "max_due": min(max(int(event.get("max_due") or 50), 1), 100),
-            "provider_requests_queued": 0,
+        max_due = min(max(int(event.get("max_due") or 15), 1), 100)
+        if bool(event.get("preview", False)):
+            report = care_opportunity_lifecycle_preview(settings)
+            report["coordinator"] = {
+                "preview": True,
+                "max_due": max_due,
+                "provider_requests_queued": 0,
+            }
+            return report
+        enrolment = enrol_care_planning_watches(
+            settings, actor="SYSTEM_WATCHER_COORDINATOR", preview=False
+        )
+        queued = queue_due_care_planning_watches(settings, max_due=max_due)
+        queued["enrolment"] = {
+            key: enrolment[key]
+            for key in ("created", "updated", "disabled", "enabled", "provider_requests")
         }
-        return report
+        return queued
     if event.get("operation") == "customer_pilot_inventory" and not event.get("requestContext"):
         return pilot_curation_inventory(
             settings,
@@ -1717,6 +1735,50 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                         actor=actor,
                         limit=min(max(int(payload.get("limit") or 100), 1), 100),
                         preview=bool(payload.get("preview", True)),
+                    ),
+                )
+            if action == "opportunity-planning-watcher-enrolment" and method == "POST":
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                payload = parse_json_payload(_raw_body(event))
+                actor = str(claims.get("sub") or claims.get("username") or "unknown")
+                return _response(
+                    200,
+                    enrol_care_planning_watches(
+                        settings,
+                        actor=actor,
+                        preview=bool(payload.get("preview", True)),
+                    ),
+                )
+            if action == "opportunity-planning-watcher-state" and method == "POST":
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                payload = parse_json_payload(_raw_body(event))
+                actor = str(claims.get("sub") or claims.get("username") or "unknown")
+                enabled = payload.get("enabled")
+                if not isinstance(enabled, bool):
+                    raise ValueError("enabled must be a boolean")
+                return _response(
+                    200,
+                    set_care_planning_watcher_execution(
+                        settings,
+                        enabled=enabled,
+                        actor=actor,
+                        reason=str(payload.get("reason") or "").strip()[:500] or None,
+                    ),
+                )
+            if action == "opportunity-planning-watcher-run" and method == "POST":
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                payload = parse_json_payload(_raw_body(event))
+                return _response(
+                    200,
+                    queue_due_care_planning_watches(
+                        settings,
+                        max_due=min(max(int(payload.get("max_due") or 15), 1), 100),
                     ),
                 )
             if action == "opportunity-automation-block" and method == "POST" and signal_id:

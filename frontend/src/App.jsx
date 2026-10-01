@@ -363,6 +363,7 @@ export function SourcesPage({ apiClient, selectedVertical = "NURSERY", onNavigat
   const [lifecyclePreview, setLifecyclePreview] = useState(null);
   const [lifecycleBootstrapBusy, setLifecycleBootstrapBusy] = useState(false);
   const [lifecycleBootstrapConfirm, setLifecycleBootstrapConfirm] = useState(false);
+  const [watcherBusy, setWatcherBusy] = useState(false);
   const today = new Date().toISOString().slice(0, 10);
   const historicalStart = new Date(Date.now() - (547 * 86400000)).toISOString().slice(0, 10);
   const [historicalForm, setHistoricalForm] = useState({ from_date: historicalStart, to_date: today, max_records: 4000 });
@@ -439,6 +440,19 @@ export function SourcesPage({ apiClient, selectedVertical = "NURSERY", onNavigat
       setError({ title: "Lifecycle bootstrap failed", message: bootstrapError.message || "The bounded lifecycle batch could not be completed." });
     } finally { setLifecycleBootstrapBusy(false); }
   }
+  async function emergencyDisableWatcher() {
+    setWatcherBusy(true); setError(null);
+    try {
+      await apiClient("/admin/opportunities/planning-watcher-state", {
+        method: "POST",
+        body: JSON.stringify({ enabled: false, reason: "Emergency disable from Sources admin" }),
+      });
+      setNotice("Planning lifecycle watcher execution disabled. Watch records were preserved.");
+      setLifecyclePreview(await apiClient("/admin/opportunities/lifecycle-preview"));
+    } catch (watcherError) {
+      setError({ title: "Watcher could not be disabled", message: watcherError.message || "Please try again." });
+    } finally { setWatcherBusy(false); }
+  }
   useEffect(() => {
     if (!historicalRun?.run_id || historicalRun.status !== "RUNNING") return undefined;
     const timer = window.setInterval(async () => {
@@ -496,13 +510,15 @@ export function SourcesPage({ apiClient, selectedVertical = "NURSERY", onNavigat
       <button className="button secondary" onClick={() => onNavigate("/procurement")}>Open procurement evaluation</button>
     </article>
     {selectedVertical === "CHILDRENS_HOME" && <article className="panel source-card">
-      <div className="source-card-heading"><div><p className="eyebrow">Planning lifecycle watcher</p><h2>Lifecycle refresh preview</h2><p className="muted">Phase B2 applies conservative evidence, age and lifecycle gates without enrolling watches or calling Plota.</p></div><Badge tone="neutral">{lifecyclePreview?.watcher?.status || "DISABLED"}</Badge></div>
-      <div className="source-counts"><span>Stored lifecycle <strong>{lifecyclePreview ? lifecyclePreview.opportunities_inspected - (lifecyclePreview.stored_lifecycle_counts?.UNSET || 0) : "—"}</strong></span><span>Unset <strong>{lifecyclePreview?.stored_lifecycle_counts?.UNSET || 0}</strong></span><span>Eligible watches <strong>{lifecyclePreview?.watcher?.eligible_watches ?? lifecyclePreview?.watcher?.would_watch ?? "—"}</strong></span><span>Excluded <strong>{lifecyclePreview?.watcher?.excluded_watches ?? "—"}</strong></span><span>Est. requests/day <strong>{lifecyclePreview?.watcher?.estimated_requests_per_day ?? "—"}</strong></span><span>Est. requests/month <strong>{lifecyclePreview?.watcher?.estimated_requests_per_30_days ?? "—"}</strong></span><span>Previous monthly <strong>{lifecyclePreview?.watcher?.previous_estimated_requests_per_30_days ?? "—"}</strong></span><span>Reduction <strong>{lifecyclePreview?.watcher?.estimated_reduction_percent != null ? `${lifecyclePreview.watcher.estimated_reduction_percent}%` : "—"}</strong></span></div>
-      <dl className="source-meta"><div><dt>Policy</dt><dd>{lifecyclePreview?.watcher?.policy_version || "—"}</dd></div><div><dt>Persisted watches</dt><dd>{lifecyclePreview?.watcher?.stored_total ?? "—"}</dd></div><div><dt>Provider calls</dt><dd>{lifecyclePreview?.watcher?.provider_requests_executed ?? "—"}</dd></div><div><dt>Further relaxation candidates</dt><dd>{lifecyclePreview?.watcher?.further_relaxation_candidates ?? "—"}</dd></div></dl>
+      <div className="source-card-heading"><div><p className="eyebrow">Planning lifecycle watcher</p><h2>Lifecycle status refresh</h2><p className="muted">Targeted Planning checks use the versioned eligibility policy, deterministic cadence and bounded quota guardrails.</p></div><Badge tone={lifecyclePreview?.watcher?.status === "ENABLED" ? "approved" : "neutral"}>{lifecyclePreview?.watcher?.status || "DISABLED"}</Badge></div>
+      <div className="source-counts"><span>Persisted watches <strong>{lifecyclePreview?.watcher?.stored_total ?? "—"}</strong></span><span>Enabled <strong>{lifecyclePreview?.watcher?.stored_enabled ?? "—"}</strong></span><span>Due now <strong>{lifecyclePreview?.watcher?.due ?? "—"}</strong></span><span>Polls today <strong>{lifecyclePreview?.watcher?.provider_requests_today ?? "—"}</strong></span><span>Polls this month <strong>{lifecyclePreview?.watcher?.provider_requests_this_month ?? "—"}</strong></span><span>Changed <strong>{lifecyclePreview?.watcher?.changed_polls ?? "—"}</strong></span><span>Unchanged <strong>{lifecyclePreview?.watcher?.unchanged_polls ?? "—"}</strong></span><span>Failed <strong>{lifecyclePreview?.watcher?.failed_polls ?? "—"}</strong></span><span>Projected/month <strong>{lifecyclePreview?.watcher?.estimated_requests_per_30_days ?? "—"}</strong></span></div>
+      <dl className="source-meta"><div><dt>Policy</dt><dd>{lifecyclePreview?.watcher?.policy_version || "—"}</dd></div><div><dt>Next poll due</dt><dd>{formatDate(lifecyclePreview?.watcher?.next_poll_at, true)}</dd></div><div><dt>Per execution</dt><dd>{lifecyclePreview?.watcher?.quota_guardrails?.max_polls_per_execution ?? "—"}</dd></div><div><dt>Daily / monthly limits</dt><dd>{lifecyclePreview?.watcher?.quota_guardrails ? `${lifecyclePreview.watcher.quota_guardrails.max_provider_requests_per_day} / ${lifecyclePreview.watcher.quota_guardrails.max_provider_requests_per_month}` : "—"}</dd></div></dl>
       <details className="source-history"><summary>Polling cadence</summary>{Object.entries(lifecyclePreview?.watcher?.cadence_counts || {}).map(([key, count]) => <div className="source-history-row" key={key}><span>{key.replace("_", " ")}</span><strong>{count}</strong></div>)}</details>
       <details className="source-history"><summary>Exclusion reasons</summary>{Object.entries(lifecyclePreview?.watcher?.exclusion_reasons || {}).map(([key, count]) => <div className="source-history-row" key={key}><span>{titleCase(key)}</span><strong>{count}</strong></div>)}</details>
+      {lifecyclePreview?.watcher?.recent_failures?.length > 0 && <details className="source-history"><summary>Recent watcher failures</summary>{lifecyclePreview.watcher.recent_failures.map((item) => <div className="source-history-row" key={item.run_id}><span>{formatDate(item.completed_at, true)} · {item.error_category || titleCase(item.status)}</span><Badge tone="rejected">{item.status}</Badge></div>)}</details>}
       <button className="button secondary" disabled={lifecycleBootstrapBusy || !lifecyclePreview?.stored_lifecycle_counts?.UNSET} onClick={() => setLifecycleBootstrapConfirm(true)}>{lifecycleBootstrapBusy ? "Bootstrapping…" : "Bootstrap next 100 lifecycle states"}</button>
-      <p className="muted small-text">Watcher schedule disabled. Lifecycle refresh, provider calls, publication and withdrawal remain disabled.</p>
+      {lifecyclePreview?.watcher?.execution_enabled && <button className="button danger" disabled={watcherBusy} onClick={emergencyDisableWatcher}>{watcherBusy ? "Disabling…" : "Emergency disable watcher"}</button>}
+      <p className="muted small-text">Publication and withdrawal automation remain disabled. Emergency disable preserves watches and lifecycle history.</p>
     </article>}
     <article className="panel source-card">
       <div className="source-card-heading"><div><p className="eyebrow">CareProspect activation</p><h2>Stored-evidence backfill</h2><p className="muted">Re-evaluate up to 25 preserved Planning records and Care-targeted Recruitment records from the last 60 days. Providers are not called.</p></div><Badge>Bounded</Badge></div>

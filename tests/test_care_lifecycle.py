@@ -5,6 +5,7 @@ from app.care_lifecycle import (
     CareLifecycle,
     bootstrap_lifecycle_records,
     derive_care_lifecycle,
+    deterministic_initial_poll_at,
     evaluate_planning_watch,
     evaluate_publication,
     evaluate_withdrawal,
@@ -171,6 +172,21 @@ def test_planning_watcher_projection_is_bounded_and_side_effect_free() -> None:
     )
     assert daily == 3.0
     assert monthly == 90.0
+
+
+def test_initial_watch_stagger_is_stable_and_spans_each_cadence_window() -> None:
+    activated = datetime(2026, 10, 1, 9, 37, tzinfo=UTC)
+    for cadence in (7, 14, 30):
+        first = deterministic_initial_poll_at("opportunity:signal", cadence, activated)
+        second = deterministic_initial_poll_at("opportunity:signal", cadence, activated)
+        assert first == second
+        assert activated + timedelta(minutes=20) < first
+        assert first < activated + timedelta(days=cadence)
+    identities = [f"watch-{index}" for index in range(50)]
+    hours = {
+        deterministic_initial_poll_at(identity, 7, activated).hour for identity in identities
+    }
+    assert len(hours) > 8
 
 
 def test_planning_lifecycle_transitions_are_deterministic() -> None:

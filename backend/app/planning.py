@@ -276,6 +276,7 @@ class PlotaProvider:
         self.timeout = timeout
         self.opener = opener
         self.sleep = sleep
+        self.requests_made = 0
 
     def _get(self, path: str, params: dict[str, Any]) -> dict[str, Any]:
         url = f"{self.base_url}/{path.lstrip('/')}?{urlencode(params)}"
@@ -285,6 +286,7 @@ class PlotaProvider:
         )
         for attempt in range(3):
             try:
+                self.requests_made += 1
                 with self.opener(request, timeout=self.timeout) as response:
                     payload = json.loads(response.read())
                 if not isinstance(payload, dict):

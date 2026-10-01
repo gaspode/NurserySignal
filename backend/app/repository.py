@@ -21,9 +21,11 @@ from app.care_lifecycle import (
     LifecycleDecision,
     bootstrap_lifecycle_records,
     derive_care_lifecycle,
+    deterministic_initial_poll_at,
     evaluate_planning_watch,
     evaluate_publication,
     evaluate_withdrawal,
+    planning_watch_snapshot,
     project_planning_watch_requests,
 )
 from app.care_planning_review import (
@@ -6310,11 +6312,59 @@ def care_opportunity_lifecycle_preview(settings: Settings) -> dict[str, Any]:
             """
         ).fetchall()
         watch_rows = conn.execute(
-            """SELECT count(*), count(*) FILTER (WHERE enabled),
-                      count(*) FILTER (WHERE enabled AND next_eligible_refresh_at <= now()),
-                      count(*) FILTER (WHERE last_checked_at >= now() - interval '24 hours'),
-                      count(*) FILTER (WHERE consecutive_provider_errors > 0)
-               FROM planning_lifecycle_watches"""
+            """WITH watch AS (
+                 SELECT count(*) AS total,
+                        count(*) FILTER (WHERE enabled) AS enabled,
+                        count(*) FILTER (
+                          WHERE enabled AND next_eligible_refresh_at <= now()
+                        ) AS due,
+                        count(*) FILTER (
+                          WHERE last_checked_at >= now() - interval '24 hours'
+                        ) AS checked_24h,
+                        count(*) FILTER (WHERE consecutive_provider_errors > 0) AS errors,
+                        min(next_eligible_refresh_at) FILTER (WHERE enabled) AS next_poll,
+                        jsonb_object_agg(cadence_days::text, cadence_count)
+                          FILTER (WHERE cadence_days IS NOT NULL) AS cadence
+                 FROM (
+                   SELECT w.*,
+                          count(*) OVER (PARTITION BY cadence_days) AS cadence_count
+                   FROM planning_lifecycle_watches w
+                 ) grouped
+               ), runs AS (
+                 SELECT COALESCE(sum(provider_requests) FILTER (
+                          WHERE created_at >= date_trunc('day', now())
+                        ), 0) AS requests_today,
+                        COALESCE(sum(provider_requests) FILTER (
+                          WHERE created_at >= date_trunc('month', now())
+                        ), 0) AS requests_month,
+                        count(*) FILTER (WHERE status = 'CHANGED') AS changed,
+                        count(*) FILTER (WHERE status = 'UNCHANGED') AS unchanged,
+                        count(*) FILTER (
+                          WHERE status IN ('FAILED', 'RATE_LIMITED', 'QUEUE_FAILED')
+                        ) AS failed
+                 FROM planning_lifecycle_watch_runs
+               )
+               SELECT watch.total, watch.enabled, watch.due, watch.checked_24h,
+                      watch.errors, watch.next_poll, watch.cadence,
+                      state.execution_enabled, state.emergency_reason,
+                      state.max_polls_per_execution,
+                      state.max_provider_requests_per_day,
+                      state.max_provider_requests_per_month,
+                      runs.requests_today, runs.requests_month,
+                      runs.changed, runs.unchanged, runs.failed,
+                      (SELECT COALESCE(jsonb_agg(jsonb_build_object(
+                         'run_id', recent.id, 'watch_id', recent.watch_id,
+                         'status', recent.status, 'error_category', recent.error_category,
+                         'completed_at', recent.completed_at
+                       ) ORDER BY recent.created_at DESC), '[]'::jsonb)
+                       FROM (SELECT id, watch_id, status, error_category,
+                                    completed_at, created_at
+                             FROM planning_lifecycle_watch_runs
+                             WHERE status IN ('FAILED', 'RATE_LIMITED', 'QUEUE_FAILED')
+                             ORDER BY created_at DESC LIMIT 5) recent) AS recent_failures
+               FROM watch CROSS JOIN runs
+               CROSS JOIN planning_lifecycle_watcher_state state
+               WHERE state.singleton"""
         ).fetchone()
 
     fields = (
@@ -6517,7 +6567,14 @@ def care_opportunity_lifecycle_preview(settings: Settings) -> dict[str, Any]:
         "derived_lifecycle_counts": dict(sorted(lifecycle_counts.items())),
         "stored_lifecycle_counts": dict(sorted(stored_lifecycle_counts.items())),
         "watcher": {
-            "status": "DISABLED",
+            "status": (
+                "ENABLED"
+                if bool(watch_rows[7]) and settings.care_lifecycle_watcher_schedule_enabled
+                else "DISABLED"
+            ),
+            "execution_enabled": bool(watch_rows[7]),
+            "schedule_enabled": settings.care_lifecycle_watcher_schedule_enabled,
+            "emergency_reason": watch_rows[8],
             "policy_version": CARE_PLANNING_WATCHER_POLICY_VERSION,
             "opportunities_evaluated": len(opportunities),
             "watch_candidates_evaluated": watch_candidates_evaluated,
@@ -6535,6 +6592,11 @@ def care_opportunity_lifecycle_preview(settings: Settings) -> dict[str, Any]:
             "due": int(watch_rows[2] or 0),
             "checked_last_24h": int(watch_rows[3] or 0),
             "provider_errors": int(watch_rows[4] or 0),
+            "next_poll_at": watch_rows[5],
+            "persisted_cadence_counts": {
+                f"{key}_days": int(value)
+                for key, value in (watch_rows[6] or {}).items()
+            },
             "estimated_requests_per_day": estimated_daily,
             "estimated_requests_per_30_days": estimated_monthly,
             "previous_estimated_requests_per_30_days": previous_monthly,
@@ -6545,8 +6607,21 @@ def care_opportunity_lifecycle_preview(settings: Settings) -> dict[str, Any]:
             },
             "further_relaxation_candidates": further_relaxation_candidates,
             "samples": watch_samples,
-            "provider_requests_executed": 0,
-            "watch_enrolments": 0,
+            "provider_requests_executed": int(watch_rows[13] or 0),
+            "provider_requests_today": int(watch_rows[12] or 0),
+            "provider_requests_this_month": int(watch_rows[13] or 0),
+            "changed_polls": int(watch_rows[14] or 0),
+            "unchanged_polls": int(watch_rows[15] or 0),
+            "failed_polls": int(watch_rows[16] or 0),
+            "recent_failures": watch_rows[17] or [],
+            "quota_guardrails": {
+                "max_polls_per_execution": int(watch_rows[9] or 0),
+                "max_provider_requests_per_day": int(watch_rows[10] or 0),
+                "max_provider_requests_per_month": int(watch_rows[11] or 0),
+                "daily_reached": int(watch_rows[12] or 0) >= int(watch_rows[10] or 0),
+                "monthly_reached": int(watch_rows[13] or 0) >= int(watch_rows[11] or 0),
+            },
+            "watch_enrolments": int(watch_rows[0] or 0),
             "lifecycle_changes": 0,
             "publication_changes": 0,
             "withdrawal_changes": 0,
@@ -6560,6 +6635,617 @@ def care_opportunity_lifecycle_preview(settings: Settings) -> dict[str, Any]:
         "hygiene_counts": hygiene["category_counts"],
         "examples": examples,
     }
+
+
+def _care_planning_watch_candidates(conn: Any) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        """SELECT o.id, o.customer_lifecycle_stage, o.publication_automation_blocked,
+                  o.address, o.postcode, rs.id, rs.external_id, rs.discovered_at,
+                  rs.metadata, se.review_status, se.extracted_facts, os.status,
+                  os.extracted_facts,
+                  COALESCE((SELECT jsonb_agg(DISTINCT pfr.relationship_type)
+                    FROM planning_signal_family_relationships pfr
+                    WHERE pfr.raw_signal_id = rs.id), '[]'::jsonb),
+                  (SELECT pfr.family_id FROM planning_signal_family_relationships pfr
+                    WHERE pfr.raw_signal_id = rs.id
+                    ORDER BY (pfr.relationship_type = 'PRIMARY_APPLICATION') DESC,
+                             pfr.created_at, pfr.family_id LIMIT 1),
+                  (SELECT max(rev.observed_at) FROM raw_signal_revisions rev
+                    WHERE rev.raw_signal_id = rs.id)
+           FROM opportunities o
+           JOIN opportunity_signals os ON os.opportunity_id = o.id AND os.status = 'ACTIVE'
+           JOIN raw_signals rs ON rs.id = os.raw_signal_id AND rs.source_type = 'planning'
+           LEFT JOIN signal_enrichments se ON se.raw_signal_id = rs.id
+           WHERE o.vertical = 'CHILDRENS_HOME'
+             AND o.review_status NOT IN ('MERGED', 'REJECTED')
+           ORDER BY o.id, rs.id"""
+    ).fetchall()
+    fields = (
+        "opportunity_id",
+        "customer_lifecycle_stage",
+        "publication_automation_blocked",
+        "site_address",
+        "site_postcode",
+        "id",
+        "external_id",
+        "discovered_at",
+        "metadata",
+        "review_status",
+        "extracted_facts",
+        "relationship_status",
+        "relationship_extracted_facts",
+        "planning_family_relationship_types",
+        "family_id",
+        "latest_revision_at",
+    )
+    return [dict(zip(fields, row)) for row in rows]
+
+
+def enrol_care_planning_watches(
+    settings: Settings,
+    *,
+    actor: str,
+    preview: bool = True,
+    activated_at: datetime | None = None,
+) -> dict[str, Any]:
+    """Synchronise the complete v2 watch cohort without calling the provider."""
+    now = (activated_at or datetime.now(UTC)).astimezone(UTC)
+    with connection(settings) as conn:
+        candidates = _care_planning_watch_candidates(conn)
+        existing_rows = conn.execute(
+            """SELECT id, opportunity_id, primary_signal_id, enabled, cadence_days,
+                      next_eligible_refresh_at
+               FROM planning_lifecycle_watches"""
+        ).fetchall()
+        existing = {
+            (str(row[1]), str(row[2])): {
+                "id": row[0],
+                "enabled": bool(row[3]),
+                "cadence_days": row[4],
+                "next_poll_at": row[5],
+            }
+            for row in existing_rows
+        }
+        eligible: dict[tuple[str, str], dict[str, Any]] = {}
+        exclusions: Counter[str] = Counter()
+        for signal in candidates:
+            opportunity = {
+                "id": signal["opportunity_id"],
+                "customer_lifecycle_stage": signal["customer_lifecycle_stage"],
+                "publication_automation_blocked": signal["publication_automation_blocked"],
+            }
+            authority = planning_authority(signal.get("metadata") or {})
+            reference = primary_planning_reference(
+                signal.get("external_id"), signal.get("metadata") or {}
+            )
+            decision = evaluate_planning_watch(
+                opportunity,
+                {**signal, "source_type": "planning", "status": signal["relationship_status"]},
+                has_planning_identity=bool(authority and reference),
+                now=now,
+            )
+            key = (str(signal["opportunity_id"]), str(signal["id"]))
+            if not decision.eligible:
+                exclusions[decision.reason] += 1
+                continue
+            eligible[key] = {
+                **signal,
+                "authority": authority,
+                "reference": reference,
+                "decision": decision,
+                "snapshot": planning_watch_snapshot(signal.get("metadata") or {}),
+            }
+
+        cadence_counts = Counter(
+            f"{item['decision'].cadence_days}_days" for item in eligible.values()
+        )
+        projected_daily, projected_monthly = project_planning_watch_requests(cadence_counts)
+        preview_next = [
+            deterministic_initial_poll_at(f"{key[0]}:{key[1]}", item["decision"].cadence_days, now)
+            for key, item in eligible.items()
+        ]
+        result = {
+            "preview": preview,
+            "policy_version": CARE_PLANNING_WATCHER_POLICY_VERSION,
+            "candidates_evaluated": len(candidates),
+            "eligible": len(eligible),
+            "exclusions": dict(sorted(exclusions.items())),
+            "cadence_counts": dict(sorted(cadence_counts.items())),
+            "projected_requests_per_day": projected_daily,
+            "projected_requests_per_30_days": projected_monthly,
+            "earliest_next_poll_at": min(preview_next).isoformat() if preview_next else None,
+            "latest_next_poll_at": max(preview_next).isoformat() if preview_next else None,
+            "due_first_24_hours": sum(item <= now + timedelta(days=1) for item in preview_next),
+            "due_first_7_days": sum(item <= now + timedelta(days=7) for item in preview_next),
+            "created": 0,
+            "updated": 0,
+            "enabled": len(eligible),
+            "disabled": 0,
+            "history_rows_created": 0,
+            "provider_requests": 0,
+        }
+        if preview:
+            conn.rollback()
+            return result
+
+        for key, item in eligible.items():
+            prior = existing.get(key)
+            cadence = int(item["decision"].cadence_days)
+            next_poll = (
+                prior["next_poll_at"]
+                if prior and prior["enabled"] and prior["cadence_days"] == cadence
+                else deterministic_initial_poll_at(f"{key[0]}:{key[1]}", cadence, now)
+            )
+            if prior:
+                changed = (
+                    not prior["enabled"]
+                    or prior["cadence_days"] != cadence
+                )
+                conn.execute(
+                    """UPDATE planning_lifecycle_watches
+                       SET family_id = %s, planning_authority = %s, planning_reference = %s,
+                           lifecycle_at_enrolment = %s, cadence_days = %s,
+                           next_eligible_refresh_at = %s, latest_outcome = %s,
+                           activity_at = %s, activity_source = %s,
+                           latest_status_metadata = %s, enabled = TRUE,
+                           disabled_reason = NULL, policy_version = %s, updated_at = now()
+                       WHERE id = %s""",
+                    (
+                        item.get("family_id"), item["authority"], item["reference"],
+                        item["customer_lifecycle_stage"], cadence, next_poll,
+                        item["decision"].planning_outcome,
+                        now - timedelta(days=item["decision"].age_days)
+                        if item["decision"].age_days is not None else None,
+                        item["decision"].age_source, Jsonb(item["snapshot"]),
+                        CARE_PLANNING_WATCHER_POLICY_VERSION, prior["id"],
+                    ),
+                )
+                if changed:
+                    result["updated"] += 1
+                    conn.execute(
+                        """INSERT INTO planning_lifecycle_watch_history
+                             (watch_id, action, old_enabled, new_enabled,
+                              old_cadence_days, new_cadence_days, reason,
+                              policy_version, actor)
+                           VALUES (%s, 'UPDATED', %s, TRUE, %s, %s,
+                                   'policy_reenrolment', %s, %s)""",
+                        (prior["id"], prior["enabled"], prior["cadence_days"], cadence,
+                         CARE_PLANNING_WATCHER_POLICY_VERSION, actor),
+                    )
+                    result["history_rows_created"] += 1
+                continue
+            watch_id = conn.execute(
+                """INSERT INTO planning_lifecycle_watches
+                     (family_id, opportunity_id, primary_signal_id, latest_outcome,
+                      next_eligible_refresh_at, enabled, policy_version,
+                      planning_authority, planning_reference, lifecycle_at_enrolment,
+                      cadence_days, activity_at, activity_source,
+                      latest_status_metadata, enrolment_metadata)
+                   VALUES (%s, %s, %s, %s, %s, TRUE, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                   RETURNING id""",
+                (
+                    item.get("family_id"), item["opportunity_id"], item["id"],
+                    item["decision"].planning_outcome, next_poll,
+                    CARE_PLANNING_WATCHER_POLICY_VERSION, item["authority"],
+                    item["reference"], item["customer_lifecycle_stage"], cadence,
+                    now - timedelta(days=item["decision"].age_days)
+                    if item["decision"].age_days is not None else None,
+                    item["decision"].age_source, Jsonb(item["snapshot"]),
+                    Jsonb({"actor": actor, "staggered_at": now.isoformat()}),
+                ),
+            ).fetchone()[0]
+            conn.execute(
+                """INSERT INTO planning_lifecycle_watch_history
+                     (watch_id, action, new_enabled, new_cadence_days, reason,
+                      policy_version, actor)
+                   VALUES (%s, 'ENROLLED', TRUE, %s, 'initial_policy_enrolment', %s, %s)""",
+                (watch_id, cadence, CARE_PLANNING_WATCHER_POLICY_VERSION, actor),
+            )
+            result["created"] += 1
+            result["history_rows_created"] += 1
+
+        for key, prior in existing.items():
+            if key in eligible or not prior["enabled"]:
+                continue
+            conn.execute(
+                """UPDATE planning_lifecycle_watches
+                   SET enabled = FALSE, disabled_reason = 'policy_ineligible', updated_at = now()
+                   WHERE id = %s""",
+                (prior["id"],),
+            )
+            conn.execute(
+                """INSERT INTO planning_lifecycle_watch_history
+                     (watch_id, action, old_enabled, new_enabled, old_cadence_days,
+                      reason, policy_version, actor)
+                   VALUES (%s, 'DISABLED', TRUE, FALSE, %s,
+                           'policy_ineligible', %s, %s)""",
+                (prior["id"], prior["cadence_days"], CARE_PLANNING_WATCHER_POLICY_VERSION, actor),
+            )
+            result["disabled"] += 1
+            result["history_rows_created"] += 1
+        if result["created"] or result["updated"] or result["disabled"]:
+            conn.execute(
+                """INSERT INTO admin_audit_events (actor, action, target_type, details)
+                   VALUES (%s, 'care_planning_watcher_enrolment',
+                           'planning_watcher', %s)""",
+                (actor, Jsonb(result)),
+            )
+        conn.commit()
+        return result
+
+
+def set_care_planning_watcher_execution(
+    settings: Settings, *, enabled: bool, actor: str, reason: str | None
+) -> dict[str, Any]:
+    """Emergency/activation switch; watch evidence and lifecycle remain untouched."""
+    with connection(settings) as conn:
+        row = conn.execute(
+            """UPDATE planning_lifecycle_watcher_state
+               SET execution_enabled = %s, emergency_reason = %s,
+                   updated_by = %s, updated_at = now()
+               WHERE singleton RETURNING execution_enabled, emergency_reason,
+                   max_polls_per_execution, max_provider_requests_per_day,
+                   max_provider_requests_per_month, policy_version, updated_at""",
+            (enabled, reason, actor),
+        ).fetchone()
+        conn.execute(
+            """INSERT INTO admin_audit_events (actor, action, target_type, details)
+               VALUES (%s, %s, 'planning_watcher', %s)""",
+            (
+                actor,
+                "care_planning_watcher_enabled" if enabled else "care_planning_watcher_disabled",
+                Jsonb({"enabled": enabled, "reason": reason}),
+            ),
+        )
+        conn.commit()
+    return {
+        "execution_enabled": bool(row[0]),
+        "emergency_reason": row[1],
+        "max_polls_per_execution": row[2],
+        "max_provider_requests_per_day": row[3],
+        "max_provider_requests_per_month": row[4],
+        "policy_version": row[5],
+        "updated_at": row[6],
+        "lifecycle_changes": 0,
+        "publication_changes": 0,
+        "withdrawal_changes": 0,
+    }
+
+
+def queue_due_care_planning_watches(
+    settings: Settings, *, max_due: int = 15
+) -> dict[str, Any]:
+    """Reserve and queue due watches within daily/monthly request guardrails."""
+    if not settings.planning_manual_run_queue_url:
+        raise RuntimeError("PLANNING_MANUAL_RUN_QUEUE_URL is not configured")
+    requested_limit = min(max(int(max_due), 1), 100)
+    with connection(settings) as conn:
+        state = conn.execute(
+            """SELECT execution_enabled, emergency_reason, max_polls_per_execution,
+                      max_provider_requests_per_day, max_provider_requests_per_month,
+                      policy_version
+               FROM planning_lifecycle_watcher_state WHERE singleton FOR UPDATE"""
+        ).fetchone()
+        if not state or not state[0]:
+            conn.rollback()
+            return {
+                "execution_enabled": False,
+                "queued": 0,
+                "reason": state[1] if state else "watcher_state_missing",
+                "provider_requests_queued": 0,
+            }
+        conn.execute(
+            """UPDATE planning_lifecycle_watch_runs
+               SET status = 'FAILED', error_category = 'callback_timeout',
+                   completed_at = now()
+               WHERE status IN ('QUEUED', 'RUNNING')
+                 AND created_at < now() - interval '30 minutes'"""
+        )
+        usage = conn.execute(
+            """SELECT
+                 COALESCE(sum(provider_requests) FILTER (
+                   WHERE created_at >=
+                     date_trunc('day', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
+                 ), 0),
+                 COALESCE(sum(provider_requests) FILTER (
+                   WHERE created_at >=
+                     date_trunc('month', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
+                 ), 0),
+                 count(*) FILTER (WHERE status IN ('QUEUED', 'RUNNING'))
+               FROM planning_lifecycle_watch_runs"""
+        ).fetchone()
+        today_requests, month_requests, reserved = map(int, usage)
+        daily_available = max(int(state[3]) - today_requests - reserved, 0)
+        monthly_available = max(int(state[4]) - month_requests - reserved, 0)
+        limit = min(requested_limit, int(state[2]), daily_available, monthly_available)
+        if limit <= 0:
+            conn.rollback()
+            return {
+                "execution_enabled": True,
+                "queued": 0,
+                "reason": "quota_guardrail_reached",
+                "requests_today": today_requests,
+                "requests_this_month": month_requests,
+                "reserved": reserved,
+                "provider_requests_queued": 0,
+            }
+        rows = conn.execute(
+            """SELECT w.id, w.opportunity_id, w.primary_signal_id,
+                      w.planning_authority, w.planning_reference,
+                      w.latest_status_metadata, o.address, o.postcode
+               FROM planning_lifecycle_watches w
+               JOIN opportunities o ON o.id = w.opportunity_id
+               WHERE w.enabled AND w.next_eligible_refresh_at <= now()
+                 AND NOT o.publication_automation_blocked
+                 AND NOT EXISTS (
+                   SELECT 1 FROM planning_lifecycle_watch_runs run
+                   WHERE run.watch_id = w.id AND run.status IN ('QUEUED', 'RUNNING')
+                 )
+               ORDER BY w.next_eligible_refresh_at, w.id
+               FOR UPDATE OF w SKIP LOCKED LIMIT %s""",
+            (limit,),
+        ).fetchall()
+        queued: list[dict[str, Any]] = []
+        for row in rows:
+            run_id = conn.execute(
+                """INSERT INTO planning_lifecycle_watch_runs (watch_id, status, details)
+                   VALUES (%s, 'QUEUED', %s) RETURNING id""",
+                (row[0], Jsonb({"policy_version": state[5]})),
+            ).fetchone()[0]
+            queued.append(
+                {
+                    "invocation_source": "planning_lifecycle_watch",
+                    "run_id": str(run_id),
+                    "watch_id": str(row[0]),
+                    "opportunity_id": str(row[1]),
+                    "primary_signal_id": str(row[2]),
+                    "planning_authority": row[3],
+                    "planning_reference": row[4],
+                    "latest_snapshot": row[5] or {},
+                    "site_address": row[6],
+                    "site_postcode": row[7],
+                }
+            )
+        conn.commit()
+
+    sent = 0
+    failures = 0
+    for item in queued:
+        try:
+            response = boto3.client("sqs").send_message(
+                QueueUrl=settings.planning_manual_run_queue_url,
+                MessageBody=json.dumps(item, separators=(",", ":"), sort_keys=True),
+            )
+            if not response.get("MessageId"):
+                raise RuntimeError("Planning watch message was not accepted")
+            sent += 1
+        except Exception as error:
+            failures += 1
+            with connection(settings) as conn:
+                conn.execute(
+                    """UPDATE planning_lifecycle_watch_runs
+                       SET status = 'QUEUE_FAILED', error_category = %s,
+                           completed_at = now() WHERE id = %s AND status = 'QUEUED'""",
+                    (type(error).__name__, item["run_id"]),
+                )
+                conn.commit()
+    return {
+        "execution_enabled": True,
+        "selected": len(queued),
+        "queued": sent,
+        "queue_failures": failures,
+        "provider_requests_queued": sent,
+        "requests_today_before": today_requests,
+        "requests_this_month_before": month_requests,
+        "daily_limit": int(state[3]),
+        "monthly_limit": int(state[4]),
+        "max_polls_per_execution": int(state[2]),
+    }
+
+
+def update_care_planning_watch_result(
+    settings: Settings,
+    *,
+    run_id: str,
+    watch_id: str,
+    status: str,
+    details: dict[str, Any],
+) -> dict[str, Any]:
+    """Persist one collector result exactly once and schedule/stop the watch."""
+    if status not in {"UNCHANGED", "CHANGED", "FAILED", "RATE_LIMITED"}:
+        raise ValueError("invalid Planning watch status")
+    requests = max(int(details.get("provider_requests") or 0), 0)
+    with connection(settings) as conn:
+        run = conn.execute(
+            """SELECT status FROM planning_lifecycle_watch_runs
+               WHERE id = %s AND watch_id = %s FOR UPDATE""",
+            (run_id, watch_id),
+        ).fetchone()
+        if not run:
+            raise ValueError("Planning watch run not found")
+        if run[0] not in {"QUEUED", "RUNNING"}:
+            conn.rollback()
+            return {"updated": False, "duplicate": True, "status": run[0]}
+        watch = conn.execute(
+            """SELECT enabled, cadence_days, consecutive_provider_errors
+               FROM planning_lifecycle_watches WHERE id = %s FOR UPDATE""",
+            (watch_id,),
+        ).fetchone()
+        if not watch:
+            raise ValueError("Planning watch not found")
+        latest_snapshot = details.get("latest_snapshot")
+        snapshot = latest_snapshot if isinstance(latest_snapshot, dict) else None
+        terminal = bool(
+            snapshot
+            and snapshot.get("canonical_outcome")
+            in {"APPROVED", "REFUSED", "WITHDRAWN", "APPEAL_ALLOWED", "APPEAL_DISMISSED"}
+        )
+        errors = int(watch[2] or 0)
+        if status in {"FAILED", "RATE_LIMITED"}:
+            errors += 1
+            next_poll = datetime.now(UTC) + timedelta(hours=min(2**errors, 24))
+            enabled = bool(watch[0])
+            disabled_reason = None
+        elif terminal:
+            errors = 0
+            next_poll = datetime.now(UTC) + timedelta(days=int(watch[1] or 30))
+            enabled = False
+            disabled_reason = "terminal_planning_outcome"
+        else:
+            errors = 0
+            next_poll = datetime.now(UTC) + timedelta(days=int(watch[1] or 30))
+            enabled = bool(watch[0])
+            disabled_reason = None
+        conn.execute(
+            """UPDATE planning_lifecycle_watch_runs
+               SET status = %s, provider_requests = %s,
+                   provider_result = %s, error_category = %s,
+                   details = details || %s, started_at = COALESCE(started_at, now()),
+                   completed_at = now()
+               WHERE id = %s""",
+            (
+                status, requests, details.get("provider_result"), details.get("error_type"),
+                Jsonb(details), run_id,
+            ),
+        )
+        conn.execute(
+            """UPDATE planning_lifecycle_watches
+               SET enabled = %s, disabled_reason = %s,
+                   last_checked_at = now(),
+                   last_poll_started_at = COALESCE(last_poll_started_at, now()),
+                   last_poll_completed_at = now(), next_eligible_refresh_at = %s,
+                   last_provider_result = %s, consecutive_provider_errors = %s,
+                   latest_outcome = COALESCE(%s, latest_outcome),
+                   latest_status_metadata = COALESCE(%s, latest_status_metadata),
+                   status_changed_at = CASE
+                     WHEN %s = 'CHANGED' THEN now() ELSE status_changed_at END,
+                   updated_at = now()
+               WHERE id = %s""",
+            (
+                enabled, disabled_reason, next_poll, status, errors,
+                snapshot.get("canonical_outcome") if snapshot else None,
+                Jsonb(snapshot) if snapshot else None, status, watch_id,
+            ),
+        )
+        if terminal and watch[0]:
+            conn.execute(
+                """INSERT INTO planning_lifecycle_watch_history
+                     (watch_id, action, old_enabled, new_enabled, old_cadence_days,
+                      new_cadence_days, reason, policy_version, actor, details)
+                   VALUES (%s, 'DISABLED', TRUE, FALSE, %s, %s,
+                           'terminal_planning_outcome', %s, 'SYSTEM_WATCHER', %s)""",
+                (
+                    watch_id, watch[1], watch[1], CARE_PLANNING_WATCHER_POLICY_VERSION,
+                    Jsonb({"run_id": run_id, "status": status}),
+                ),
+            )
+        conn.commit()
+    return {
+        "updated": True,
+        "duplicate": False,
+        "status": status,
+        "provider_requests": requests,
+        "watch_enabled": enabled,
+        "watch_disabled": terminal,
+    }
+
+
+def recompute_care_opportunity_lifecycle_for_signal(
+    settings: Settings, signal_id: str
+) -> dict[str, int]:
+    """Recompute linked Care lifecycles after normal enrichment, without publishing."""
+    counts = {"opportunities_examined": 0, "lifecycle_changes": 0, "watches_updated": 0}
+    with connection(settings) as conn:
+        opportunity_rows = conn.execute(
+            """SELECT DISTINCT o.id, o.customer_lifecycle_stage
+               FROM opportunities o
+               JOIN opportunity_signals os ON os.opportunity_id = o.id
+               WHERE os.raw_signal_id = %s AND o.vertical = 'CHILDRENS_HOME'
+               ORDER BY o.id""",
+            (signal_id,),
+        ).fetchall()
+        for opportunity_id, old_lifecycle in opportunity_rows:
+            relationship_rows = conn.execute(
+                """SELECT rs.id, os.status, rs.source_type, rs.metadata,
+                          se.review_status, se.extracted_facts,
+                          COALESCE((SELECT jsonb_agg(DISTINCT pfr.relationship_type)
+                            FROM planning_signal_family_relationships pfr
+                            WHERE pfr.raw_signal_id = rs.id), '[]'::jsonb)
+                   FROM opportunity_signals os
+                   JOIN raw_signals rs ON rs.id = os.raw_signal_id
+                   LEFT JOIN signal_enrichments se ON se.raw_signal_id = rs.id
+                   WHERE os.opportunity_id = %s
+                   ORDER BY rs.discovered_at, rs.id""",
+                (opportunity_id,),
+            ).fetchall()
+            signals = [
+                {
+                    "id": str(row[0]),
+                    "status": row[1],
+                    "relationship_status": row[1],
+                    "source_type": row[2],
+                    "metadata": row[3] or {},
+                    "review_status": row[4],
+                    "extracted_facts": row[5] or {},
+                    "planning_family_relationship_types": row[6] or [],
+                }
+                for row in relationship_rows
+            ]
+            counts["opportunities_examined"] += 1
+            decision = derive_care_lifecycle(signals)
+            if decision.lifecycle.value != old_lifecycle:
+                conn.execute(
+                    """UPDATE opportunities
+                       SET customer_lifecycle_stage = %s,
+                           customer_lifecycle_reason = %s,
+                           customer_lifecycle_policy_version = %s,
+                           customer_lifecycle_evaluated_at = now(), updated_at = now()
+                       WHERE id = %s""",
+                    (
+                        decision.lifecycle.value,
+                        decision.reason,
+                        CARE_LIFECYCLE_POLICY_VERSION,
+                        opportunity_id,
+                    ),
+                )
+                conn.execute(
+                    """INSERT INTO opportunity_lifecycle_history
+                         (opportunity_id, old_lifecycle, new_lifecycle, reason,
+                          triggering_signal_ids, source_type, policy_version,
+                          actor_type, actor)
+                       VALUES (%s, %s, %s, %s, %s, 'planning', %s,
+                               'AUTOMATED', 'SYSTEM_PLANNING_WATCHER')""",
+                    (
+                        opportunity_id,
+                        old_lifecycle,
+                        decision.lifecycle.value,
+                        decision.reason,
+                        [UUID(value) for value in decision.triggering_signal_ids],
+                        CARE_LIFECYCLE_POLICY_VERSION,
+                    ),
+                )
+                counts["lifecycle_changes"] += 1
+            if decision.lifecycle == CareLifecycle.STOPPED:
+                changed = conn.execute(
+                    """UPDATE planning_lifecycle_watches
+                       SET enabled = FALSE, disabled_reason = 'lifecycle_terminal',
+                           updated_at = now()
+                       WHERE opportunity_id = %s AND enabled RETURNING id, cadence_days""",
+                    (opportunity_id,),
+                ).fetchall()
+                for watch_id, cadence in changed:
+                    conn.execute(
+                        """INSERT INTO planning_lifecycle_watch_history
+                             (watch_id, action, old_enabled, new_enabled,
+                              old_cadence_days, new_cadence_days, reason,
+                              policy_version, actor)
+                           VALUES (%s, 'DISABLED', TRUE, FALSE, %s, %s,
+                                   'lifecycle_terminal', %s, 'SYSTEM_WATCHER')""",
+                        (watch_id, cadence, cadence, CARE_PLANNING_WATCHER_POLICY_VERSION),
+                    )
+                counts["watches_updated"] += len(changed)
+        conn.commit()
+    return counts
 
 
 def bootstrap_care_opportunity_lifecycles(
@@ -8665,6 +9351,31 @@ def set_opportunity_automation_block(
                 ),
             ),
         )
+        if blocked:
+            watches = conn.execute(
+                """UPDATE planning_lifecycle_watches
+                   SET enabled = FALSE, disabled_reason = 'manual_automation_block',
+                       updated_at = now()
+                   WHERE opportunity_id = %s AND enabled
+                   RETURNING id, cadence_days""",
+                (opportunity_id,),
+            ).fetchall()
+            for watch_id, cadence in watches:
+                conn.execute(
+                    """INSERT INTO planning_lifecycle_watch_history
+                         (watch_id, action, old_enabled, new_enabled,
+                          old_cadence_days, new_cadence_days, reason,
+                          policy_version, actor)
+                       VALUES (%s, 'DISABLED', TRUE, FALSE, %s, %s,
+                               'manual_automation_block', %s, %s)""",
+                    (
+                        watch_id,
+                        cadence,
+                        cadence,
+                        CARE_PLANNING_WATCHER_POLICY_VERSION,
+                        actor,
+                    ),
+                )
         conn.commit()
     return {
         "id": opportunity_id,

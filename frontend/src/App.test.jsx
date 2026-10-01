@@ -599,7 +599,7 @@ describe("admin frontend", () => {
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
   });
 
-  it("shows the CareProspect lifecycle watcher as a read-only preview", async () => {
+  it("shows the CareProspect lifecycle watcher runtime and guardrails", async () => {
     const apiClient = vi.fn()
       .mockResolvedValueOnce({ items: [] })
       .mockResolvedValueOnce({
@@ -620,16 +620,28 @@ describe("admin frontend", () => {
           previous_estimated_requests_per_30_days: 3651,
           estimated_reduction_percent: 88.5,
           provider_requests_executed: 0,
+          stored_total: 42,
+          stored_enabled: 42,
+          provider_requests_today: 0,
+          provider_requests_this_month: 0,
+          changed_polls: 0,
+          unchanged_polls: 0,
+          failed_polls: 0,
+          quota_guardrails: {
+            max_polls_per_execution: 15,
+            max_provider_requests_per_day: 50,
+            max_provider_requests_per_month: 2000,
+          },
         },
       })
       .mockResolvedValueOnce({ persisted: 100, remaining_unset: 0 })
       .mockResolvedValueOnce({ opportunities_inspected: 1145, stored_lifecycle_counts: {}, watcher: {} });
     render(<SourcesPage apiClient={apiClient} selectedVertical="CHILDRENS_HOME" />);
-    expect(await screen.findByRole("heading", { name: "Lifecycle refresh preview" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Lifecycle status refresh" })).toBeInTheDocument();
     expect(screen.getByText("DISABLED")).toBeInTheDocument();
-    expect(screen.getByText(/Watcher schedule disabled/)).toBeInTheDocument();
+    expect(screen.getByText(/Publication and withdrawal automation remain disabled/)).toBeInTheDocument();
     expect(screen.getByText("care-planning-watcher-v2")).toBeInTheDocument();
-    expect(screen.getByText("3651")).toBeInTheDocument();
+    expect(screen.getByText("50 / 2000")).toBeInTheDocument();
     await userEvent.click(screen.getByText("Polling cadence"));
     expect(screen.getByText("7 days")).toBeInTheDocument();
     await userEvent.click(screen.getByText("Exclusion reasons"));

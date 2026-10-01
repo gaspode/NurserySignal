@@ -1405,3 +1405,13 @@ Paid-pilot activation check (2026-09-28):
   fmt/validate/plan/apply pass. API/database health is green, active queues and non-collector DLQs are empty, and the
   six retained collector DLQ messages are unchanged. Exact next step: decide whether 532.3/month is acceptable or
   separately preview a slower cadence for the 47 oldest watches; do not enable enrollment/scheduling implicitly.
+- CareProspect Phase B3 implements the controlled watcher runtime around the unchanged
+  `care-planning-watcher-v2` policy. Durable opportunity/signal watches use deterministic full-window staggering,
+  append-only enrolment/run history, bounded due selection (15 per invocation), shared collector queue/DLQ
+  isolation, targeted exact-reference Plota refresh, material-change ingestion through the normal revision and
+  enrichment path, lifecycle recomputation, immediate terminal/manual-block shutdown, and idempotent unchanged
+  handling. Database and schedule kill switches are independent; guardrails are 50 watcher requests/day and
+  2,000/month against the 20,000-request plan. Sources exposes persisted/due/cadence, actual/projected usage,
+  changed/unchanged/failure counts and emergency disable. Publication and withdrawal automation remain disabled.
+  The first deployment deliberately keeps EventBridge and database execution disabled; production enrolment,
+  stagger verification and activation results will be recorded here before Phase B3 is complete.

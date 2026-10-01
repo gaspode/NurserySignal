@@ -315,10 +315,14 @@ def test_worker_reconciles_care_planning_family_before_and_after_correlation(
         lambda *_: calls.append("correlate")
         or {"opportunity_id": "existing", "linked": True},
     )
+    monkeypatch.setattr(
+        "app.worker.recompute_care_opportunity_lifecycle_for_signal",
+        lambda *_: calls.append("lifecycle") or {"lifecycle_changes": 0},
+    )
 
     result = handler(
         {"Records": [{"messageId": "origin-1", "body": json.dumps(message)}]}, None
     )
 
     assert result == {"batchItemFailures": []}
-    assert calls == ["family", "correlate", "family"]
+    assert calls == ["family", "correlate", "family", "lifecycle"]

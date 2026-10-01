@@ -7,7 +7,11 @@ from app.ai_shadow import SUPPORTED_SHADOW_SOURCE_TYPES, evaluate_shadow, prompt
 from app.care_planning_review import planning_withdrawal_assessment
 from app.config import Settings
 from app.logging import configure_logging
-from app.queueing import EnrichmentMessage, PlanningOriginRecoveryResultMessage
+from app.queueing import (
+    EnrichmentMessage,
+    PlanningLifecycleWatchResultMessage,
+    PlanningOriginRecoveryResultMessage,
+)
 from app.repository import (
     ai_review_exists,
     apply_care_planning_ai_approval_policy,
@@ -18,9 +22,11 @@ from app.repository import (
     correlate_signal,
     get_raw_signal,
     queue_planning_origin_recovery,
+    recompute_care_opportunity_lifecycle_for_signal,
     reconcile_planning_family_signal,
     save_ai_review,
     save_enrichment,
+    update_care_planning_watch_result,
     update_planning_origin_recovery,
 )
 from app.review_triage import planning_refusal_assessment
@@ -31,6 +37,22 @@ logger = configure_logging()
 
 def process_message(settings: Settings, body: str) -> None:
     payload = json.loads(body)
+    if payload.get("message_type") == "planning_lifecycle_watch_result":
+        result = PlanningLifecycleWatchResultMessage.from_dict(payload)
+        update_care_planning_watch_result(
+            settings,
+            run_id=result.run_id,
+            watch_id=result.watch_id,
+            status=result.status,
+            details=result.details,
+        )
+        logger.info(
+            "planning_lifecycle_watch_result run_id=%s watch_id=%s status=%s",
+            result.run_id,
+            result.watch_id,
+            result.status,
+        )
+        return
     if payload.get("message_type") == "planning_origin_recovery_result":
         result = PlanningOriginRecoveryResultMessage.from_dict(payload)
         update_planning_origin_recovery(
@@ -99,6 +121,12 @@ def process_message(settings: Settings, body: str) -> None:
                     actor="SYSTEM_FUTURE_INGESTION",
                     limit=1,
                 )
+    if (
+        raw.get("vertical") == "CHILDRENS_HOME"
+        and raw.get("source_type") == "planning"
+        and (getattr(settings, "database_url", None) or getattr(settings, "db_secret_arn", None))
+    ):
+        recompute_care_opportunity_lifecycle_for_signal(settings, message.signal_id)
     logger.info(
         "enrichment signal_id=%s created=%s refused=%s withdrawn=%s opportunity_id=%s linked=%s",
         message.signal_id,

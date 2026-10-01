@@ -36,31 +36,32 @@ resource "aws_lambda_function" "backend" {
 
   environment {
     variables = {
-      APP_ENV                              = var.environment
-      SERVICE_NAME                         = "${local.name_prefix}-api"
-      DB_SECRET_ARN                        = aws_secretsmanager_secret.database.arn
-      EVIDENCE_BUCKET                      = aws_s3_bucket.raw_evidence.bucket
-      ENRICHMENT_QUEUE_URL                 = aws_sqs_queue.enrichment.url
-      ADMIN_GROUP                          = aws_cognito_user_group.administrators.name
-      CUSTOMER_GROUP                       = aws_cognito_user_group.caresignal_customers.name
-      COGNITO_USER_POOL_ID                 = aws_cognito_user_pool.main.id
-      CARESIGNAL_EMAIL_FROM                = var.caresignal_email_from
-      CARESIGNAL_PORTAL_URL                = "https://careprospect.co.uk"
-      CUSTOMER_DIGEST_QUEUE_URL            = aws_sqs_queue.customer_digest.url
-      CUSTOMER_PROVISIONING_QUEUE_URL      = aws_sqs_queue.customer_provisioning.url
-      AI_MODEL_ID                          = var.ai_model_id
-      AI_PROMPT_VERSION                    = var.ai_prompt_version
-      AI_PLANNING_PROMPT_VERSION           = var.ai_planning_prompt_version
-      AI_RECRUITMENT_PROMPT_VERSION        = var.ai_recruitment_prompt_version
-      AI_CARE_PLANNING_PROMPT_VERSION      = var.ai_care_planning_prompt_version
-      AI_CARE_RECRUITMENT_PROMPT_VERSION   = var.ai_care_recruitment_prompt_version
-      SOURCE_RUNS_TABLE_NAME               = aws_dynamodb_table.source_runs.name
-      PLANNING_MANUAL_RUN_QUEUE_URL        = aws_sqs_queue.planning_manual_runs.url
-      RECRUITMENT_MANUAL_RUN_QUEUE_URL     = aws_sqs_queue.recruitment_manual_runs.url
-      OFSTED_MANUAL_RUN_QUEUE_URL          = aws_sqs_queue.ofsted_manual_runs.url
-      COMPANIES_HOUSE_MANUAL_RUN_QUEUE_URL = aws_sqs_queue.companies_house_manual_runs.url
-      COMPANIES_HOUSE_LOOKUP_FUNCTION_NAME = aws_lambda_function.companies_house_collector.function_name
-      PROCUREMENT_MANUAL_RUN_QUEUE_URL     = aws_sqs_queue.procurement_manual_runs.url
+      APP_ENV                                 = var.environment
+      SERVICE_NAME                            = "${local.name_prefix}-api"
+      DB_SECRET_ARN                           = aws_secretsmanager_secret.database.arn
+      EVIDENCE_BUCKET                         = aws_s3_bucket.raw_evidence.bucket
+      ENRICHMENT_QUEUE_URL                    = aws_sqs_queue.enrichment.url
+      ADMIN_GROUP                             = aws_cognito_user_group.administrators.name
+      CUSTOMER_GROUP                          = aws_cognito_user_group.caresignal_customers.name
+      COGNITO_USER_POOL_ID                    = aws_cognito_user_pool.main.id
+      CARESIGNAL_EMAIL_FROM                   = var.caresignal_email_from
+      CARESIGNAL_PORTAL_URL                   = "https://careprospect.co.uk"
+      CUSTOMER_DIGEST_QUEUE_URL               = aws_sqs_queue.customer_digest.url
+      CUSTOMER_PROVISIONING_QUEUE_URL         = aws_sqs_queue.customer_provisioning.url
+      AI_MODEL_ID                             = var.ai_model_id
+      AI_PROMPT_VERSION                       = var.ai_prompt_version
+      AI_PLANNING_PROMPT_VERSION              = var.ai_planning_prompt_version
+      AI_RECRUITMENT_PROMPT_VERSION           = var.ai_recruitment_prompt_version
+      AI_CARE_PLANNING_PROMPT_VERSION         = var.ai_care_planning_prompt_version
+      AI_CARE_RECRUITMENT_PROMPT_VERSION      = var.ai_care_recruitment_prompt_version
+      SOURCE_RUNS_TABLE_NAME                  = aws_dynamodb_table.source_runs.name
+      PLANNING_MANUAL_RUN_QUEUE_URL           = aws_sqs_queue.planning_manual_runs.url
+      RECRUITMENT_MANUAL_RUN_QUEUE_URL        = aws_sqs_queue.recruitment_manual_runs.url
+      OFSTED_MANUAL_RUN_QUEUE_URL             = aws_sqs_queue.ofsted_manual_runs.url
+      COMPANIES_HOUSE_MANUAL_RUN_QUEUE_URL    = aws_sqs_queue.companies_house_manual_runs.url
+      COMPANIES_HOUSE_LOOKUP_FUNCTION_NAME    = aws_lambda_function.companies_house_collector.function_name
+      PROCUREMENT_MANUAL_RUN_QUEUE_URL        = aws_sqs_queue.procurement_manual_runs.url
+      CARE_LIFECYCLE_WATCHER_SCHEDULE_ENABLED = "false"
     }
   }
 

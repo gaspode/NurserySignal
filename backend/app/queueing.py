@@ -77,6 +77,41 @@ class PlanningOriginRecoveryResultMessage:
 
 
 @dataclass(frozen=True)
+class PlanningLifecycleWatchResultMessage:
+    """Collector-to-enrichment callback for one bounded lifecycle-watch poll."""
+
+    message_version: str
+    message_type: str
+    run_id: str
+    watch_id: str
+    status: str
+    details: dict[str, Any]
+
+    def to_json(self) -> str:
+        return json.dumps(asdict(self), separators=(",", ":"), sort_keys=True)
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, object]) -> PlanningLifecycleWatchResultMessage:
+        if payload.get("message_version") != "1.0":
+            raise ValueError("unsupported Planning watch result message version")
+        if payload.get("message_type") != "planning_lifecycle_watch_result":
+            raise ValueError("unsupported Planning watch result message type")
+        run_id = str(payload.get("run_id") or "").strip()
+        watch_id = str(payload.get("watch_id") or "").strip()
+        status = str(payload.get("status") or "").strip()
+        if not run_id or not watch_id:
+            raise ValueError("missing Planning watch result identity")
+        if status not in {"UNCHANGED", "CHANGED", "FAILED", "RATE_LIMITED"}:
+            raise ValueError("invalid Planning watch result status")
+        details = payload.get("details") or {}
+        if not isinstance(details, dict):
+            raise ValueError("invalid Planning watch result details")
+        return cls(
+            "1.0", "planning_lifecycle_watch_result", run_id, watch_id, status, details
+        )
+
+
+@dataclass(frozen=True)
 class SignalIngestionMessage:
     """Small, versioned collector-to-ingestion contract."""
 
@@ -122,6 +157,18 @@ def send_enrichment_message(settings: Settings, message: EnrichmentMessage) -> s
 
 def send_planning_origin_recovery_result(
     settings: Settings, message: PlanningOriginRecoveryResultMessage
+) -> str:
+    if not settings.enrichment_queue_url:
+        raise RuntimeError("ENRICHMENT_QUEUE_URL is not configured")
+    response = boto3.client("sqs").send_message(
+        QueueUrl=settings.enrichment_queue_url,
+        MessageBody=message.to_json(),
+    )
+    return str(response["MessageId"])
+
+
+def send_planning_lifecycle_watch_result(
+    settings: Settings, message: PlanningLifecycleWatchResultMessage
 ) -> str:
     if not settings.enrichment_queue_url:
         raise RuntimeError("ENRICHMENT_QUEUE_URL is not configured")

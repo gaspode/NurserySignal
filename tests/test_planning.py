@@ -7,7 +7,11 @@ from pathlib import Path
 from urllib.error import HTTPError
 
 import pytest
-from app.collector import collect_planning, recover_planning_origin
+from app.collector import (
+    collect_planning,
+    recover_planning_origin,
+    refresh_planning_lifecycle_watch,
+)
 from app.collector import handler as planning_handler
 from app.config import Settings
 from app.planning import (
@@ -503,6 +507,81 @@ def test_targeted_origin_recovery_uses_normal_ingestion_queue(monkeypatch) -> No
     assert result == {"requests": 1, "records_fetched": 1, "signals_queued": 1}
     assert [message.status for message in results] == ["FOUND"]
     assert queued[0].signal["vertical"] == "CHILDRENS_HOME"
+
+
+def test_planning_watch_material_change_uses_normal_ingestion(monkeypatch) -> None:
+    results = []
+    queued = []
+
+    class ExactProvider:
+        requests_made = 1
+
+        def applications_by_reference(self, reference, *, limit):
+            return PlanningReferenceSearchResult(
+                reference,
+                (record("Change of use to a children's home"),),
+                1,
+                False,
+            )
+
+    monkeypatch.setattr("app.collector.provider_api_key_from_secret", lambda arn: "secret")
+    monkeypatch.setattr("app.collector.PlotaProvider", lambda *args, **kwargs: ExactProvider())
+    monkeypatch.setattr(
+        "app.collector.send_planning_lifecycle_watch_result",
+        lambda settings, message: results.append(message),
+    )
+    monkeypatch.setattr(
+        "app.collector.send_ingestion_message", lambda settings, message: queued.append(message)
+    )
+    result = refresh_planning_lifecycle_watch(
+        Settings(planning_provider_secret_arn="arn:example"),
+        {
+            "run_id": "run-1",
+            "watch_id": "watch-1",
+            "planning_reference": "24/03385/FUL",
+            "planning_authority": "Bristol",
+            "latest_snapshot": {},
+            "site_postcode": "BS1 1AA",
+        },
+    )
+    assert result == {"requests": 1, "changed": 1, "unchanged": 0, "failed": 0}
+    assert results[0].status == "CHANGED"
+    assert len(queued) == 1
+
+
+def test_planning_watch_unchanged_response_does_not_duplicate_evidence(monkeypatch) -> None:
+    results = []
+    queued = []
+
+    class ExactProvider:
+        requests_made = 1
+
+        def applications_by_reference(self, reference, *, limit):
+            return PlanningReferenceSearchResult(reference, (record("Same"),), 1, False)
+
+    monkeypatch.setattr("app.collector.provider_api_key_from_secret", lambda arn: "secret")
+    monkeypatch.setattr("app.collector.PlotaProvider", lambda *args, **kwargs: ExactProvider())
+    monkeypatch.setattr("app.collector.planning_watch_snapshot", lambda metadata: {"same": True})
+    monkeypatch.setattr(
+        "app.collector.send_planning_lifecycle_watch_result",
+        lambda settings, message: results.append(message),
+    )
+    monkeypatch.setattr(
+        "app.collector.send_ingestion_message", lambda settings, message: queued.append(message)
+    )
+    result = refresh_planning_lifecycle_watch(
+        Settings(planning_provider_secret_arn="arn:example"),
+        {
+            "run_id": "run-2",
+            "watch_id": "watch-2",
+            "planning_reference": "24/03385/FUL",
+            "planning_authority": "Bristol",
+            "latest_snapshot": {"same": True},
+        },
+    )
+    assert result == {"requests": 1, "changed": 0, "unchanged": 1, "failed": 0}
+    assert results[0].status == "UNCHANGED"
+    assert queued == []
 
 
 def test_targeted_origin_recovery_cools_down_not_found(monkeypatch) -> None:

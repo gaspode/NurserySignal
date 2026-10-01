@@ -4,7 +4,7 @@ import hashlib
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from enum import StrEnum
 from typing import Any
 
@@ -215,6 +215,53 @@ def project_planning_watch_requests(cadence_counts: dict[str, int]) -> tuple[flo
         1,
     )
     return round(monthly / 30, 2), monthly
+
+
+def deterministic_initial_poll_at(
+    watch_identity: str, cadence_days: int, activated_at: datetime
+) -> datetime:
+    """Spread initial polls stably through the full cadence window and day."""
+    if cadence_days not in {7, 14, 30}:
+        raise ValueError("unsupported Planning watch cadence")
+    anchor = activated_at.astimezone(UTC).replace(minute=0, second=0, microsecond=0)
+    window_seconds = cadence_days * 86400
+    digest = hashlib.sha256(
+        f"{CARE_PLANNING_WATCHER_POLICY_VERSION}:{watch_identity}".encode()
+    ).digest()
+    # Keep at least one hour between enrollment and the first provider request.
+    offset_seconds = 3600 + int.from_bytes(digest[:8], "big") % (window_seconds - 3600)
+    return anchor + timedelta(seconds=offset_seconds)
+
+
+def planning_watch_snapshot(metadata: dict[str, Any]) -> dict[str, Any]:
+    """Small material-state projection used to avoid duplicate Planning revisions."""
+    provider_value = metadata.get("provider_record")
+    provider = provider_value if isinstance(provider_value, dict) else {}
+    decision_value = provider.get("decision")
+    provider_decision = decision_value if isinstance(decision_value, dict) else {}
+    outcome = canonical_planning_outcome(metadata)
+    return {
+        "canonical_outcome": outcome.outcome.value,
+        "planning_status": normalize_structured_planning_value(
+            metadata.get("planning_status") or metadata.get("status") or provider.get("status")
+        ),
+        "decision": normalize_structured_planning_value(
+            metadata.get("decision") or provider_decision.get("outcome")
+        ),
+        "decision_date": str(
+            metadata.get("decision_date")
+            or provider.get("date_decided")
+            or provider_decision.get("issued_date")
+            or ""
+        ),
+        "description": str(provider.get("description") or metadata.get("description") or "")
+        .strip()
+        .casefold(),
+        "address": str(provider.get("address") or metadata.get("address") or "")
+        .strip()
+        .casefold(),
+        "postcode": str(metadata.get("postcode") or "").replace(" ", "").upper(),
+    }
 
 
 def bootstrap_lifecycle_records(

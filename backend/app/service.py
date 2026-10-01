@@ -63,7 +63,7 @@ def ingest_signal(
             revision_key,
             content_hash,
         )
-        if changed and signal.source_type == "ofsted":
+        if changed and signal.source_type in {"planning", "ofsted"}:
             try:
                 dispatch_revision_enrichment(
                     settings,
@@ -75,13 +75,13 @@ def ingest_signal(
                 )
             except Exception as exc:
                 raise EnrichmentQueueError(
-                    "regulatory revision stored but enrichment queueing failed"
+                    "source revision stored but enrichment queueing failed"
                 ) from exc
         return IngestionResult(
             signal_id=str(existing.id),
             status="updated" if changed else "duplicate",
             evidence_key=revision_key,
-            enrichment_queued=changed and signal.source_type == "ofsted",
+            enrichment_queued=changed and signal.source_type in {"planning", "ofsted"},
         )
     if existing is None or not existing.evidence_key:
         put_raw_evidence(settings, settings.evidence_bucket, key, original_payload)

@@ -5,7 +5,6 @@ from decimal import Decimal
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
-import pytest
 from app.authorization import normalized_groups
 from app.handler import handler
 from app.repository import ReprocessResult
@@ -1202,7 +1201,7 @@ def test_care_opportunity_lifecycle_preview_is_admin_only_and_read_only(
     }
 
 
-def test_care_lifecycle_coordinator_is_preview_only(monkeypatch) -> None:
+def test_care_lifecycle_coordinator_previews_or_queues_bounded_due_watches(monkeypatch) -> None:
     monkeypatch.setattr(
         "app.handler.care_opportunity_lifecycle_preview",
         lambda settings: {"preview": True, "mutations": 0},
@@ -1220,11 +1219,27 @@ def test_care_lifecycle_coordinator_is_preview_only(monkeypatch) -> None:
         "max_due": 100,
         "provider_requests_queued": 0,
     }
-    with pytest.raises(ValueError, match="not enabled"):
-        handler(
-            {"operation": "care_lifecycle_refresh_coordinator", "preview": False},
-            None,
-        )
+    monkeypatch.setattr(
+        "app.handler.queue_due_care_planning_watches",
+        lambda settings, max_due: {"queued": 3, "max_due": max_due},
+    )
+    monkeypatch.setattr(
+        "app.handler.enrol_care_planning_watches",
+        lambda settings, **kwargs: {
+            "created": 0,
+            "updated": 0,
+            "disabled": 0,
+            "enabled": 259,
+            "provider_requests": 0,
+        },
+    )
+    result = handler(
+        {"operation": "care_lifecycle_refresh_coordinator", "preview": False, "max_due": 3},
+        None,
+    )
+    assert result["queued"] == 3
+    assert result["max_due"] == 3
+    assert result["enrolment"]["provider_requests"] == 0
 
 
 def test_care_lifecycle_bootstrap_is_admin_only_and_bounded(monkeypatch) -> None:

@@ -34,6 +34,7 @@ def test_initial_migration_exists_and_contains_provenance_tables() -> None:
         "0026_planning_application_families.sql",
         "0027_care_opportunity_lifecycle_v1.sql",
         "0028_care_planning_watcher_v2.sql",
+        "0029_care_planning_watcher_runtime.sql",
     ]
     sql = "\n".join(path.read_text(encoding="utf-8") for path in files)
     tables = (
