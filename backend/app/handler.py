@@ -61,6 +61,7 @@ from app.db import check_connection
 from app.historical_research_repository import import_bundled_historical_corpus
 from app.ingestion import NormalizedSignal
 from app.logging import configure_logging
+from app.operations import operations_summary
 from app.organisation_lookup import ManualCompanyLookupError, lookup_manual_company_candidate
 from app.planning_backfill import PlanningBackfillBounds, chunk_payload
 from app.repository import (
@@ -334,6 +335,8 @@ def _admin_path(path: str) -> tuple[str, str | None]:
             return "planning-backfill-status", parts[0]
     if path == "/admin/procurement-evaluation":
         return "procurement-evaluation", None
+    if path == "/admin/operations/summary":
+        return "operations-summary", None
     if path.startswith("/admin/sources/") and path.endswith("/run"):
         parts = path.split("/")
         if len(parts) == 5 and parts[3] in SOURCE_DEFINITIONS:
@@ -1734,6 +1737,11 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                         view=_query(event, "view") or "inventory",
                     ),
                 )
+            if action == "operations-summary" and method == "GET":
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                return _response(200, operations_summary(settings))
             if action == "opportunity-lifecycle-preview" and method == "GET":
                 admin_error = _require_admin(claims, settings)
                 if admin_error:

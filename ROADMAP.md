@@ -1504,3 +1504,14 @@ Paid-pilot activation check (2026-09-28):
   queues and DLQs are empty, while the six pre-existing collector DLQ messages are unchanged. Runtime commit
   `87985a3` passed CI run `36856743234` and deployed disabled in run `36856852584`; activation commit `7de8623`
   passed CI run `36857520034` and deployed in run `36857631101`.
+- SignalHub operational observability adds an admin-only, read-only
+  `GET /admin/operations/summary` contract (`signalhub-operations-summary-v1`) and a compact Operations dashboard.
+  The bounded response aggregates persisted rolling 24-hour/7-day/30-day ingestion and review counts, matching and
+  opportunity health, CareProspect lifecycle/history, Planning watcher usage and guardrails, publication progress,
+  withdrawal status, data-quality debt and recent watcher/publication runs. It reuses the authoritative hygiene and
+  `care-publication-v3` projection once per request, exposes factual rate numerators/denominators, and labels missing
+  collector/queue telemetry unavailable rather than calling AWS or providers synchronously. Investigation links reuse
+  the existing queues and detail pages. The endpoint contains no customer data or secrets and performs no mutations,
+  provider calls, watcher enrolment, publication or withdrawal. Phase D remains disabled. Validation currently passes
+  557 backend and 95 frontend tests, Ruff, frontend build and Terraform fmt/validate; production deployment and live
+  metric verification are the remaining completion gate.

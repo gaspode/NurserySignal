@@ -1,3 +1,5 @@
+import json
+
 from app.handler import handler
 
 
@@ -9,6 +11,34 @@ def test_root_endpoint() -> None:
 def test_unknown_endpoint() -> None:
     response = handler({"rawPath": "/missing", "requestContext": {"http": {"method": "GET"}}}, None)
     assert response["statusCode"] == 404
+
+
+def test_operations_summary_is_admin_only(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "app.handler.operations_summary",
+        lambda settings: {"schema_version": "signalhub-operations-summary-v1", "read_only": True},
+    )
+    base = {
+        "rawPath": "/admin/operations/summary",
+        "requestContext": {
+            "http": {"method": "GET"},
+            "authorizer": {"jwt": {"claims": {"sub": "staff"}}},
+        },
+    }
+    denied = handler(base, None)
+    assert denied["statusCode"] == 403
+    allowed = {
+        **base,
+        "requestContext": {
+            "http": {"method": "GET"},
+            "authorizer": {
+                "jwt": {"claims": {"sub": "admin", "cognito:groups": ["NurserySignalAdmins"]}}
+            },
+        },
+    }
+    response = handler(allowed, None)
+    assert response["statusCode"] == 200
+    assert json.loads(response["body"])["read_only"] is True
 
 
 def test_options_preflight_does_not_require_application_authentication() -> None:

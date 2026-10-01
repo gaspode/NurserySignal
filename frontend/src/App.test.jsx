@@ -1,7 +1,7 @@
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { AdminNavigation, BacktestingPage, CustomersPage, Dashboard, LoginPage, MatchReviewPage, OpportunitiesPage, OpportunityDetail, OpportunityHygienePage, OrganisationsPage, ProcurementEvaluationPage, ReviewInboxPage, ReviewedSignalsPage, SignalDetail, SourcesPage, UnmatchedSignalsPage, restoredVertical, verticalScopedPath } from "./App.jsx";
+import { AdminNavigation, BacktestingPage, CustomersPage, Dashboard, LoginPage, MatchReviewPage, OperationsPage, OpportunitiesPage, OpportunityDetail, OpportunityHygienePage, OrganisationsPage, ProcurementEvaluationPage, ReviewInboxPage, ReviewedSignalsPage, SignalDetail, SourcesPage, UnmatchedSignalsPage, restoredVertical, verticalScopedPath } from "./App.jsx";
 
 const pendingItem = {
   id: "signal-1",
@@ -138,6 +138,7 @@ describe("admin frontend", () => {
     expect(screen.getByRole("button", { name: "Review queue" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "All signals" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Unmatched" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Operations" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "All opportunities" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Needs attention" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Publication candidates" })).toHaveClass("active");
@@ -152,6 +153,32 @@ describe("admin frontend", () => {
     await userEvent.click(screen.getByRole("button", { name: "Needs attention" }));
     expect(onNavigate).toHaveBeenCalledWith("/inbox");
     expect(onNavigate).toHaveBeenCalledWith("/opportunity-hygiene");
+  });
+
+  it("renders the read-only operational summary and investigation links", async () => {
+    const onNavigate = vi.fn();
+    const apiClient = vi.fn().mockResolvedValue({
+      schema_version: "signalhub-operations-summary-v1",
+      generated_at: "2026-10-01T12:00:00Z",
+      health: { queues_ok: null, watcher_ok: true, publication_ok: true, provider_quota_ok: true },
+      ingestion: { windows: { "24h": { records_collected: 4, signals_accepted: 3, signals_rejected: 1, pending_review: 0 }, "7d": {}, "30d": {} }, failure_metric: { available: false } },
+      signals: { total: 10, unmatched: 2, by_review_status: { PENDING: 1, APPROVED: 8, REJECTED: 1 }, review_rates: { acceptance: { rate_percent: 88.9 } } },
+      opportunities: { active_total: 5, needs_attention: 2, match_review_backlog: 1 },
+      lifecycle: { current: { PLANNING_APPROVED: 3, PLANNING_PENDING: 2 } },
+      planning_watcher: { enabled: true, schedule_enabled: true, policy_version: "care-planning-watcher-v2", enabled_watches: 259, due_now: 1, provider_requests_today: 2, provider_requests_current_month: 3, projected_requests_per_30_days: 532.3, polls: { changed: 1, failed: 0, change_rate: { rate_percent: 50 }, failure_rate: { rate_percent: 0 } } },
+      publication: { enabled: true, recurring_enabled: true, policy_version: "care-publication-v3", total_published: 87, automatically_published: 35, manually_protected_published: 52, policy_outcomes: { AUTO_PUBLISH_ELIGIBLE_UNPUBLISHED: 513, QA_HOLDOUT: 68, MANUAL_REVIEW: 249 }, latest_execution: { failed: 0 } },
+      data_quality: { needs_review_lifecycle: 164, missing_organisation_identity: 3, missing_site_or_location_identity: 2, duplicate_or_superseded: 0, manual_automation_blocks: 1 },
+      queues: { available: false, reason: "Queue telemetry is not cached." },
+      withdrawal: { enabled: false, message: "Phase D automatic withdrawal is not active." },
+    });
+    render(<OperationsPage apiClient={apiClient} onNavigate={onNavigate} />);
+    expect(await screen.findByRole("heading", { name: "Operations" })).toBeInTheDocument();
+    expect(screen.getByText("259")).toBeInTheDocument();
+    expect(screen.getByText("Phase D automatic withdrawal is not active.")).toBeInTheDocument();
+    expect(screen.getByText("Queue telemetry is not cached.")).toBeInTheDocument();
+    await userEvent.click(screen.getAllByRole("button", { name: /Needs attention/ })[0]);
+    expect(onNavigate).toHaveBeenCalledWith("/opportunity-hygiene");
+    expect(apiClient).toHaveBeenCalledWith("/admin/operations/summary");
   });
 
   it("renders the grouped navigation as a stacked mobile menu", () => {

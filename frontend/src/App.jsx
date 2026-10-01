@@ -307,6 +307,7 @@ export function AdminNavigation({ currentPath, onNavigate, mobile = false }) {
   const link = (label, path, active, child = false) => <button key={path} className={`nav-link${child ? " nav-child" : ""}${active ? " active" : ""}`} onClick={() => onNavigate(path)}>{label}</button>;
   return <nav className={mobile ? "admin-navigation mobile-navigation-list" : "admin-navigation desktop-navigation"} aria-label={mobile ? "Mobile navigation" : "Primary navigation"}>
     {link("Overview", "/", route === "/")}
+    {link("Operations", "/operations", route.startsWith("/operations"))}
     <div className="nav-group"><span className="nav-group-label">Signals</span>
       {link("Review queue", "/inbox", route.startsWith("/inbox"), true)}
       {link("All signals", "/history", route.startsWith("/history"), true)}
@@ -731,6 +732,58 @@ export function Dashboard({ apiClient, onNavigate }) {
       </>}
     </section>
   );
+}
+
+function HealthFlag({ label, value }) {
+  const tone = value === true ? "approved" : value === false ? "rejected" : "neutral";
+  return <span>{label} <Badge tone={tone}>{value === true ? "OK" : value === false ? "Attention" : "Unavailable"}</Badge></span>;
+}
+
+export function OperationsPage({ apiClient, onNavigate }) {
+  const [summary, setSummary] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState("");
+  const load = async ({ initial = false } = {}) => {
+    if (initial) setLoading(true); else setRefreshing(true);
+    setError("");
+    try { setSummary(await apiClient("/admin/operations/summary")); }
+    catch (loadError) { setError(loadError.message || "Operational health could not be loaded."); }
+    finally { setLoading(false); setRefreshing(false); }
+  };
+  useEffect(() => { load({ initial: true }); }, [apiClient]);
+  if (loading) return <LoadingState label="Loading operational health" />;
+  if (error) return <ErrorState message={error} onRetry={() => load({ initial: true })} />;
+  const signals = summary?.signals || {};
+  const opportunities = summary?.opportunities || {};
+  const lifecycle = summary?.lifecycle?.current || {};
+  const watcher = summary?.planning_watcher || {};
+  const publication = summary?.publication || {};
+  const quality = summary?.data_quality || {};
+  const windows = summary?.ingestion?.windows || {};
+  return <section>
+    <div className="page-heading"><div><p className="eyebrow">Operational health</p><h1>Operations</h1><p className="muted">A read-only view of ingestion, review, lifecycle automation and publication.</p></div><RefreshButton busy={refreshing} onClick={load} /></div>
+    <div className="source-counts" aria-label="Health flags"><HealthFlag label="Queues" value={summary.health?.queues_ok} /><HealthFlag label="Watcher" value={summary.health?.watcher_ok} /><HealthFlag label="Publication" value={summary.health?.publication_ok} /><HealthFlag label="Provider quota" value={summary.health?.provider_quota_ok} /></div>
+    <div className="metric-grid">
+      <Metric label="Pending review" value={signals.by_review_status?.PENDING || 0} tone="amber" onClick={() => onNavigate("/inbox")} />
+      <Metric label="Active opportunities" value={opportunities.active_total || 0} tone="green" onClick={() => onNavigate("/opportunities")} />
+      <Metric label="Needs attention" value={opportunities.needs_attention || 0} tone="amber" onClick={() => onNavigate("/opportunity-hygiene")} />
+      <Metric label="Unmatched signals" value={signals.unmatched || 0} tone="slate" onClick={() => onNavigate("/unmatched")} />
+      <Metric label="Published" value={publication.total_published || 0} tone="green" onClick={() => onNavigate("/opportunity-hygiene?view=publication_candidates")} />
+      <Metric label="Publication QA" value={publication.policy_outcomes?.QA_HOLDOUT || 0} tone="amber" onClick={() => onNavigate("/opportunity-hygiene?view=publication_candidates")} />
+    </div>
+    <div className="dashboard-grid">
+      <article className="panel"><div className="panel-heading"><h2>Ingestion</h2><button className="text-button" onClick={() => onNavigate("/sources")}>Sources</button></div><div className="table-wrap"><table><thead><tr><th>Window</th><th>Collected</th><th>Approved</th><th>Rejected</th><th>Pending</th></tr></thead><tbody>{["24h", "7d", "30d"].map((key) => <tr key={key}><td>{key}</td><td>{windows[key]?.records_collected || 0}</td><td>{windows[key]?.signals_accepted || 0}</td><td>{windows[key]?.signals_rejected || 0}</td><td>{windows[key]?.pending_review || 0}</td></tr>)}</tbody></table></div>{summary.ingestion?.failure_metric?.available === false && <p className="muted small-text">Ingestion failure totals unavailable from persisted SQL telemetry.</p>}</article>
+      <article className="panel"><div className="panel-heading"><h2>Signal and matching health</h2><button className="text-button" onClick={() => onNavigate("/history")}>All signals</button></div><div className="source-counts"><span>Total <strong>{signals.total || 0}</strong></span><span>Approved <strong>{signals.by_review_status?.APPROVED || 0}</strong></span><span>Rejected <strong>{signals.by_review_status?.REJECTED || 0}</strong></span><span>Match review <strong>{opportunities.match_review_backlog || 0}</strong></span></div><p className="muted small-text">Acceptance rate {signals.review_rates?.acceptance?.rate_percent ?? "—"}% across decided signals.</p></article>
+      <article className="panel"><div className="panel-heading"><h2>CareProspect lifecycle</h2><button className="text-button" onClick={() => onNavigate("/opportunities")}>Opportunities</button></div>{Object.entries(lifecycle).map(([key, value]) => <div className="source-row" key={key}><span>{titleCase(key)}</span><strong>{value}</strong></div>)}</article>
+      <article className="panel"><div className="panel-heading"><h2>Planning watcher</h2><button className="text-button" onClick={() => onNavigate("/sources")}>Watcher detail</button></div><p><Badge tone={watcher.enabled && watcher.schedule_enabled ? "approved" : "rejected"}>{watcher.enabled && watcher.schedule_enabled ? "ENABLED" : "DISABLED"}</Badge> <span className="muted small-text">{watcher.policy_version}</span></p><div className="source-counts"><span>Enabled <strong>{watcher.enabled_watches || 0}</strong></span><span>Due <strong>{watcher.due_now || 0}</strong></span><span>Requests today <strong>{watcher.provider_requests_today || 0}</strong></span><span>This month <strong>{watcher.provider_requests_current_month || 0}</strong></span><span>Changed <strong>{watcher.polls?.changed || 0}</strong></span><span>Failed <strong>{watcher.polls?.failed || 0}</strong></span></div><p className="muted small-text">Projected {watcher.projected_requests_per_30_days ?? "—"} requests / 30 days · change rate {watcher.polls?.change_rate?.rate_percent ?? "—"}% · failure rate {watcher.polls?.failure_rate?.rate_percent ?? "—"}%.</p></article>
+      <article className="panel"><div className="panel-heading"><h2>Automatic publication</h2><button className="text-button" onClick={() => onNavigate("/opportunity-hygiene?view=publication_candidates")}>Candidates</button></div><p><Badge tone={publication.enabled && publication.recurring_enabled ? "approved" : "rejected"}>{publication.enabled && publication.recurring_enabled ? "ENABLED" : "DISABLED"}</Badge> <span className="muted small-text">{publication.policy_version}</span></p><div className="source-counts"><span>Automatic <strong>{publication.automatically_published || 0}</strong></span><span>Manual/protected <strong>{publication.manually_protected_published || 0}</strong></span><span>Eligible unpublished <strong>{publication.policy_outcomes?.AUTO_PUBLISH_ELIGIBLE_UNPUBLISHED || 0}</strong></span><span>Manual review <strong>{publication.policy_outcomes?.MANUAL_REVIEW || 0}</strong></span><span>Last failed <strong>{publication.latest_execution?.failed || 0}</strong></span></div></article>
+      <article className="panel"><div className="panel-heading"><h2>Data quality</h2><button className="text-button" onClick={() => onNavigate("/opportunity-hygiene")}>Needs attention</button></div><div className="source-counts"><span>Needs review lifecycle <strong>{quality.needs_review_lifecycle || 0}</strong></span><span>Missing organisation <strong>{quality.missing_organisation_identity || 0}</strong></span><span>Missing location <strong>{quality.missing_site_or_location_identity || 0}</strong></span><span>Duplicate/superseded <strong>{quality.duplicate_or_superseded || 0}</strong></span><span>Automation blocks <strong>{quality.manual_automation_blocks || 0}</strong></span></div></article>
+      <article className="panel"><div className="panel-heading"><h2>Queues and DLQs</h2></div>{summary.queues?.available ? <div className="source-counts">{(summary.queues.items || []).map((item) => <span key={item.name}>{titleCase(item.name)} <strong>{item.depth}</strong></span>)}</div> : <p className="muted">{summary.queues?.reason || "Queue telemetry is unavailable."}</p>}</article>
+      <article className="panel"><div className="panel-heading"><h2>Withdrawal automation</h2></div><p><Badge>{summary.withdrawal?.enabled ? "ENABLED" : "DISABLED"}</Badge></p><p className="muted">{summary.withdrawal?.message}</p></article>
+    </div>
+    <p className="muted small-text">Generated {formatDate(summary.generated_at, true)} · {summary.schema_version} · UTC rolling windows</p>
+  </section>;
 }
 
 function Metric({ label, value, tone, onClick }) {
@@ -1749,6 +1802,6 @@ export default function App() {
   const defaultSignalBack = () => navigate(`${detailMode === "inbox" ? "/inbox" : detailMode === "unmatched" ? "/unmatched" : "/history"}${listQuery ? `?${listQuery}` : ""}`);
   const showVertical = vertical === "ALL";
   return <Shell user={auth.user} onLogout={auth.logout} onNavigate={navigate} currentPath={path} vertical={vertical} onVerticalChange={onVerticalChange}>
-    {detailMatch ? <SignalDetail key={vertical} signalId={detailMatch[2]} apiClient={scopedApiClient} queueMode={detailMode === "inbox"} unmatchedMode={detailMode === "unmatched"} initialNotice={detailNotice} queueQuery={listQuery} onBack={signalBack || defaultSignalBack} onReviewed={({ message, nextId }) => { const params = new URLSearchParams(listQuery); params.set("notice", message); const suffix = params.toString(); navigate(nextId ? `/inbox/${nextId}?${suffix}` : `/inbox?${suffix}`); }} /> : opportunityMatch ? <OpportunityDetail key={vertical} opportunityId={opportunityMatch[1]} apiClient={scopedApiClient} contextQuery={listQuery} onNavigate={navigate} onBack={() => { const params = new URLSearchParams(listQuery); navigate(params.get("from") === "opportunity-hygiene" ? hygieneListPath(params) : "/opportunities"); }} /> : route === "/inbox" ? <ReviewInboxPage key={vertical} apiClient={scopedApiClient} onNavigate={navigate} initialQuery={listQuery} showVertical={showVertical} /> : route === "/history" ? <ReviewedSignalsPage key={vertical} apiClient={scopedApiClient} onNavigate={navigate} initialQuery={listQuery} showVertical={showVertical} /> : route === "/unmatched" ? <UnmatchedSignalsPage key={vertical} apiClient={scopedApiClient} onNavigate={navigate} initialQuery={listQuery} showVertical={showVertical} /> : route === "/match-review" ? <MatchReviewPage key={vertical} apiClient={scopedApiClient} onNavigate={navigate} showVertical={showVertical} /> : route === "/opportunities" ? <OpportunitiesPage key={vertical} apiClient={scopedApiClient} onNavigate={navigate} showVertical={showVertical} /> : route === "/opportunity-hygiene" ? <OpportunityHygienePage key={listQuery || "needs-attention"} apiClient={apiClient} onNavigate={navigate} initialQuery={listQuery} /> : route === "/sources" ? <SourcesPage key={vertical} apiClient={scopedApiClient} selectedVertical={vertical} onNavigate={navigate} /> : route === "/procurement" ? <ProcurementEvaluationPage key={vertical} apiClient={scopedApiClient} /> : route === "/organisations" ? <OrganisationsPage key={vertical} apiClient={scopedApiClient} /> : route === "/customers" ? <CustomersPage apiClient={apiClient} /> : route === "/backtesting" ? <BacktestingPage key={vertical} apiClient={scopedApiClient} selectedVertical={vertical} /> : <Dashboard key={vertical} apiClient={scopedApiClient} onNavigate={navigate} />}
+    {detailMatch ? <SignalDetail key={vertical} signalId={detailMatch[2]} apiClient={scopedApiClient} queueMode={detailMode === "inbox"} unmatchedMode={detailMode === "unmatched"} initialNotice={detailNotice} queueQuery={listQuery} onBack={signalBack || defaultSignalBack} onReviewed={({ message, nextId }) => { const params = new URLSearchParams(listQuery); params.set("notice", message); const suffix = params.toString(); navigate(nextId ? `/inbox/${nextId}?${suffix}` : `/inbox?${suffix}`); }} /> : opportunityMatch ? <OpportunityDetail key={vertical} opportunityId={opportunityMatch[1]} apiClient={scopedApiClient} contextQuery={listQuery} onNavigate={navigate} onBack={() => { const params = new URLSearchParams(listQuery); navigate(params.get("from") === "opportunity-hygiene" ? hygieneListPath(params) : "/opportunities"); }} /> : route === "/operations" ? <OperationsPage apiClient={apiClient} onNavigate={navigate} /> : route === "/inbox" ? <ReviewInboxPage key={vertical} apiClient={scopedApiClient} onNavigate={navigate} initialQuery={listQuery} showVertical={showVertical} /> : route === "/history" ? <ReviewedSignalsPage key={vertical} apiClient={scopedApiClient} onNavigate={navigate} initialQuery={listQuery} showVertical={showVertical} /> : route === "/unmatched" ? <UnmatchedSignalsPage key={vertical} apiClient={scopedApiClient} onNavigate={navigate} initialQuery={listQuery} showVertical={showVertical} /> : route === "/match-review" ? <MatchReviewPage key={vertical} apiClient={scopedApiClient} onNavigate={navigate} showVertical={showVertical} /> : route === "/opportunities" ? <OpportunitiesPage key={vertical} apiClient={scopedApiClient} onNavigate={navigate} showVertical={showVertical} /> : route === "/opportunity-hygiene" ? <OpportunityHygienePage key={listQuery || "needs-attention"} apiClient={apiClient} onNavigate={navigate} initialQuery={listQuery} /> : route === "/sources" ? <SourcesPage key={vertical} apiClient={scopedApiClient} selectedVertical={vertical} onNavigate={navigate} /> : route === "/procurement" ? <ProcurementEvaluationPage key={vertical} apiClient={scopedApiClient} /> : route === "/organisations" ? <OrganisationsPage key={vertical} apiClient={scopedApiClient} /> : route === "/customers" ? <CustomersPage apiClient={apiClient} /> : route === "/backtesting" ? <BacktestingPage key={vertical} apiClient={scopedApiClient} selectedVertical={vertical} /> : <Dashboard key={vertical} apiClient={scopedApiClient} onNavigate={navigate} />}
   </Shell>;
 }
