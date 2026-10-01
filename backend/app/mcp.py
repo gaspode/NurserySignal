@@ -1197,6 +1197,20 @@ def _validate_private_key_jwt(
     ):
         raise MCPError("unauthorized", "OAuth client JWKS is invalid", rpc_code=-32001)
     token_endpoint = f"{str(settings.mcp_oauth_issuer).rstrip('/')}/oauth/token"
+    diagnostic_claims: dict[str, Any] = {}
+    diagnostic_header: dict[str, Any] = {}
+    try:
+        diagnostic_claims = jwt.decode(
+            assertion,
+            options={
+                "verify_signature": False,
+                "verify_aud": False,
+                "verify_exp": False,
+            },
+        )
+        diagnostic_header = jwt.get_unverified_header(assertion)
+    except PyJWTError:
+        pass
     try:
         key = _jwk_clients.setdefault(
             jwks_uri, PyJWKClient(jwks_uri, cache_keys=True, timeout=5)
@@ -1207,9 +1221,25 @@ def _validate_private_key_jwt(
             algorithms=["RS256"],
             issuer=client_id,
             audience=token_endpoint,
-            options={"require": ["iss", "sub", "aud", "exp", "iat", "jti"]},
+            options={"require": ["iss", "sub", "aud", "exp"]},
         )
     except (PyJWKClientError, PyJWTError) as exc:
+        diagnostic_audience = diagnostic_claims.get("aud")
+        audience_matches = diagnostic_audience == token_endpoint or (
+            isinstance(diagnostic_audience, list)
+            and token_endpoint in diagnostic_audience
+        )
+        logger.warning(
+            "mcp_oauth_client_assertion_rejected client_id=%s alg=%s claim_keys=%s "
+            "issuer_match=%s subject_match=%s audience_match=%s error_type=%s",
+            client_id,
+            diagnostic_header.get("alg"),
+            sorted(str(key) for key in diagnostic_claims),
+            diagnostic_claims.get("iss") == client_id,
+            diagnostic_claims.get("sub") == client_id,
+            audience_matches,
+            type(exc).__name__,
+        )
         raise MCPError(
             "unauthorized", "OAuth client assertion is invalid", rpc_code=-32001
         ) from exc

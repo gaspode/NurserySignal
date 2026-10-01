@@ -33,6 +33,10 @@ Current gate:
   token authentication methods, and exact web and desktop authorization requests both reach Cognito.
   Exact next step: remove the stale ChatGPT web connection, add the production `/mcp` URL again, and
   complete one fresh web authorization so ChatGPT sends its signed token-endpoint assertion.
+- The first live web callback confirmed signed client authentication reached `/oauth/token`; the
+  remaining `401` exposed an over-strict assertion profile that treated optional RFC 7523 `iat`/`jti`
+  claims as mandatory. The validator now requires the standard `iss`/`sub`/`aud`/`exp` set and emits
+  only redacted claim-shape diagnostics on rejection.
 - MCP v1 is deployed at the production `/mcp` endpoint with RFC 9728 protected-resource discovery,
   an application-owned 401 Bearer challenge and an OAuth 2.1 authorization-code/PKCE facade. The
   canonical resource is the exact `/mcp` URL and RFC 8707 resource binding is preserved through

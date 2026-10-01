@@ -611,9 +611,7 @@ def test_private_key_jwt_signature_issuer_subject_and_audience_are_verified(monk
         "iss": mcp.CHATGPT_CIMD_URL,
         "sub": mcp.CHATGPT_CIMD_URL,
         "aud": "https://api.example/oauth/token",
-        "iat": now,
         "exp": now + timedelta(minutes=5),
-        "jti": "assertion-id",
     }
     assertion = mcp.jwt.encode(
         claims, private_key, algorithm="RS256", headers={"kid": "test"}
