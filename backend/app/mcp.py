@@ -3,13 +3,19 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import secrets
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
+import jwt
+from jwt import PyJWKClient, PyJWTError
 from psycopg.types.json import Jsonb
 
 from app.config import Settings
@@ -34,6 +40,10 @@ READ_SCOPE = "signalhub-mcp/read"
 PROTOCOL_VERSION = "2025-06-18"
 DEFAULT_LIMIT = 20
 MAX_LIMIT = 100
+CHATGPT_CIMD_URL = "https://chatgpt.com/oauth/client.json"
+CHATGPT_REDIRECT_URI = "https://chatgpt.com/connector_platform_oauth_redirect"
+_jwk_clients: dict[str, PyJWKClient] = {}
+_cimd_cache: tuple[float, dict[str, Any]] | None = None
 SOURCE_SCHEDULES = {
     "planning": {"enabled": True, "schedule": "rate(1 day)", "provider": "Plota"},
     "recruitment": {
@@ -804,19 +814,55 @@ def _headers(event: dict[str, Any]) -> dict[str, str]:
     return {str(k).lower(): str(v) for k, v in (event.get("headers") or {}).items()}
 
 
+def _decode_access_token(token: str, settings: Settings) -> dict[str, Any]:
+    if not settings.mcp_token_issuer:
+        raise MCPError("unavailable", "MCP token issuer is not configured", rpc_code=-32003)
+    try:
+        unverified = jwt.decode(
+            token,
+            options={"verify_signature": False, "verify_aud": False},
+            algorithms=["RS256"],
+        )
+        client_id = str(unverified.get("client_id") or "")
+        audience = unverified.get("aud")
+        is_service = bool(
+            settings.mcp_service_client_id and client_id == settings.mcp_service_client_id
+        )
+        if not is_service and audience != settings.mcp_resource_url:
+            raise MCPError("unauthorized", "MCP token audience is invalid", rpc_code=-32001)
+        issuer = settings.mcp_token_issuer.rstrip("/")
+        jwks = _jwk_clients.setdefault(
+            issuer, PyJWKClient(f"{issuer}/.well-known/jwks.json", cache_keys=True)
+        )
+        key = jwks.get_signing_key_from_jwt(token).key
+        options = {"require": ["exp", "iat", "iss"], "verify_aud": not is_service}
+        return jwt.decode(
+            token,
+            key,
+            algorithms=["RS256"],
+            issuer=issuer,
+            audience=settings.mcp_resource_url if not is_service else None,
+            options=options,
+        )
+    except MCPError:
+        raise
+    except PyJWTError as exc:
+        raise MCPError("unauthorized", "OAuth access token is invalid", rpc_code=-32001) from exc
+
+
 def _authenticate(event: dict[str, Any], settings: Settings) -> dict[str, Any]:
-    claims = event.get("requestContext", {}).get("authorizer", {}).get("jwt", {}).get("claims")
-    if not isinstance(claims, dict):
+    authorization = _headers(event).get("authorization", "")
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not token.strip():
         raise MCPError("unauthorized", "OAuth bearer token required", rpc_code=-32001)
+    claims = _decode_access_token(token.strip(), settings)
+    if claims.get("token_use") != "access":
+        raise MCPError("unauthorized", "OAuth access token required", rpc_code=-32001)
     scopes = set(str(claims.get("scope") or "").split())
     if READ_SCOPE not in scopes:
         raise MCPError("unauthorized", "MCP read scope required", rpc_code=-32001)
     client_id = str(claims.get("client_id") or claims.get("aud") or "")
-    groups = claims.get("cognito:groups") or ""
-    if isinstance(groups, str):
-        groups = {value.strip() for value in groups.strip("[]").split(",") if value.strip()}
-    else:
-        groups = {str(value) for value in groups}
+    groups = _claim_groups(claims)
     is_service = bool(
         settings.mcp_service_client_id and client_id == settings.mcp_service_client_id
     )
@@ -834,6 +880,13 @@ def _authenticate(event: dict[str, Any], settings: Settings) -> dict[str, Any]:
     }
 
 
+def _claim_groups(claims: dict[str, Any]) -> set[str]:
+    values = claims.get("cognito:groups") or ""
+    if isinstance(values, str):
+        return {value.strip() for value in values.strip("[]").split(",") if value.strip()}
+    return {str(value) for value in values}
+
+
 def protected_resource_metadata(settings: Settings) -> dict[str, Any]:
     if not settings.mcp_resource_url or not settings.mcp_oauth_issuer:
         raise MCPError("unavailable", "MCP OAuth metadata is not configured", rpc_code=-32003)
@@ -849,30 +902,29 @@ def protected_resource_metadata(settings: Settings) -> dict[str, Any]:
 def authorization_server_metadata(settings: Settings) -> dict[str, Any]:
     if not settings.mcp_oauth_issuer or not settings.mcp_oauth_authorization_server:
         raise MCPError("unavailable", "MCP OAuth metadata is not configured", rpc_code=-32003)
-    base = settings.mcp_oauth_authorization_server.rstrip("/")
+    issuer = settings.mcp_oauth_issuer.rstrip("/")
     return {
-        "issuer": settings.mcp_oauth_issuer,
-        "authorization_endpoint": f"{base}/oauth2/authorize",
-        "token_endpoint": f"{base}/oauth2/token",
-        "revocation_endpoint": f"{base}/oauth2/revoke",
+        "issuer": issuer,
+        "authorization_endpoint": f"{issuer}/oauth/authorize",
+        "token_endpoint": f"{issuer}/oauth/token",
         "response_types_supported": ["code"],
         "grant_types_supported": ["authorization_code", "refresh_token"],
         "code_challenge_methods_supported": ["S256"],
-        "token_endpoint_auth_methods_supported": [
-            "none",
-            "client_secret_basic",
-            "client_secret_post",
-        ],
-        "scopes_supported": ["openid", "email", READ_SCOPE],
-        "authorization_response_iss_parameter_supported": False,
+        "token_endpoint_auth_methods_supported": ["none"],
+        "scopes_supported": [READ_SCOPE],
+        "client_id_metadata_document_supported": True,
+        "authorization_response_iss_parameter_supported": True,
     }
 
 
 def _auth_challenge(settings: Settings) -> str:
     resource = str(settings.mcp_resource_url or "").rstrip("/")
     origin = resource.removesuffix("/mcp")
-    metadata_url = f"{origin}/.well-known/oauth-protected-resource/mcp"
-    return f'Bearer resource_metadata="{metadata_url}", error="invalid_token"'
+    metadata_url = f"{origin}/.well-known/oauth-protected-resource"
+    return (
+        f'Bearer resource_metadata="{metadata_url}", scope="{READ_SCOPE}", '
+        'error="invalid_token", error_description="OAuth authorization is required"'
+    )
 
 
 def _start_audit(
@@ -926,10 +978,279 @@ def capabilities(settings: Settings) -> dict[str, Any]:
         "environment": settings.environment,
         "read_only": True,
         "required_scope": READ_SCOPE,
-        "authentication": "OAuth 2.1 authorization code + PKCE or scoped service token",
-        "authorization_server": settings.mcp_oauth_authorization_server,
+        "authentication": "OAuth 2.1 CIMD authorization code + PKCE or scoped service token",
+        "authorization_server": settings.mcp_oauth_issuer,
+        "client_identification": "CIMD",
+        "chatgpt_client_id": CHATGPT_CIMD_URL,
+        "redirect_uri": CHATGPT_REDIRECT_URI,
         "tools": [tool["name"] for tool in TOOLS],
     }
+
+
+def _query(event: dict[str, Any]) -> dict[str, str]:
+    return {
+        str(key): str(value)
+        for key, value in (event.get("queryStringParameters") or {}).items()
+        if value is not None
+    }
+
+
+def _redirect(location: str) -> dict[str, Any]:
+    return {
+        "statusCode": 302,
+        "headers": {"location": location, "cache-control": "no-store"},
+        "body": "",
+    }
+
+
+def _fetch_chatgpt_cimd() -> dict[str, Any]:
+    global _cimd_cache
+    now = time.monotonic()
+    if _cimd_cache and now - _cimd_cache[0] < 3600:
+        return _cimd_cache[1]
+    try:
+        request = urllib.request.Request(
+            CHATGPT_CIMD_URL,
+            headers={"accept": "application/json", "user-agent": "SignalHub-MCP/1"},
+        )
+        with urllib.request.urlopen(request, timeout=5) as response:
+            if response.status != 200:
+                raise ValueError("unexpected CIMD status")
+            value = json.loads(response.read(32_768))
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        raise MCPError(
+            "unavailable", "ChatGPT client metadata is unavailable", rpc_code=-32003
+        ) from exc
+    if (
+        value.get("client_id") != CHATGPT_CIMD_URL
+        or CHATGPT_REDIRECT_URI not in value.get("redirect_uris", [])
+        or "authorization_code" not in value.get("grant_types", [])
+        or "code" not in value.get("response_types", [])
+        or "none" not in value.get("token_endpoint_auth_methods_supported", [])
+    ):
+        raise MCPError("unauthorized", "ChatGPT client metadata is not accepted", rpc_code=-32001)
+    _cimd_cache = (now, value)
+    return value
+
+
+def _store_oauth_transaction(
+    settings: Settings,
+    *,
+    state: str,
+    original_state: str,
+    redirect_uri: str,
+    client_id: str,
+    resource: str,
+) -> None:
+    with connection(settings) as conn:
+        conn.execute("DELETE FROM mcp_oauth_transactions WHERE expires_at < now()")
+        conn.execute(
+            """INSERT INTO mcp_oauth_transactions
+                 (state, original_state, redirect_uri, client_id, resource, expires_at)
+               VALUES (%s, %s, %s, %s, %s, now() + interval '10 minutes')""",
+            (state, original_state, redirect_uri, client_id, resource),
+        )
+        conn.commit()
+
+
+def _consume_oauth_transaction(settings: Settings, state: str) -> dict[str, str] | None:
+    with connection(settings) as conn:
+        row = conn.execute(
+            """DELETE FROM mcp_oauth_transactions
+               WHERE state = %s AND expires_at >= now()
+               RETURNING original_state, redirect_uri, client_id, resource""",
+            (state,),
+        ).fetchone()
+        conn.commit()
+    if not row:
+        return None
+    return {
+        "original_state": str(row[0]),
+        "redirect_uri": str(row[1]),
+        "client_id": str(row[2]),
+        "resource": str(row[3]),
+    }
+
+
+def _oauth_error_redirect(
+    settings: Settings, redirect_uri: str, state: str | None, error: str, description: str
+) -> dict[str, Any]:
+    values = {
+        "error": error,
+        "error_description": description,
+        "iss": str(settings.mcp_oauth_issuer).rstrip("/"),
+    }
+    if state:
+        values["state"] = state
+    return _redirect(f"{redirect_uri}?{urllib.parse.urlencode(values)}")
+
+
+def _oauth_authorize(event: dict[str, Any], settings: Settings) -> dict[str, Any]:
+    args = _query(event)
+    required = {
+        "response_type",
+        "client_id",
+        "redirect_uri",
+        "scope",
+        "state",
+        "code_challenge",
+        "code_challenge_method",
+        "resource",
+    }
+    if required - args.keys():
+        return _response(400, {"error": "invalid_request", "message": "Missing OAuth parameter"})
+    if args["client_id"] != CHATGPT_CIMD_URL:
+        return _response(400, {"error": "invalid_client", "message": "Unsupported OAuth client"})
+    _fetch_chatgpt_cimd()
+    if args["redirect_uri"] != CHATGPT_REDIRECT_URI:
+        return _response(400, {"error": "invalid_redirect_uri", "message": "Redirect URI rejected"})
+    if args["response_type"] != "code" or args["code_challenge_method"] != "S256":
+        return _oauth_error_redirect(
+            settings,
+            args["redirect_uri"],
+            args.get("state"),
+            "invalid_request",
+            "Code with PKCE S256 required",
+        )
+    scopes = set(args["scope"].split())
+    if READ_SCOPE not in scopes or scopes - {READ_SCOPE}:
+        return _oauth_error_redirect(
+            settings,
+            args["redirect_uri"],
+            args.get("state"),
+            "invalid_scope",
+            "Unsupported OAuth scope",
+        )
+    if args["resource"] != settings.mcp_resource_url:
+        return _oauth_error_redirect(
+            settings,
+            args["redirect_uri"],
+            args.get("state"),
+            "invalid_target",
+            "MCP resource mismatch",
+        )
+    if not settings.mcp_user_client_id or not settings.mcp_oauth_callback_url:
+        raise MCPError("unavailable", "OAuth facade is not configured", rpc_code=-32003)
+    transaction_state = secrets.token_urlsafe(32)
+    _store_oauth_transaction(
+        settings,
+        state=transaction_state,
+        original_state=args["state"],
+        redirect_uri=args["redirect_uri"],
+        client_id=args["client_id"],
+        resource=args["resource"],
+    )
+    provider_args = {
+        "response_type": "code",
+        "client_id": settings.mcp_user_client_id,
+        "redirect_uri": settings.mcp_oauth_callback_url,
+        "scope": READ_SCOPE,
+        "state": transaction_state,
+        "code_challenge": args["code_challenge"],
+        "code_challenge_method": "S256",
+        "resource": settings.mcp_resource_url,
+    }
+    provider = settings.mcp_oauth_authorization_server.rstrip("/")
+    return _redirect(f"{provider}/oauth2/authorize?{urllib.parse.urlencode(provider_args)}")
+
+
+def _oauth_callback(event: dict[str, Any], settings: Settings) -> dict[str, Any]:
+    args = _query(event)
+    state = args.get("state")
+    if not state:
+        return _response(400, {"error": "invalid_request", "message": "OAuth state missing"})
+    item = _consume_oauth_transaction(settings, state)
+    if not item:
+        return _response(400, {"error": "invalid_request", "message": "OAuth state expired"})
+    redirect_uri = str(item["redirect_uri"])
+    original_state = str(item["original_state"])
+    issuer = str(settings.mcp_oauth_issuer).rstrip("/")
+    response: dict[str, str] = {"state": original_state, "iss": issuer}
+    if args.get("code"):
+        response["code"] = args["code"]
+    else:
+        response["error"] = args.get("error", "server_error")
+        response["error_description"] = args.get(
+            "error_description", "Authorization did not complete"
+        )
+    return _redirect(f"{redirect_uri}?{urllib.parse.urlencode(response)}")
+
+
+def _request_body(event: dict[str, Any]) -> str:
+    body = event.get("body") or ""
+    if event.get("isBase64Encoded"):
+        return base64.b64decode(body).decode()
+    return str(body)
+
+
+def _oauth_token(event: dict[str, Any], settings: Settings) -> dict[str, Any]:
+    parsed = urllib.parse.parse_qs(_request_body(event), keep_blank_values=True)
+    args = {key: values[-1] for key, values in parsed.items() if values}
+    grant_type = args.get("grant_type")
+    if grant_type not in {"authorization_code", "refresh_token"}:
+        return _response(400, {"error": "unsupported_grant_type"})
+    if args.get("client_id") != CHATGPT_CIMD_URL:
+        return _response(401, {"error": "invalid_client"})
+    _fetch_chatgpt_cimd()
+    if args.get("resource") != settings.mcp_resource_url:
+        return _response(400, {"error": "invalid_target"})
+    if grant_type == "authorization_code":
+        if (
+            args.get("redirect_uri") != CHATGPT_REDIRECT_URI
+            or not args.get("code")
+            or not args.get("code_verifier")
+        ):
+            return _response(400, {"error": "invalid_request"})
+    if not settings.mcp_user_client_id or not settings.mcp_oauth_callback_url:
+        raise MCPError("unavailable", "OAuth facade is not configured", rpc_code=-32003)
+    provider_args = {
+        "grant_type": grant_type,
+        "client_id": settings.mcp_user_client_id,
+        "resource": settings.mcp_resource_url,
+    }
+    if grant_type == "authorization_code":
+        provider_args.update(
+            {
+                "code": args["code"],
+                "code_verifier": args["code_verifier"],
+                "redirect_uri": settings.mcp_oauth_callback_url,
+            }
+        )
+    else:
+        if not args.get("refresh_token"):
+            return _response(400, {"error": "invalid_request"})
+        provider_args["refresh_token"] = args["refresh_token"]
+    token_url = f"{settings.mcp_oauth_authorization_server.rstrip('/')}/oauth2/token"
+    request = urllib.request.Request(
+        token_url,
+        data=urllib.parse.urlencode(provider_args).encode(),
+        headers={
+            "accept": "application/json",
+            "content-type": "application/x-www-form-urlencoded",
+            "user-agent": "SignalHub-MCP/1",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            payload = json.loads(response.read(65_536))
+    except urllib.error.HTTPError as exc:
+        try:
+            provider_error = json.loads(exc.read(16_384))
+        except json.JSONDecodeError:
+            provider_error = {"error": "temporarily_unavailable"}
+        return _response(exc.code if 400 <= exc.code < 500 else 503, provider_error)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise MCPError("unavailable", "OAuth token service unavailable", rpc_code=-32003) from exc
+    access_token = payload.get("access_token")
+    if not isinstance(access_token, str):
+        raise MCPError("unavailable", "OAuth token response invalid", rpc_code=-32003)
+    claims = _decode_access_token(access_token, settings)
+    if claims.get("client_id") != settings.mcp_user_client_id:
+        raise MCPError("unauthorized", "OAuth token client is invalid", rpc_code=-32001)
+    if settings.admin_group not in _claim_groups(claims):
+        return _response(403, {"error": "access_denied", "message": "Admin access required"})
+    return _response(200, payload)
 
 
 def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
@@ -946,14 +1267,35 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
             return _response(200, protected_resource_metadata(settings))
         except MCPError as exc:
             return _response(503, {"error": exc.code, "message": exc.message})
-    if method == "GET" and path in {
-        "/.well-known/oauth-authorization-server",
-        "/.well-known/openid-configuration",
-    }:
+    if method == "GET" and path == "/oauth/authorize":
+        try:
+            return _oauth_authorize(event, settings)
+        except MCPError as exc:
+            return _response(503, {"error": exc.code, "message": exc.message})
+    if method == "GET" and path == "/oauth/callback":
+        try:
+            return _oauth_callback(event, settings)
+        except MCPError as exc:
+            return _response(503, {"error": exc.code, "message": exc.message})
+    if method == "POST" and path == "/oauth/token":
+        try:
+            return _oauth_token(event, settings)
+        except MCPError as exc:
+            status = 401 if exc.code == "unauthorized" else 503
+            return _response(status, {"error": exc.code, "message": exc.message})
+    if method == "GET" and path == "/.well-known/oauth-authorization-server":
         try:
             return _response(200, authorization_server_metadata(settings))
         except MCPError as exc:
             return _response(503, {"error": exc.code, "message": exc.message})
+    if method == "GET" and path == "/.well-known/openid-configuration":
+        return _response(
+            404,
+            {
+                "error": "not_supported",
+                "message": "Use OAuth authorization-server metadata for this OAuth-only facade",
+            },
+        )
     try:
         client = _authenticate(event, settings)
     except MCPError as exc:

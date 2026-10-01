@@ -49,6 +49,8 @@ class Settings:
     mcp_resource_url: str | None = None
     mcp_oauth_issuer: str | None = None
     mcp_oauth_authorization_server: str | None = None
+    mcp_token_issuer: str | None = None
+    mcp_oauth_callback_url: str | None = None
     mcp_user_client_id: str | None = None
     mcp_service_client_id: str | None = None
     mcp_rate_limit_per_minute: int = 60
@@ -125,9 +127,9 @@ class Settings:
             in {"1", "true", "yes"},
             mcp_resource_url=os.getenv("MCP_RESOURCE_URL") or None,
             mcp_oauth_issuer=os.getenv("MCP_OAUTH_ISSUER") or None,
-            mcp_oauth_authorization_server=(
-                os.getenv("MCP_OAUTH_AUTHORIZATION_SERVER") or None
-            ),
+            mcp_oauth_authorization_server=(os.getenv("MCP_OAUTH_AUTHORIZATION_SERVER") or None),
+            mcp_token_issuer=os.getenv("MCP_TOKEN_ISSUER") or None,
+            mcp_oauth_callback_url=os.getenv("MCP_OAUTH_CALLBACK_URL") or None,
             mcp_user_client_id=os.getenv("MCP_USER_CLIENT_ID") or None,
             mcp_service_client_id=os.getenv("MCP_SERVICE_CLIENT_ID") or None,
             mcp_rate_limit_per_minute=max(1, int(os.getenv("MCP_RATE_LIMIT_PER_MINUTE", "60"))),

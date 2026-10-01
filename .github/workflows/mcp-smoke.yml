@@ -18,6 +18,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: hashicorp/setup-terraform@v3
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install standards-compliant MCP client
+        run: python -m pip install 'mcp>=1.30,<2'
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-region: eu-west-1
@@ -32,7 +39,7 @@ jobs:
           client_secret="$(aws cognito-idp describe-user-pool-client \
             --user-pool-id "$pool_id" --client-id "$client_id" \
             --query 'UserPoolClient.ClientSecret' --output text)"
-          token_url="$(terraform -chdir=infra output -raw mcp_oauth_token_url)"
+          token_url="$(terraform -chdir=infra output -raw mcp_service_oauth_token_url)"
           MCP_URL="$(terraform -chdir=infra output -raw mcp_url)"
           token_json="$(curl -fsS -u "$client_id:$client_secret" \
             -H 'Content-Type: application/x-www-form-urlencoded' \
@@ -40,4 +47,5 @@ jobs:
             --data-urlencode 'scope=signalhub-mcp/read' "$token_url")"
           MCP_ACCESS_TOKEN="$(jq -er '.access_token' <<<"$token_json")"
           export MCP_URL MCP_ACCESS_TOKEN
+          python scripts/mcp-protocol-smoke.py
           ./scripts/mcp-smoke.sh

@@ -1,4 +1,6 @@
 psycopg[binary]>=3.2,<4
 boto3>=1.35,<2
+PyJWT[crypto]>=2.10,<3
+mcp>=1.30,<2
 pytest>=8,<9
 ruff>=0.9,<1

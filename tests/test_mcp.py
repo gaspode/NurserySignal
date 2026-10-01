@@ -1,27 +1,22 @@
 import json
 from contextlib import contextmanager
+from datetime import UTC, datetime, timedelta
+from urllib.parse import parse_qs, urlencode, urlparse
 
 import pytest
 from app import mcp
 from app.config import Settings
+from cryptography.hazmat.primitives.asymmetric import rsa
+
+REAL_DECODE_ACCESS_TOKEN = mcp._decode_access_token
 
 
 def event(body=None, *, authorized=True, method="POST", path="/mcp"):
     value = {
         "rawPath": path,
-        "headers": {"authorization": "Bearer redacted"} if authorized else {},
+        "headers": {"authorization": "Bearer test-token"} if authorized else {},
         "requestContext": {"http": {"method": method}},
     }
-    if authorized:
-        value["requestContext"]["authorizer"] = {
-            "jwt": {
-                "claims": {
-                    "client_id": "service-client",
-                    "sub": "test-service",
-                    "scope": mcp.READ_SCOPE,
-                }
-            }
-        }
     if body is not None:
         value["body"] = json.dumps(body)
     return value
@@ -34,22 +29,55 @@ def auth(monkeypatch):
     monkeypatch.setenv("MCP_RESOURCE_URL", "https://api.example/mcp")
     monkeypatch.setenv("MCP_OAUTH_ISSUER", "https://api.example")
     monkeypatch.setenv("MCP_OAUTH_AUTHORIZATION_SERVER", "https://login.example")
+    monkeypatch.setenv("MCP_TOKEN_ISSUER", "https://tokens.example")
+    monkeypatch.setenv("MCP_OAUTH_CALLBACK_URL", "https://api.example/oauth/callback")
+    monkeypatch.setenv("MCP_OAUTH_TRANSACTIONS_TABLE_NAME", "oauth-transactions")
+    monkeypatch.setattr(
+        mcp,
+        "_decode_access_token",
+        lambda token, settings: {
+            "client_id": "service-client",
+            "sub": "test-service",
+            "scope": mcp.READ_SCOPE,
+            "token_use": "access",
+        },
+    )
 
 
 def test_authentication_and_read_scope_are_required(monkeypatch):
     assert mcp.handler(event({}, authorized=False), None)["statusCode"] == 401
-    missing_scope = event({})
-    missing_scope["requestContext"]["authorizer"]["jwt"]["claims"]["scope"] = "openid"
-    assert mcp.handler(missing_scope, None)["statusCode"] == 401
-    wrong_client = event({})
-    wrong_client["requestContext"]["authorizer"]["jwt"]["claims"]["client_id"] = "wrong"
-    assert mcp.handler(wrong_client, None)["statusCode"] == 401
+    monkeypatch.setattr(
+        mcp,
+        "_decode_access_token",
+        lambda token, settings: {
+            "client_id": "service-client",
+            "scope": "openid",
+            "token_use": "access",
+        },
+    )
+    assert mcp.handler(event({}), None)["statusCode"] == 401
+    monkeypatch.setattr(
+        mcp,
+        "_decode_access_token",
+        lambda token, settings: {
+            "client_id": "wrong",
+            "scope": mcp.READ_SCOPE,
+            "token_use": "access",
+        },
+    )
+    assert mcp.handler(event({}), None)["statusCode"] == 401
 
 
 def test_admin_user_requires_admin_group(monkeypatch):
     request = event({})
-    claims = request["requestContext"]["authorizer"]["jwt"]["claims"]
-    claims.update({"client_id": "user-client", "cognito:groups": "NurserySignalAdmins"})
+    claims = {
+        "client_id": "user-client",
+        "sub": "admin-user",
+        "scope": mcp.READ_SCOPE,
+        "token_use": "access",
+        "cognito:groups": "NurserySignalAdmins",
+    }
+    monkeypatch.setattr(mcp, "_decode_access_token", lambda token, settings: claims)
     assert mcp._authenticate(request, mcp.Settings.from_env())["auth_kind"] == "admin_user"
     claims["cognito:groups"] = "CareSignalCustomers"
     with pytest.raises(mcp.MCPError, match="admin/service"):
@@ -97,7 +125,20 @@ def test_oauth_protected_resource_metadata_is_public_and_scoped():
     body = json.loads(response["body"])
     assert response["statusCode"] == 200
     assert body["resource"] == "https://api.example/mcp"
+    assert body["authorization_servers"] == ["https://api.example"]
     assert body["scopes_supported"] == ["signalhub-mcp/read"]
+
+
+def test_unauthenticated_mcp_returns_discoverable_oauth_challenge():
+    response = mcp.handler(event(authorized=False), None)
+    assert response["statusCode"] == 401
+    challenge = response["headers"]["www-authenticate"]
+    assert challenge.startswith("Bearer ")
+    assert (
+        'resource_metadata="https://api.example/.well-known/oauth-protected-resource"' in challenge
+    )
+    assert 'scope="signalhub-mcp/read"' in challenge
+    assert 'error="invalid_token"' in challenge
 
 
 def test_oauth_server_metadata_advertises_cognito_pkce_facade():
@@ -107,10 +148,181 @@ def test_oauth_server_metadata_advertises_cognito_pkce_facade():
     )
     body = json.loads(response["body"])
     assert body["issuer"] == "https://api.example"
-    assert body["authorization_endpoint"] == "https://login.example/oauth2/authorize"
-    assert body["token_endpoint"] == "https://login.example/oauth2/token"
+    assert body["authorization_endpoint"] == "https://api.example/oauth/authorize"
+    assert body["token_endpoint"] == "https://api.example/oauth/token"
     assert body["code_challenge_methods_supported"] == ["S256"]
-    assert body["authorization_response_iss_parameter_supported"] is False
+    assert body["scopes_supported"] == [mcp.READ_SCOPE]
+    assert body["token_endpoint_auth_methods_supported"] == ["none"]
+    assert body["client_id_metadata_document_supported"] is True
+    assert body["authorization_response_iss_parameter_supported"] is True
+    resource = mcp.protected_resource_metadata(mcp.Settings.from_env())
+    assert body["issuer"] == resource["authorization_servers"][0]
+
+    oidc = mcp.handler(
+        event(authorized=False, method="GET", path="/.well-known/openid-configuration"), None
+    )
+    assert oidc["statusCode"] == 404
+    assert json.loads(oidc["body"])["error"] == "not_supported"
+
+
+def test_cimd_authorization_preserves_pkce_scope_and_resource(monkeypatch):
+    stored = {}
+
+    monkeypatch.setattr(
+        mcp, "_store_oauth_transaction", lambda settings, **kwargs: stored.update(kwargs)
+    )
+    monkeypatch.setattr(mcp, "_fetch_chatgpt_cimd", lambda: {"client_id": mcp.CHATGPT_CIMD_URL})
+    request = event(method="GET", path="/oauth/authorize", authorized=False)
+    request["queryStringParameters"] = {
+        "response_type": "code",
+        "client_id": mcp.CHATGPT_CIMD_URL,
+        "redirect_uri": mcp.CHATGPT_REDIRECT_URI,
+        "scope": mcp.READ_SCOPE,
+        "state": "chatgpt-state",
+        "code_challenge": "challenge",
+        "code_challenge_method": "S256",
+        "resource": "https://api.example/mcp",
+    }
+    response = mcp.handler(request, None)
+    assert response["statusCode"] == 302
+    provider = urlparse(response["headers"]["location"])
+    query = parse_qs(provider.query)
+    assert provider.path == "/oauth2/authorize"
+    assert query["client_id"] == ["user-client"]
+    assert query["redirect_uri"] == ["https://api.example/oauth/callback"]
+    assert query["resource"] == ["https://api.example/mcp"]
+    assert query["code_challenge_method"] == ["S256"]
+    assert stored["original_state"] == "chatgpt-state"
+
+
+def test_oauth_callback_returns_stable_redirect_and_rfc9207_issuer(monkeypatch):
+    consumed = []
+
+    def consume(settings, state):
+        consumed.append(state)
+        return {
+            "redirect_uri": mcp.CHATGPT_REDIRECT_URI,
+            "original_state": "chatgpt-state",
+        }
+
+    monkeypatch.setattr(mcp, "_consume_oauth_transaction", consume)
+    request = event(method="GET", path="/oauth/callback", authorized=False)
+    request["queryStringParameters"] = {"state": "facade-state", "code": "code-value"}
+    response = mcp.handler(request, None)
+    query = parse_qs(urlparse(response["headers"]["location"]).query)
+    assert response["statusCode"] == 302
+    assert query == {
+        "code": ["code-value"],
+        "iss": ["https://api.example"],
+        "state": ["chatgpt-state"],
+    }
+    assert consumed == ["facade-state"]
+
+
+def test_oauth_authorization_rejects_wrong_resource_without_provider_call(monkeypatch):
+    monkeypatch.setattr(mcp, "_fetch_chatgpt_cimd", lambda: {})
+    request = event(method="GET", path="/oauth/authorize", authorized=False)
+    request["queryStringParameters"] = {
+        "response_type": "code",
+        "client_id": mcp.CHATGPT_CIMD_URL,
+        "redirect_uri": mcp.CHATGPT_REDIRECT_URI,
+        "scope": mcp.READ_SCOPE,
+        "state": "state",
+        "code_challenge": "challenge",
+        "code_challenge_method": "S256",
+        "resource": "https://attacker.example/mcp",
+    }
+    response = mcp.handler(request, None)
+    query = parse_qs(urlparse(response["headers"]["location"]).query)
+    assert query["error"] == ["invalid_target"]
+    assert query["iss"] == ["https://api.example"]
+
+
+def test_oauth_token_proxy_preserves_resource_and_validates_admin_token(monkeypatch):
+    captured = {}
+
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self, limit):
+            return json.dumps({"access_token": "bound-token", "token_type": "Bearer"}).encode()
+
+    def fake_urlopen(request, timeout):
+        captured.update(parse_qs(request.data.decode()))
+        return Response()
+
+    monkeypatch.setattr(mcp, "_fetch_chatgpt_cimd", lambda: {})
+    monkeypatch.setattr(mcp.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(
+        mcp,
+        "_decode_access_token",
+        lambda token, settings: {
+            "client_id": "user-client",
+            "scope": mcp.READ_SCOPE,
+            "token_use": "access",
+            "aud": "https://api.example/mcp",
+            "cognito:groups": ["NurserySignalAdmins"],
+        },
+    )
+    request = event(method="POST", path="/oauth/token", authorized=False)
+    request["headers"] = {"content-type": "application/x-www-form-urlencoded"}
+    request["body"] = urlencode(
+        {
+            "grant_type": "authorization_code",
+            "client_id": mcp.CHATGPT_CIMD_URL,
+            "redirect_uri": mcp.CHATGPT_REDIRECT_URI,
+            "code": "authorization-code",
+            "code_verifier": "verifier",
+            "resource": "https://api.example/mcp",
+        }
+    )
+    response = mcp.handler(request, None)
+    assert response["statusCode"] == 200
+    assert captured["client_id"] == ["user-client"]
+    assert captured["redirect_uri"] == ["https://api.example/oauth/callback"]
+    assert captured["resource"] == ["https://api.example/mcp"]
+
+
+def test_access_token_validation_accepts_bound_user_and_rejects_wrong_audience(monkeypatch):
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+
+    class SigningKey:
+        key = private_key.public_key()
+
+    class Jwks:
+        def get_signing_key_from_jwt(self, token):
+            return SigningKey()
+
+    settings = Settings(
+        mcp_token_issuer="https://tokens.example",
+        mcp_resource_url="https://api.example/mcp",
+        mcp_user_client_id="user-client",
+        mcp_service_client_id="service-client",
+    )
+    monkeypatch.setitem(mcp._jwk_clients, "https://tokens.example", Jwks())
+    now = datetime.now(UTC)
+    claims = {
+        "iss": "https://tokens.example",
+        "sub": "admin-user",
+        "client_id": "user-client",
+        "token_use": "access",
+        "scope": mcp.READ_SCOPE,
+        "aud": "https://api.example/mcp",
+        "iat": now,
+        "exp": now + timedelta(minutes=5),
+    }
+    token = mcp.jwt.encode(claims, private_key, algorithm="RS256", headers={"kid": "test"})
+    assert REAL_DECODE_ACCESS_TOKEN(token, settings)["aud"] == "https://api.example/mcp"
+    claims["aud"] = "https://other.example/mcp"
+    wrong = mcp.jwt.encode(claims, private_key, algorithm="RS256", headers={"kid": "test"})
+    with pytest.raises(mcp.MCPError, match="audience"):
+        REAL_DECODE_ACCESS_TOKEN(wrong, settings)
 
 
 def test_tool_call_is_structured_audited_and_does_not_call_provider(monkeypatch):
@@ -271,7 +483,10 @@ def test_mcp_infrastructure_is_dedicated_and_has_no_provider_permissions():
     assert 'handler          = "app.mcp.handler"' in terraform
     assert "signalhub-mcp/read" in terraform
     assert 'allowed_oauth_flows                  = ["code"]' in terraform
-    assert "authorization_scopes = [local.mcp_read_scope]" in terraform
+    assert 'route_key = "GET /oauth/authorize"' in terraform
+    assert 'route_key = "POST /oauth/token"' in terraform
+    assert "aws_apigatewayv2_authorizer.mcp" not in terraform
+    assert "MCP_OAUTH_CALLBACK_URL" in terraform
     assert "PLANNING_PROVIDER" not in terraform
     assert "sqs:SendMessage" not in terraform
     assert "bedrock:InvokeModel" not in terraform
@@ -281,7 +496,12 @@ def test_mcp_module_has_no_business_mutation_sql_or_provider_client():
     source = open("backend/app/mcp.py", encoding="utf-8").read()
     insert_targets = [line for line in source.splitlines() if "INSERT INTO" in line]
     update_targets = [line for line in source.splitlines() if "UPDATE " in line]
-    assert insert_targets == ['            """INSERT INTO mcp_request_audit']
+    delete_targets = [line for line in source.splitlines() if "DELETE FROM" in line]
+    assert insert_targets == [
+        '            """INSERT INTO mcp_request_audit',
+        '            """INSERT INTO mcp_oauth_transactions',
+    ]
     assert update_targets == ['                """UPDATE mcp_request_audit']
+    assert all("mcp_oauth_transactions" in line for line in delete_targets)
     assert "planning_provider" not in source
     assert "requests." not in source

@@ -13,7 +13,7 @@ output "mcp_readonly_secret_arn" {
 }
 
 output "mcp_chatgpt_client_id" {
-  description = "Public Cognito OAuth client ID for ChatGPT MCP authorization-code + PKCE."
+  description = "Internal public Cognito client used behind the ChatGPT CIMD OAuth facade."
   value       = aws_cognito_user_pool_client.mcp_chatgpt.id
 }
 
@@ -23,12 +23,17 @@ output "mcp_service_client_id" {
 }
 
 output "mcp_oauth_authorization_url" {
-  description = "OAuth authorization endpoint for the SignalHub MCP."
-  value       = "https://${aws_cognito_user_pool_domain.mcp.domain}.auth.${var.aws_region}.amazoncognito.com/oauth2/authorize"
+  description = "CIMD-compatible OAuth authorization endpoint for the SignalHub MCP."
+  value       = "${aws_apigatewayv2_stage.default.invoke_url}oauth/authorize"
 }
 
 output "mcp_oauth_token_url" {
-  description = "OAuth token endpoint for the SignalHub MCP."
+  description = "CIMD-compatible user OAuth token endpoint for the SignalHub MCP."
+  value       = "${aws_apigatewayv2_stage.default.invoke_url}oauth/token"
+}
+
+output "mcp_service_oauth_token_url" {
+  description = "Internal Cognito token endpoint for the controlled service smoke client."
   value       = "https://${aws_cognito_user_pool_domain.mcp.domain}.auth.${var.aws_region}.amazoncognito.com/oauth2/token"
 }
 
