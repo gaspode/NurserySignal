@@ -8,6 +8,27 @@ Build a UK sales-intelligence service that surfaces timely, commercially useful 
 
 The MVP succeeds by being trustworthy and actionable, not by maximizing raw signal count.
 
+## SignalHub MCP v1 — READ-ONLY ADMINISTRATION
+
+- A dedicated remote MCP service exposes ten bounded investigation tools for operations, signals,
+  opportunities, Needs Attention, review backlogs, sources, automation and recent changes.
+- The contract is versioned as `signalhub-mcp-v1` / `signalhub-mcp-tools-v1`; list tools default to
+  20 records, cap at 100 and use opaque continuation cursors.
+- OAuth access is isolated behind the `signalhub-mcp/read` scope. ChatGPT/admin users use the
+  existing Cognito administrator identity through authorization-code + PKCE; controlled service
+  agents use a separate scoped OAuth client with its secret retained in Secrets Manager.
+- The MCP Lambda has no provider credentials, queue-send permissions or mutation tools. It can
+  read operational/admin projections and write only bounded MCP request-audit records.
+- Protected-resource discovery, per-tool OAuth metadata, private-field redaction, rate limiting and
+  machine-readable errors are included for ChatGPT/agent compatibility.
+- `MCP_USAGE.md` documents connection, tools and the explicit read-only boundary.
+
+Current gate:
+- code/tests and Terraform validation are complete;
+- production deployment, agent-style smoke results and final API/database/queue health will be
+  recorded here after the GitHub Actions/OIDC rollout;
+- mutation tools remain explicitly deferred until read-only use demonstrates narrow safe needs.
+
 ## Phase 1 — Foundation — COMPLETE
 
 - Serverless AWS foundation deployed.

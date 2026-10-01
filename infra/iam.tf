@@ -219,6 +219,16 @@ resource "aws_iam_policy" "github_actions" {
         Resource = "*"
         Condition = {
           StringEquals = {
+            "secretsmanager:Name" = "${local.name_prefix}/mcp-readonly"
+          }
+        }
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["secretsmanager:CreateSecret"]
+        Resource = "*"
+        Condition = {
+          StringEquals = {
             "secretsmanager:Name" = "${local.name_prefix}/companies-house"
           }
         }
@@ -242,7 +252,8 @@ resource "aws_iam_policy" "github_actions" {
         Resource = [
           "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:${local.name_prefix}/planning-provider-*",
           "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:${local.name_prefix}/recruitment-provider-*",
-          "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:${local.name_prefix}/companies-house-*"
+          "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:${local.name_prefix}/companies-house-*",
+          "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:${local.name_prefix}/mcp-readonly-*"
         ]
       },
       {
@@ -272,7 +283,10 @@ resource "aws_iam_policy" "github_actions" {
           "secretsmanager:RestoreSecret", "secretsmanager:TagResource", "secretsmanager:UntagResource",
           "secretsmanager:UpdateSecret"
         ]
-        Resource = aws_secretsmanager_secret.database.arn
+        Resource = [
+          aws_secretsmanager_secret.database.arn,
+          "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:${local.name_prefix}/mcp-readonly-*"
+        ]
       }
     ]
   })

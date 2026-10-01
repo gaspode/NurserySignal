@@ -105,3 +105,9 @@ variable "ai_care_recruitment_prompt_version" {
   default     = "care-recruitment-shadow-v1"
   description = "CareSignal recruitment shadow-review prompt version."
 }
+
+variable "mcp_oauth_callback_urls" {
+  type        = list(string)
+  default     = ["https://chatgpt.com/connector_platform_oauth_redirect"]
+  description = "Exact ChatGPT MCP OAuth callback URL(s); add the callback shown by the connector if it is connection-specific."
+}

@@ -46,6 +46,12 @@ class Settings:
     companies_house_lookup_function_name: str | None = None
     procurement_manual_run_queue_url: str | None = None
     care_lifecycle_watcher_schedule_enabled: bool = False
+    mcp_resource_url: str | None = None
+    mcp_oauth_issuer: str | None = None
+    mcp_oauth_authorization_server: str | None = None
+    mcp_user_client_id: str | None = None
+    mcp_service_client_id: str | None = None
+    mcp_rate_limit_per_minute: int = 60
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -117,4 +123,12 @@ class Settings:
                 "CARE_LIFECYCLE_WATCHER_SCHEDULE_ENABLED", "false"
             ).lower()
             in {"1", "true", "yes"},
+            mcp_resource_url=os.getenv("MCP_RESOURCE_URL") or None,
+            mcp_oauth_issuer=os.getenv("MCP_OAUTH_ISSUER") or None,
+            mcp_oauth_authorization_server=(
+                os.getenv("MCP_OAUTH_AUTHORIZATION_SERVER") or None
+            ),
+            mcp_user_client_id=os.getenv("MCP_USER_CLIENT_ID") or None,
+            mcp_service_client_id=os.getenv("MCP_SERVICE_CLIENT_ID") or None,
+            mcp_rate_limit_per_minute=max(1, int(os.getenv("MCP_RATE_LIMIT_PER_MINUTE", "60"))),
         )

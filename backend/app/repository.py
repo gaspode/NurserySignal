@@ -6209,10 +6209,14 @@ def list_opportunities(
     if search:
         clauses.append(
             "(o.name ILIKE %s OR COALESCE(o.creation_reason, '') ILIKE %s "
-            "OR COALESCE(o.stage_reason, '') ILIKE %s)"
+            "OR COALESCE(o.stage_reason, '') ILIKE %s "
+            "OR COALESCE(o.operator_name, '') ILIKE %s "
+            "OR COALESCE(o.address, '') ILIKE %s "
+            "OR COALESCE(o.postcode, '') ILIKE %s "
+            "OR COALESCE(o.town, '') ILIKE %s)"
         )
         pattern = f"%{search[:200]}%"
-        params.extend([pattern, pattern, pattern])
+        params.extend([pattern] * 7)
     where = " AND ".join(clauses)
     with connection(settings) as conn:
         total = conn.execute(
@@ -6225,6 +6229,7 @@ def list_opportunities(
                        o.vertical, o.change_type, o.event_type, o.lifecycle_stage, o.confidence,
                        o.confidence_breakdown, o.stage_reason, o.creation_reason,
                        o.first_seen_at, o.latest_update_at, o.location_sensitivity,
+                       o.customer_lifecycle_stage, o.publication_status,
                        count(os.raw_signal_id) FILTER (WHERE os.status = 'ACTIVE')
                 FROM opportunities o LEFT JOIN opportunity_signals os ON os.opportunity_id = o.id
                 WHERE o.review_status NOT IN ('MERGED', 'REJECTED') AND {where}
@@ -6250,6 +6255,8 @@ def list_opportunities(
         "first_seen_at",
         "latest_update_at",
         "location_sensitivity",
+        "customer_lifecycle_stage",
+        "publication_status",
         "signal_count",
     )
     return {
@@ -6638,8 +6645,7 @@ def care_opportunity_lifecycle_preview(settings: Settings) -> dict[str, Any]:
                 planning_subtypes = sorted(
                     {
                         str(
-                            (signal.get("extracted_facts") or {}).get("planning_subtype")
-                            or "UNSET"
+                            (signal.get("extracted_facts") or {}).get("planning_subtype") or "UNSET"
                         )
                         for signal in opportunity["relationships"] or []
                         if signal.get("source_type") == "planning"
@@ -6740,9 +6746,7 @@ def care_opportunity_lifecycle_preview(settings: Settings) -> dict[str, Any]:
                         "opportunity_id": opportunity_id,
                         "signal_id": None,
                         "planning_reference": None,
-                        "lifecycle": str(
-                            opportunity.get("customer_lifecycle_stage") or "UNSET"
-                        ),
+                        "lifecycle": str(opportunity.get("customer_lifecycle_stage") or "UNSET"),
                         "planning_outcome": None,
                         "age_days": None,
                         "age_source": None,
@@ -6849,8 +6853,7 @@ def care_opportunity_lifecycle_preview(settings: Settings) -> dict[str, Any]:
             "provider_errors": int(watch_rows[4] or 0),
             "next_poll_at": watch_rows[5],
             "persisted_cadence_counts": {
-                f"{key}_days": int(value)
-                for key, value in (watch_rows[6] or {}).items()
+                f"{key}_days": int(value) for key, value in (watch_rows[6] or {}).items()
             },
             "estimated_requests_per_day": estimated_daily,
             "estimated_requests_per_30_days": estimated_monthly,
@@ -6983,9 +6986,7 @@ def _current_care_publication_inventory(settings: Settings) -> dict[str, Any]:
                FROM care_publication_run_items WHERE status = 'FAILED'
                GROUP BY opportunity_id"""
         ).fetchall()
-    failure_state = {
-        str(row[0]): {"count": int(row[1]), "latest": row[2]} for row in failure_rows
-    }
+    failure_state = {str(row[0]): {"count": int(row[1]), "latest": row[2]} for row in failure_rows}
     hygiene = audit_opportunities(opportunities)
     hygiene_by_id = {item["opportunity_id"]: item for item in hygiene["items"]}
     decisions: list[dict[str, Any]] = []
@@ -7035,6 +7036,29 @@ def _current_care_publication_inventory(settings: Settings) -> dict[str, Any]:
     }
 
 
+def care_policy_readonly_items(settings: Settings) -> list[dict[str, Any]]:
+    """Return current policy decisions for MCP/admin projections without mutation."""
+    inventory = _current_care_publication_inventory(settings)
+    items: list[dict[str, Any]] = []
+    for item in inventory["decisions"]:
+        opportunity = item["opportunity"]
+        publication = item["decision"]
+        withdrawal = _care_withdrawal_decision(item)
+        items.append(
+            {
+                "opportunity_id": str(opportunity["id"]),
+                "publication_outcome": publication.outcome,
+                "publication_reason": publication.reason,
+                "publication_exclusions": list(publication.exclusions),
+                "withdrawal_outcome": withdrawal.outcome,
+                "withdrawal_reason": withdrawal.reason,
+                "hygiene_category": item["hygiene"].get("category"),
+                "hygiene_reason": item["hygiene"].get("reason"),
+            }
+        )
+    return items
+
+
 def _care_withdrawal_preview_from_inventory(inventory: dict[str, Any]) -> dict[str, Any]:
     """Build a bounded Phase-D preview from an already-loaded publication inventory."""
     outcomes: Counter[str] = Counter()
@@ -7054,9 +7078,7 @@ def _care_withdrawal_preview_from_inventory(inventory: dict[str, Any]) -> dict[s
         lifecycle = str(opportunity.get("customer_lifecycle_stage") or "NEEDS_REVIEW")
         provenance = (
             "AUTOMATIC"
-            if (opportunity.get("publication_automation_provenance") or {}).get(
-                "policy_version"
-            )
+            if (opportunity.get("publication_automation_provenance") or {}).get("policy_version")
             else "MANUAL_PROTECTED"
         )
         decision = evaluate_withdrawal(
@@ -7075,8 +7097,7 @@ def _care_withdrawal_preview_from_inventory(inventory: dict[str, Any]) -> dict[s
             {
                 canonical_planning_outcome(signal.get("metadata") or {}).outcome.value
                 for signal in opportunity.get("relationships") or []
-                if signal.get("source_type") == "planning"
-                and signal.get("status") == "ACTIVE"
+                if signal.get("source_type") == "planning" and signal.get("status") == "ACTIVE"
             }
         )
         evidence_dates = [
@@ -7112,8 +7133,7 @@ def _care_withdrawal_preview_from_inventory(inventory: dict[str, Any]) -> dict[s
             and (
                 lifecycle == "STOPPED"
                 or opportunity.get("merged_into_opportunity_id")
-                or hygiene.get("category")
-                in {"SUPERSEDED_CANDIDATE", "DUPLICATE_CANDIDATE"}
+                or hygiene.get("category") in {"SUPERSEDED_CANDIDATE", "DUPLICATE_CANDIDATE"}
             )
             and len(protected_terminal) < 100
         ):
@@ -7172,9 +7192,7 @@ def _current_care_withdrawal_inventory(settings: Settings) -> dict[str, Any]:
                FROM care_withdrawal_run_items WHERE status = 'FAILED'
                GROUP BY opportunity_id"""
         ).fetchall()
-    failure_state = {
-        str(row[0]): {"count": int(row[1]), "latest": row[2]} for row in failure_rows
-    }
+    failure_state = {str(row[0]): {"count": int(row[1]), "latest": row[2]} for row in failure_rows}
     published: list[dict[str, Any]] = []
     eligible: list[dict[str, Any]] = []
     outcomes: Counter[str] = Counter()
@@ -7246,9 +7264,7 @@ def care_withdrawal_preview(settings: Settings, *, limit: int = 10) -> dict[str,
             "eligible": len(inventory["eligible"]),
             "selectable": len(inventory["selectable"]),
             "selected": len(selected),
-            "selected_opportunity_ids": [
-                str(item["opportunity"]["id"]) for item in selected
-            ],
+            "selected_opportunity_ids": [str(item["opportunity"]["id"]) for item in selected],
             "deferred_failures": len(inventory["deferred_failures"]),
             "protected_publications_selectable": 0,
         }
@@ -7551,9 +7567,7 @@ def execute_care_withdrawal_batch(
                 result["failed"],
                 Jsonb(
                     {
-                        "unexpected_policy_transitions": result[
-                            "unexpected_policy_transitions"
-                        ],
+                        "unexpected_policy_transitions": result["unexpected_policy_transitions"],
                         "publication_changes": result["publication_changes"],
                     }
                 ),
@@ -7578,9 +7592,7 @@ def execute_care_withdrawal_batch(
     return result
 
 
-def care_publication_automation_preview(
-    settings: Settings, *, limit: int = 25
-) -> dict[str, Any]:
+def care_publication_automation_preview(settings: Settings, *, limit: int = 25) -> dict[str, Any]:
     requested_limit = min(max(int(limit), 1), 100)
     inventory = _current_care_publication_inventory(settings)
     eligible = inventory["eligible"]
@@ -7777,9 +7789,9 @@ def execute_care_publication_batch(
                         "planning_subtype": (signal.get("extracted_facts") or {}).get(
                             "planning_subtype"
                         ),
-                        "opportunity_creation_decision": (
-                            signal.get("extracted_facts") or {}
-                        ).get("opportunity_creation_decision"),
+                        "opportunity_creation_decision": (signal.get("extracted_facts") or {}).get(
+                            "opportunity_creation_decision"
+                        ),
                     }
                     for signal in current.get("relationships") or []
                     if signal.get("status") == "ACTIVE"
@@ -7900,9 +7912,7 @@ def execute_care_publication_batch(
                 result["failed"],
                 Jsonb(
                     {
-                        "unexpected_policy_transitions": result[
-                            "unexpected_policy_transitions"
-                        ],
+                        "unexpected_policy_transitions": result["unexpected_policy_transitions"],
                         "withdrawal_changes": 0,
                     }
                 ),
@@ -8069,10 +8079,7 @@ def enrol_care_planning_watches(
                 else deterministic_initial_poll_at(f"{key[0]}:{key[1]}", cadence, now)
             )
             if prior:
-                changed = (
-                    not prior["enabled"]
-                    or prior["cadence_days"] != cadence
-                )
+                changed = not prior["enabled"] or prior["cadence_days"] != cadence
                 conn.execute(
                     """UPDATE planning_lifecycle_watches
                        SET family_id = %s, planning_authority = %s, planning_reference = %s,
@@ -8083,13 +8090,20 @@ def enrol_care_planning_watches(
                            disabled_reason = NULL, policy_version = %s, updated_at = now()
                        WHERE id = %s""",
                     (
-                        item.get("family_id"), item["authority"], item["reference"],
-                        item["customer_lifecycle_stage"], cadence, next_poll,
+                        item.get("family_id"),
+                        item["authority"],
+                        item["reference"],
+                        item["customer_lifecycle_stage"],
+                        cadence,
+                        next_poll,
                         item["decision"].planning_outcome,
                         now - timedelta(days=item["decision"].age_days)
-                        if item["decision"].age_days is not None else None,
-                        item["decision"].age_source, Jsonb(item["snapshot"]),
-                        CARE_PLANNING_WATCHER_POLICY_VERSION, prior["id"],
+                        if item["decision"].age_days is not None
+                        else None,
+                        item["decision"].age_source,
+                        Jsonb(item["snapshot"]),
+                        CARE_PLANNING_WATCHER_POLICY_VERSION,
+                        prior["id"],
                     ),
                 )
                 if changed:
@@ -8101,8 +8115,14 @@ def enrol_care_planning_watches(
                               policy_version, actor)
                            VALUES (%s, 'UPDATED', %s, TRUE, %s, %s,
                                    'policy_reenrolment', %s, %s)""",
-                        (prior["id"], prior["enabled"], prior["cadence_days"], cadence,
-                         CARE_PLANNING_WATCHER_POLICY_VERSION, actor),
+                        (
+                            prior["id"],
+                            prior["enabled"],
+                            prior["cadence_days"],
+                            cadence,
+                            CARE_PLANNING_WATCHER_POLICY_VERSION,
+                            actor,
+                        ),
                     )
                     result["history_rows_created"] += 1
                 continue
@@ -8116,13 +8136,21 @@ def enrol_care_planning_watches(
                    VALUES (%s, %s, %s, %s, %s, TRUE, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                    RETURNING id""",
                 (
-                    item.get("family_id"), item["opportunity_id"], item["id"],
-                    item["decision"].planning_outcome, next_poll,
-                    CARE_PLANNING_WATCHER_POLICY_VERSION, item["authority"],
-                    item["reference"], item["customer_lifecycle_stage"], cadence,
+                    item.get("family_id"),
+                    item["opportunity_id"],
+                    item["id"],
+                    item["decision"].planning_outcome,
+                    next_poll,
+                    CARE_PLANNING_WATCHER_POLICY_VERSION,
+                    item["authority"],
+                    item["reference"],
+                    item["customer_lifecycle_stage"],
+                    cadence,
                     now - timedelta(days=item["decision"].age_days)
-                    if item["decision"].age_days is not None else None,
-                    item["decision"].age_source, Jsonb(item["snapshot"]),
+                    if item["decision"].age_days is not None
+                    else None,
+                    item["decision"].age_source,
+                    Jsonb(item["snapshot"]),
                     Jsonb({"actor": actor, "staggered_at": now.isoformat()}),
                 ),
             ).fetchone()[0]
@@ -8204,9 +8232,7 @@ def set_care_planning_watcher_execution(
     }
 
 
-def queue_due_care_planning_watches(
-    settings: Settings, *, max_due: int = 15
-) -> dict[str, Any]:
+def queue_due_care_planning_watches(settings: Settings, *, max_due: int = 15) -> dict[str, Any]:
     """Reserve and queue due watches within daily/monthly request guardrails."""
     if not settings.planning_manual_run_queue_url:
         raise RuntimeError("PLANNING_MANUAL_RUN_QUEUE_URL is not configured")
@@ -8396,8 +8422,12 @@ def update_care_planning_watch_result(
                    completed_at = now()
                WHERE id = %s""",
             (
-                status, requests, details.get("provider_result"), details.get("error_type"),
-                Jsonb(details), run_id,
+                status,
+                requests,
+                details.get("provider_result"),
+                details.get("error_type"),
+                Jsonb(details),
+                run_id,
             ),
         )
         conn.execute(
@@ -8414,9 +8444,15 @@ def update_care_planning_watch_result(
                    updated_at = now()
                WHERE id = %s""",
             (
-                enabled, disabled_reason, next_poll, status, errors,
+                enabled,
+                disabled_reason,
+                next_poll,
+                status,
+                errors,
                 snapshot.get("canonical_outcome") if snapshot else None,
-                Jsonb(snapshot) if snapshot else None, status, watch_id,
+                Jsonb(snapshot) if snapshot else None,
+                status,
+                watch_id,
             ),
         )
         if terminal and watch[0]:
@@ -8427,7 +8463,10 @@ def update_care_planning_watch_result(
                    VALUES (%s, 'DISABLED', TRUE, FALSE, %s, %s,
                            'terminal_planning_outcome', %s, 'SYSTEM_WATCHER', %s)""",
                 (
-                    watch_id, watch[1], watch[1], CARE_PLANNING_WATCHER_POLICY_VERSION,
+                    watch_id,
+                    watch[1],
+                    watch[1],
+                    CARE_PLANNING_WATCHER_POLICY_VERSION,
                     Jsonb({"run_id": run_id, "status": status}),
                 ),
             )

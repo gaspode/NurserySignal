@@ -2,6 +2,31 @@ output "api_url" {
   value = aws_apigatewayv2_stage.default.invoke_url
 }
 
+output "mcp_url" {
+  description = "SignalHub MCP v1 Streamable HTTP endpoint."
+  value       = "${aws_apigatewayv2_stage.default.invoke_url}mcp"
+}
+
+output "mcp_readonly_secret_arn" {
+  description = "Secrets Manager ARN for the scoped read-only MCP service OAuth client."
+  value       = aws_secretsmanager_secret.mcp_readonly.arn
+}
+
+output "mcp_chatgpt_client_id" {
+  description = "Public Cognito OAuth client ID for ChatGPT MCP authorization-code + PKCE."
+  value       = aws_cognito_user_pool_client.mcp_chatgpt.id
+}
+
+output "mcp_oauth_authorization_url" {
+  description = "OAuth authorization endpoint for the SignalHub MCP."
+  value       = "https://${aws_cognito_user_pool_domain.mcp.domain}.auth.${var.aws_region}.amazoncognito.com/oauth2/authorize"
+}
+
+output "mcp_oauth_token_url" {
+  description = "OAuth token endpoint for the SignalHub MCP."
+  value       = "https://${aws_cognito_user_pool_domain.mcp.domain}.auth.${var.aws_region}.amazoncognito.com/oauth2/token"
+}
+
 output "frontend_url" {
   value = "https://${aws_cloudfront_distribution.frontend.domain_name}"
 }

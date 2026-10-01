@@ -37,6 +37,7 @@ def test_initial_migration_exists_and_contains_provenance_tables() -> None:
         "0029_care_planning_watcher_runtime.sql",
         "0030_care_publication_automation.sql",
         "0031_care_withdrawal_automation.sql",
+        "0032_mcp_readonly_audit.sql",
     ]
     sql = "\n".join(path.read_text(encoding="utf-8") for path in files)
     tables = (
@@ -95,6 +96,7 @@ def test_initial_migration_exists_and_contains_provenance_tables() -> None:
     assert "CREATE TABLE IF NOT EXISTS care_withdrawal_runs" in sql
     assert "withdrawal_automation_provenance" in sql
     assert "care-withdrawal-v1" in sql
+    assert "CREATE TABLE IF NOT EXISTS mcp_request_audit" in sql
 
 
 def test_ai_review_insert_has_one_value_placeholder_per_column() -> None:
