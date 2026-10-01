@@ -28,6 +28,11 @@ Current gate:
   authentication, while retaining Codex's `none` authentication and RFC 8252 loopback callback.
   Web assertions are RS256-verified against ChatGPT's published JWKS with exact issuer, subject and
   SignalHub token-endpoint audience checks; the facade continues to bind the exact MCP resource.
+- Commit `039d80a` passed CI run `36928948929`, deployed in run `36929099863`, and passed the
+  authenticated production MCP smoke in run `36929636846`. Live discovery advertises both supported
+  token authentication methods, and exact web and desktop authorization requests both reach Cognito.
+  Exact next step: remove the stale ChatGPT web connection, add the production `/mcp` URL again, and
+  complete one fresh web authorization so ChatGPT sends its signed token-endpoint assertion.
 - MCP v1 is deployed at the production `/mcp` endpoint with RFC 9728 protected-resource discovery,
   an application-owned 401 Bearer challenge and an OAuth 2.1 authorization-code/PKCE facade. The
   canonical resource is the exact `/mcp` URL and RFC 8707 resource binding is preserved through
