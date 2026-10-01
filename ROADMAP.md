@@ -1547,3 +1547,13 @@ Paid-pilot activation check (2026-09-28):
   pass. API/database/frontend health is green, active ingestion/enrichment queues and their DLQs are empty, and the
   six known collector-DLQ baseline messages remain unchanged. Phase D2 remains disabled and requires a separate
   explicit decision after continued watcher observation produces a real terminal case.
+- CareProspect Phase D2 adds a bounded automatic-withdrawal coordinator around the unchanged
+  `care-withdrawal-v1` evaluator. Durable runtime state defaults disabled with a ten-record maximum, and every run
+  re-evaluates current published state immediately before a conditional PUBLISHED-to-WITHDRAWN transition. Only
+  automatically published records can enter selection; human publications and automation blocks remain protected.
+  Successful transitions retain customer content and publication history while recording withdrawal timestamp,
+  prior publication provenance, lifecycle, reason, evidence references, run item and admin audit event. Failure
+  isolation, 24-hour/three-failure deferral, conditional update guards and WITHDRAWN exclusion from the publication
+  coordinator prevent duplicate history and withdrawal/republication thrashing. Operations now exposes runtime,
+  bounded execution, windows, failures and totals. Infrastructure is deployed disabled first; production dry-run,
+  zero-candidate activation and the six-hour schedule gate remain pending live validation.

@@ -183,6 +183,10 @@ def test_batch_is_bounded_audited_and_records_automatic_provenance(monkeypatch) 
     ]
     assert all("care_opportunity_auto_published" in statement for statement in audit_statements)
     assert not any("WITHDRAWN" in statement for statement in fake.statements)
+    publication_updates = [
+        statement for statement in fake.statements if statement.startswith("UPDATE opportunities")
+    ]
+    assert all("publication_status = 'DRAFT'" in statement for statement in publication_updates)
 
 
 def test_policy_is_rechecked_immediately_and_state_change_is_skipped(monkeypatch) -> None:

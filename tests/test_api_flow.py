@@ -1343,6 +1343,97 @@ def test_care_publication_admin_preview_execution_and_switch_are_admin_only(
     }
 
 
+def test_care_withdrawal_coordinator_is_recurring_and_bounded(monkeypatch) -> None:
+    captured = {}
+    monkeypatch.setattr(
+        "app.handler.execute_care_withdrawal_batch",
+        lambda settings, **kwargs: captured.update(kwargs)
+        or {"withdrawn": 0, "publication_changes": 0},
+    )
+    result = handler({"operation": "care_withdrawal_coordinator", "max_due": 999}, None)
+    assert result == {"withdrawn": 0, "publication_changes": 0}
+    assert captured == {
+        "actor": "SYSTEM_WITHDRAWAL_COORDINATOR",
+        "limit": 50,
+        "trigger_source": "SCHEDULED",
+        "require_recurring": True,
+    }
+
+
+def test_care_withdrawal_admin_preview_execution_and_switch_are_admin_only(
+    monkeypatch,
+) -> None:
+    preview_args = {}
+    execution_args = {}
+    state_args = {}
+    monkeypatch.setattr(
+        "app.handler.care_withdrawal_preview",
+        lambda settings, **kwargs: preview_args.update(kwargs)
+        or {"preview_only": True, "publication_state_mutations": 0},
+    )
+    monkeypatch.setattr(
+        "app.handler.execute_care_withdrawal_batch",
+        lambda settings, **kwargs: execution_args.update(kwargs)
+        or {"withdrawn": 0, "publication_changes": 0},
+    )
+    monkeypatch.setattr(
+        "app.handler.set_care_withdrawal_automation_execution",
+        lambda settings, **kwargs: state_args.update(kwargs)
+        or {"execution_enabled": kwargs["enabled"], "withdrawal_changes": 0},
+    )
+    denied = handler(
+        event(
+            "/admin/opportunities/withdrawal-automation-run",
+            "POST",
+            body=json.dumps({"preview": False}),
+            claims={"sub": "staff", "cognito:groups": ["Other"]},
+        ),
+        None,
+    )
+    assert denied["statusCode"] == 403
+    response = handler(
+        event(
+            "/admin/opportunities/withdrawal-automation-run",
+            "POST",
+            body=json.dumps({"preview": True, "limit": 999}),
+        ),
+        None,
+    )
+    assert response["statusCode"] == 200
+    assert preview_args == {"limit": 50}
+    response = handler(
+        event(
+            "/admin/opportunities/withdrawal-automation-run",
+            "POST",
+            body=json.dumps({"preview": False, "limit": 10}),
+        ),
+        None,
+    )
+    assert response["statusCode"] == 200
+    assert execution_args == {
+        "actor": "reviewer-123",
+        "limit": 10,
+        "trigger_source": "ADMIN",
+    }
+    response = handler(
+        event(
+            "/admin/opportunities/withdrawal-automation-state",
+            "POST",
+            body=json.dumps(
+                {"enabled": True, "recurring_enabled": True, "reason": "activate"}
+            ),
+        ),
+        None,
+    )
+    assert response["statusCode"] == 200
+    assert state_args == {
+        "enabled": True,
+        "recurring_enabled": True,
+        "actor": "reviewer-123",
+        "reason": "activate",
+    }
+
+
 def test_care_lifecycle_bootstrap_is_admin_only_and_bounded(monkeypatch) -> None:
     captured = {}
 

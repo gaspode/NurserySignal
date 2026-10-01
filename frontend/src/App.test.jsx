@@ -160,7 +160,7 @@ describe("admin frontend", () => {
     const apiClient = vi.fn().mockResolvedValue({
       schema_version: "signalhub-operations-summary-v1",
       generated_at: "2026-10-01T12:00:00Z",
-      health: { queues_ok: null, watcher_ok: true, publication_ok: true, provider_quota_ok: true },
+      health: { queues_ok: null, watcher_ok: true, publication_ok: true, withdrawal_ok: true, provider_quota_ok: true },
       ingestion: { windows: { "24h": { records_collected: 4, signals_accepted: 3, signals_rejected: 1, pending_review: 0 }, "7d": {}, "30d": {} }, failure_metric: { available: false } },
       signals: { total: 10, unmatched: 2, by_review_status: { PENDING: 1, APPROVED: 8, REJECTED: 1 }, review_rates: { acceptance: { rate_percent: 88.9 } } },
       opportunities: { active_total: 5, needs_attention: 2, match_review_backlog: 1 },
@@ -169,13 +169,13 @@ describe("admin frontend", () => {
       publication: { enabled: true, recurring_enabled: true, policy_version: "care-publication-v3", total_published: 87, automatically_published: 35, manually_protected_published: 52, policy_outcomes: { AUTO_PUBLISH_ELIGIBLE_UNPUBLISHED: 513, QA_HOLDOUT: 68, MANUAL_REVIEW: 249 }, latest_execution: { failed: 0 } },
       data_quality: { needs_review_lifecycle: 164, missing_organisation_identity: 3, missing_site_or_location_identity: 2, duplicate_or_superseded: 0, manual_automation_blocks: 1 },
       queues: { available: false, reason: "Queue telemetry is not cached." },
-      withdrawal: { enabled: false, preview_only: true, policy_version: "care-withdrawal-v1", currently_published_total: 87, outcomes: { KEEP_PUBLISHED: 30, AUTO_WITHDRAW_ELIGIBLE: 5, MANUAL_REVIEW: 0, MANUAL_PROTECTION: 52 }, reason_counts: { stopped: 5 }, automatic_withdrawal_candidates: [{ opportunity_id: "withdraw-1", withdrawal_reason: "stopped" }], message: "Phase D1 is preview-only; no publication state is changed." },
+      withdrawal: { enabled: true, recurring_enabled: true, preview_only: false, policy_version: "care-withdrawal-v1", currently_published_total: 87, total_automatic_withdrawals: 0, max_withdrawals_per_execution: 10, latest_execution: { selected: 0, withdrawn: 0, skipped: 0, failed: 0 }, outcomes: { KEEP_PUBLISHED: 30, AUTO_WITHDRAW_ELIGIBLE: 5, MANUAL_REVIEW: 0, MANUAL_PROTECTION: 52 }, reason_counts: { stopped: 5 }, automatic_withdrawal_candidates: [{ opportunity_id: "withdraw-1", withdrawal_reason: "stopped" }], message: "Automatic withdrawal is enabled with bounded execution." },
     });
     render(<OperationsPage apiClient={apiClient} onNavigate={onNavigate} />);
     expect(await screen.findByRole("heading", { name: "Operations" })).toBeInTheDocument();
     expect(screen.getByText("259")).toBeInTheDocument();
-    expect(screen.getByText("Phase D1 is preview-only; no publication state is changed.")).toBeInTheDocument();
-    expect(screen.getByText("Auto-withdraw eligible")).toBeInTheDocument();
+    expect(screen.getByText("Automatic withdrawal is enabled with bounded execution.")).toBeInTheDocument();
+    expect(screen.getByText("Eligible")).toBeInTheDocument();
     expect(screen.getByText("care-withdrawal-v1")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "stopped · View opportunity" }));
     expect(onNavigate).toHaveBeenCalledWith("/opportunities/withdraw-1");

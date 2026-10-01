@@ -88,6 +88,26 @@ class ReadOnlyConnection:
             return Result(rows=[])
         if "FROM care_publication_run_items WHERE status = 'FAILED'" in sql:
             return Result(rows=[])
+        if "FROM care_withdrawal_automation_state" in sql:
+            return Result(
+                one=(
+                    True,
+                    True,
+                    "care-withdrawal-v1",
+                    None,
+                    10,
+                    "2026-10-01T00:00:00Z",
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                )
+            )
+        if "LEFT JOIN care_withdrawal_run_items" in sql:
+            return Result(rows=[("24h", 0, 0, 0), ("7d", 0, 0, 0), ("30d", 0, 0, 0)])
+        if "FROM care_withdrawal_run_items WHERE status = 'FAILED'" in sql:
+            return Result(rows=[])
         raise AssertionError(sql)
 
 
@@ -140,9 +160,12 @@ def test_operations_summary_is_versioned_bounded_and_read_only(monkeypatch) -> N
     assert summary["publication"]["windows"]["24h"]["success_rate"]["rate_percent"] == 100.0
     assert summary["queues"]["available"] is False
     assert summary["recent_executions"]["collectors"]["available"] is False
-    assert summary["withdrawal"]["enabled"] is False
-    assert summary["withdrawal"]["preview_only"] is True
+    assert summary["withdrawal"]["enabled"] is True
+    assert summary["withdrawal"]["preview_only"] is False
     assert summary["withdrawal"]["currently_published_total"] == 0
+    assert summary["withdrawal"]["enabled"] is True
+    assert summary["withdrawal"]["max_withdrawals_per_execution"] == 10
+    assert summary["health"]["withdrawal_ok"] is True
     assert all(statement.startswith(("SELECT", "WITH")) for statement in fake.statements)
     assert "secret" not in str(summary).lower()
 

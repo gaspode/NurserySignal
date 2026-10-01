@@ -83,6 +83,7 @@ from app.repository import (
     create_opportunity_from_signal,
     enrol_care_planning_watches,
     execute_care_publication_batch,
+    execute_care_withdrawal_batch,
     link_signal_to_opportunity,
     list_match_reviews,
     list_opportunities,
@@ -116,6 +117,7 @@ from app.repository import (
     safe_agreement_bulk_approve,
     set_care_planning_watcher_execution,
     set_care_publication_automation_execution,
+    set_care_withdrawal_automation_execution,
     set_opportunity_automation_block,
     set_organisation_type,
     signal_detail,
@@ -402,6 +404,10 @@ def _admin_path(path: str) -> tuple[str, str | None]:
         return "opportunity-publication-automation-run", None
     if path == "/admin/opportunities/withdrawal-preview":
         return "opportunity-withdrawal-preview", None
+    if path == "/admin/opportunities/withdrawal-automation-state":
+        return "opportunity-withdrawal-automation-state", None
+    if path == "/admin/opportunities/withdrawal-automation-run":
+        return "opportunity-withdrawal-automation-run", None
     if path.startswith("/admin/opportunities/"):
         parts = path[len("/admin/opportunities/") :].split("/")
         if len(parts) == 2 and parts[1] == "publication":
@@ -448,6 +454,16 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             settings,
             actor="SYSTEM_PUBLICATION_COORDINATOR",
             limit=min(max(int(event.get("max_due") or 25), 1), 100),
+            trigger_source="SCHEDULED",
+            require_recurring=True,
+        )
+    if event.get("operation") == "care_withdrawal_coordinator" and not event.get(
+        "requestContext"
+    ):
+        return execute_care_withdrawal_batch(
+            settings,
+            actor="SYSTEM_WITHDRAWAL_COORDINATOR",
+            limit=min(max(int(event.get("max_due") or 10), 1), 50),
             trigger_source="SCHEDULED",
             require_recurring=True,
         )
@@ -1755,6 +1771,44 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 if admin_error:
                     return admin_error
                 return _response(200, care_withdrawal_preview(settings))
+            if action == "opportunity-withdrawal-automation-state" and method == "POST":
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                payload = parse_json_payload(_raw_body(event))
+                enabled = payload.get("enabled")
+                recurring_enabled = payload.get("recurring_enabled", False)
+                if not isinstance(enabled, bool) or not isinstance(recurring_enabled, bool):
+                    raise ValueError("enabled and recurring_enabled must be booleans")
+                actor = str(claims.get("sub") or claims.get("username") or "unknown")
+                return _response(
+                    200,
+                    set_care_withdrawal_automation_execution(
+                        settings,
+                        enabled=enabled,
+                        recurring_enabled=recurring_enabled,
+                        actor=actor,
+                        reason=str(payload.get("reason") or "").strip()[:500] or None,
+                    ),
+                )
+            if action == "opportunity-withdrawal-automation-run" and method == "POST":
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                payload = parse_json_payload(_raw_body(event))
+                limit = min(max(int(payload.get("limit") or 10), 1), 50)
+                if bool(payload.get("preview", True)):
+                    return _response(200, care_withdrawal_preview(settings, limit=limit))
+                actor = str(claims.get("sub") or claims.get("username") or "unknown")
+                return _response(
+                    200,
+                    execute_care_withdrawal_batch(
+                        settings,
+                        actor=actor,
+                        limit=limit,
+                        trigger_source="ADMIN",
+                    ),
+                )
             if action == "opportunity-lifecycle-bootstrap" and method == "POST":
                 admin_error = _require_admin(claims, settings)
                 if admin_error:

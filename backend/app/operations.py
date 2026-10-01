@@ -236,6 +236,36 @@ def operations_summary(settings: Settings) -> dict[str, Any]:
                FROM care_publication_run_items WHERE status = 'FAILED'
                ORDER BY created_at DESC LIMIT 10"""
         ).fetchall()
+        withdrawal_state = conn.execute(
+            """SELECT execution_enabled, recurring_enabled, policy_version,
+                      emergency_reason, max_withdrawals_per_execution,
+                      last_execution_at, last_selected, last_withdrawn,
+                      last_skipped, last_failed,
+                      (SELECT count(*) FROM opportunities
+                       WHERE vertical = 'CHILDRENS_HOME'
+                         AND publication_status = 'WITHDRAWN'
+                         AND withdrawal_automation_provenance ? 'policy_version')
+               FROM care_withdrawal_automation_state WHERE singleton"""
+        ).fetchone()
+        withdrawal_window_rows = conn.execute(
+            """WITH windows(label, since_at) AS (
+                 VALUES ('24h', now() - interval '24 hours'),
+                        ('7d', now() - interval '7 days'),
+                        ('30d', now() - interval '30 days')
+               )
+               SELECT w.label,
+                      count(*) FILTER (WHERE i.status = 'WITHDRAWN'),
+                      count(*) FILTER (WHERE i.status = 'SKIPPED'),
+                      count(*) FILTER (WHERE i.status = 'FAILED')
+               FROM windows w
+               LEFT JOIN care_withdrawal_run_items i ON i.created_at >= w.since_at
+               GROUP BY w.label"""
+        ).fetchall()
+        recent_withdrawal_failures = conn.execute(
+            """SELECT opportunity_id, reason, created_at
+               FROM care_withdrawal_run_items WHERE status = 'FAILED'
+               ORDER BY created_at DESC LIMIT 10"""
+        ).fetchall()
 
     signal_by_vertical: dict[str, Counter[str]] = {}
     signal_status = Counter()
@@ -270,6 +300,24 @@ def operations_summary(settings: Settings) -> dict[str, Any]:
             "success_rate": _rate(int(published or 0), int(published or 0) + int(failures or 0)),
         }
         for label, published, skipped, failures in publication_window_rows
+    }
+    withdrawal_windows = {
+        label: {
+            "withdrawn": int(withdrawn or 0),
+            "skipped": int(skipped or 0),
+            "failed": int(failures or 0),
+            "success_rate": _rate(
+                int(withdrawn or 0), int(withdrawn or 0) + int(failures or 0)
+            ),
+        }
+        for label, withdrawn, skipped, failures in withdrawal_window_rows
+    }
+    withdrawal_windows = {
+        label: withdrawal_windows.get(
+            label,
+            {"withdrawn": 0, "skipped": 0, "failed": 0, "success_rate": _rate(0, 0)},
+        )
+        for label in WINDOWS
     }
     publication_windows = {
         label: publication_windows.get(
@@ -505,10 +553,43 @@ def operations_summary(settings: Settings) -> dict[str, Any]:
         },
         "withdrawal": {
             **withdrawal_preview,
-            "enabled": False,
-            "policy_version": CARE_WITHDRAWAL_POLICY_VERSION,
-            "phase": "PREVIEW_ONLY",
-            "message": "Phase D1 is preview-only; no publication state is changed.",
+            "preview_only": not bool(
+                withdrawal_state and withdrawal_state[0] and withdrawal_state[1]
+            ),
+            "enabled": bool(withdrawal_state and withdrawal_state[0]),
+            "recurring_enabled": bool(withdrawal_state and withdrawal_state[1]),
+            "policy_version": (
+                withdrawal_state[2]
+                if withdrawal_state
+                else CARE_WITHDRAWAL_POLICY_VERSION
+            ),
+            "emergency_reason": withdrawal_state[3] if withdrawal_state else None,
+            "max_withdrawals_per_execution": (
+                int(withdrawal_state[4]) if withdrawal_state else 10
+            ),
+            "total_automatic_withdrawals": (
+                int(withdrawal_state[10] or 0) if withdrawal_state else 0
+            ),
+            "last_execution_at": withdrawal_state[5] if withdrawal_state else None,
+            "latest_execution": {
+                "selected": int(withdrawal_state[6] or 0) if withdrawal_state else 0,
+                "withdrawn": int(withdrawal_state[7] or 0) if withdrawal_state else 0,
+                "skipped": int(withdrawal_state[8] or 0) if withdrawal_state else 0,
+                "failed": int(withdrawal_state[9] or 0) if withdrawal_state else 0,
+            },
+            "windows": withdrawal_windows,
+            "recent_failures": [
+                {"opportunity_id": str(row[0]), "reason": row[1], "created_at": row[2]}
+                for row in recent_withdrawal_failures
+            ],
+            "next_coordinator_run": None,
+            "next_coordinator_run_available": False,
+            "phase": "CONTROLLED_RUNTIME",
+            "message": (
+                "Automatic withdrawal is enabled with bounded execution."
+                if withdrawal_state and withdrawal_state[0] and withdrawal_state[1]
+                else "Automatic withdrawal is disabled."
+            ),
         },
         "queues": queues,
         "data_quality": {
@@ -566,6 +647,12 @@ def operations_summary(settings: Settings) -> dict[str, Any]:
                 "enabled": bool(publication_state and publication_state[0]),
                 "last_failed": int(publication_state[9] or 0) if publication_state else 0,
             },
+            "withdrawal_ok": bool(withdrawal_state and withdrawal_state[0])
+            and int(withdrawal_state[9] or 0) == 0,
+            "withdrawal_ok_metric": {
+                "enabled": bool(withdrawal_state and withdrawal_state[0]),
+                "last_failed": int(withdrawal_state[9] or 0) if withdrawal_state else 0,
+            },
             "provider_quota_ok": bool(watcher_row)
             and requests_today < int(watcher_row[4])
             and requests_month < int(watcher_row[5]),
@@ -575,6 +662,8 @@ def operations_summary(settings: Settings) -> dict[str, Any]:
                 "month": requests_month,
                 "monthly_limit": int(watcher_row[5] or 0) if watcher_row else 0,
             },
-            "recent_failures_present": bool(failed or recent_publication_failures),
+            "recent_failures_present": bool(
+                failed or recent_publication_failures or recent_withdrawal_failures
+            ),
         },
     }

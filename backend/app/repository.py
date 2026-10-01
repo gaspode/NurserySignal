@@ -6277,7 +6277,8 @@ def _care_policy_opportunities(
                    o.customer_lifecycle_stage, o.publication_automation_blocked,
                    o.publication_automation_reason, o.customer_title, o.customer_summary,
                    o.customer_published_by, o.customer_published_at,
-                   o.publication_automation_provenance,
+                   o.publication_automation_provenance, o.customer_withdrawn_at,
+                   o.withdrawal_automation_provenance,
                    COALESCE(rel.relationships, '[]'::jsonb),
                    COALESCE(hist.actions, ARRAY[]::text[]),
                    COALESCE(audit.actions, ARRAY[]::text[]),
@@ -6351,6 +6352,8 @@ def _care_policy_opportunities(
         "customer_published_by",
         "customer_published_at",
         "publication_automation_provenance",
+        "customer_withdrawn_at",
+        "withdrawal_automation_provenance",
         "relationships",
         "history_actions",
         "audit_actions",
@@ -7149,11 +7152,430 @@ def _care_withdrawal_preview_from_inventory(inventory: dict[str, Any]) -> dict[s
     }
 
 
-def care_withdrawal_preview(settings: Settings) -> dict[str, Any]:
-    """Evaluate currently published CareProspect opportunities without mutation."""
-    return _care_withdrawal_preview_from_inventory(
-        _current_care_publication_inventory(settings)
+def _care_withdrawal_decision(item: dict[str, Any]) -> Any:
+    opportunity = item["opportunity"]
+    hygiene = item["hygiene"]
+    return evaluate_withdrawal(
+        item["projection"],
+        str(opportunity.get("customer_lifecycle_stage") or "NEEDS_REVIEW"),
+        opportunity.get("relationships") or [],
+        hygiene_category=hygiene.get("category"),
+        hygiene_warning=hygiene.get("warning"),
     )
+
+
+def _current_care_withdrawal_inventory(settings: Settings) -> dict[str, Any]:
+    publication_inventory = _current_care_publication_inventory(settings)
+    with connection(settings) as conn:
+        failure_rows = conn.execute(
+            """SELECT opportunity_id, count(*), max(created_at)
+               FROM care_withdrawal_run_items WHERE status = 'FAILED'
+               GROUP BY opportunity_id"""
+        ).fetchall()
+    failure_state = {
+        str(row[0]): {"count": int(row[1]), "latest": row[2]} for row in failure_rows
+    }
+    published: list[dict[str, Any]] = []
+    eligible: list[dict[str, Any]] = []
+    outcomes: Counter[str] = Counter()
+    for item in publication_inventory["decisions"]:
+        if item["opportunity"].get("publication_status") != "PUBLISHED":
+            continue
+        decision = _care_withdrawal_decision(item)
+        enriched = {**item, "withdrawal_decision": decision}
+        published.append(enriched)
+        outcomes[decision.outcome] += 1
+        if decision.outcome == "AUTO_WITHDRAW_ELIGIBLE":
+            eligible.append(enriched)
+
+    now = datetime.now(UTC)
+    selectable: list[dict[str, Any]] = []
+    deferred_failures: list[dict[str, Any]] = []
+    for item in eligible:
+        failure = failure_state.get(str(item["opportunity"]["id"]))
+        if failure and (
+            failure["count"] >= 3
+            or (failure["latest"] and failure["latest"] >= now - timedelta(hours=24))
+        ):
+            deferred_failures.append(item)
+        else:
+            selectable.append(item)
+    return {
+        "publication_inventory": publication_inventory,
+        "published": published,
+        "eligible": eligible,
+        "selectable": selectable,
+        "deferred_failures": deferred_failures,
+        "outcomes": dict(sorted(outcomes.items())),
+    }
+
+
+def care_withdrawal_preview(settings: Settings, *, limit: int = 10) -> dict[str, Any]:
+    """Evaluate currently published CareProspect opportunities without mutation."""
+    requested_limit = min(max(int(limit), 1), 50)
+    inventory = _current_care_withdrawal_inventory(settings)
+    report = _care_withdrawal_preview_from_inventory(inventory["publication_inventory"])
+    with connection(settings) as conn:
+        state = conn.execute(
+            """SELECT execution_enabled, recurring_enabled, emergency_reason,
+                      max_withdrawals_per_execution, policy_version,
+                      last_execution_at, last_selected, last_withdrawn,
+                      last_skipped, last_failed, updated_at
+               FROM care_withdrawal_automation_state WHERE singleton"""
+        ).fetchone()
+    selected = inventory["selectable"][:requested_limit]
+    report.update(
+        {
+            "preview_only": not bool(state and state[0] and state[1]),
+            "enabled": bool(state and state[0]),
+            "runtime": {
+                "execution_enabled": bool(state and state[0]),
+                "recurring_enabled": bool(state and state[1]),
+                "emergency_reason": state[2] if state else None,
+                "max_withdrawals_per_execution": int(state[3]) if state else 10,
+                "policy_version": state[4] if state else CARE_WITHDRAWAL_POLICY_VERSION,
+                "last_execution_at": state[5] if state else None,
+                "latest_execution": {
+                    "selected": int(state[6] or 0) if state else 0,
+                    "withdrawn": int(state[7] or 0) if state else 0,
+                    "skipped": int(state[8] or 0) if state else 0,
+                    "failed": int(state[9] or 0) if state else 0,
+                },
+                "updated_at": state[10] if state else None,
+            },
+            "eligible": len(inventory["eligible"]),
+            "selectable": len(inventory["selectable"]),
+            "selected": len(selected),
+            "selected_opportunity_ids": [
+                str(item["opportunity"]["id"]) for item in selected
+            ],
+            "deferred_failures": len(inventory["deferred_failures"]),
+            "protected_publications_selectable": 0,
+        }
+    )
+    return report
+
+
+def set_care_withdrawal_automation_execution(
+    settings: Settings,
+    *,
+    enabled: bool,
+    recurring_enabled: bool,
+    actor: str,
+    reason: str | None,
+) -> dict[str, Any]:
+    if recurring_enabled and not enabled:
+        raise ValueError("recurring withdrawal requires execution to be enabled")
+    with connection(settings) as conn:
+        row = conn.execute(
+            """UPDATE care_withdrawal_automation_state
+               SET execution_enabled = %s, recurring_enabled = %s,
+                   emergency_reason = %s, updated_by = %s, updated_at = now()
+               WHERE singleton
+               RETURNING execution_enabled, recurring_enabled, emergency_reason,
+                         max_withdrawals_per_execution, policy_version, updated_at""",
+            (enabled, recurring_enabled, reason, actor),
+        ).fetchone()
+        conn.execute(
+            """INSERT INTO admin_audit_events
+                 (actor, action, target_type, details, vertical)
+               VALUES (%s, %s, 'withdrawal_automation', %s, 'CHILDRENS_HOME')""",
+            (
+                actor,
+                "care_withdrawal_automation_enabled"
+                if enabled
+                else "care_withdrawal_automation_disabled",
+                Jsonb(
+                    {
+                        "enabled": enabled,
+                        "recurring_enabled": recurring_enabled,
+                        "reason": reason,
+                        "policy_version": CARE_WITHDRAWAL_POLICY_VERSION,
+                    }
+                ),
+            ),
+        )
+        conn.commit()
+    return {
+        "execution_enabled": bool(row[0]),
+        "recurring_enabled": bool(row[1]),
+        "emergency_reason": row[2],
+        "max_withdrawals_per_execution": int(row[3]),
+        "policy_version": row[4],
+        "updated_at": row[5],
+        "publication_changes": 0,
+        "withdrawal_changes": 0,
+    }
+
+
+def _record_care_withdrawal_run_item(
+    settings: Settings,
+    *,
+    run_id: str,
+    opportunity_id: str,
+    status: str,
+    policy_outcome: str | None,
+    reason: str,
+    lifecycle: str | None,
+    details: dict[str, Any] | None = None,
+) -> None:
+    with connection(settings) as conn:
+        conn.execute(
+            """INSERT INTO care_withdrawal_run_items
+                 (run_id, opportunity_id, status, policy_outcome, reason,
+                  lifecycle, details)
+               VALUES (%s, %s, %s, %s, %s, %s, %s)
+               ON CONFLICT (run_id, opportunity_id) DO NOTHING""",
+            (
+                run_id,
+                opportunity_id,
+                status,
+                policy_outcome,
+                reason,
+                lifecycle,
+                Jsonb(details or {}),
+            ),
+        )
+        conn.commit()
+
+
+def execute_care_withdrawal_batch(
+    settings: Settings,
+    *,
+    actor: str,
+    limit: int = 10,
+    trigger_source: str = "ADMIN",
+    require_recurring: bool = False,
+) -> dict[str, Any]:
+    requested_limit = min(max(int(limit), 1), 50)
+    with connection(settings) as conn:
+        state = conn.execute(
+            """SELECT execution_enabled, recurring_enabled,
+                      max_withdrawals_per_execution, policy_version, emergency_reason
+               FROM care_withdrawal_automation_state WHERE singleton FOR UPDATE"""
+        ).fetchone()
+        if not state or not state[0] or (require_recurring and not state[1]):
+            conn.rollback()
+            return {
+                "execution_enabled": bool(state and state[0]),
+                "recurring_enabled": bool(state and state[1]),
+                "selected": 0,
+                "withdrawn": 0,
+                "skipped": 0,
+                "failed": 0,
+                "reason": state[4] if state else "withdrawal_state_missing",
+                "publication_changes": 0,
+                "withdrawal_changes": 0,
+            }
+        batch_limit = min(requested_limit, int(state[2]))
+        run_id = str(
+            conn.execute(
+                """INSERT INTO care_withdrawal_runs
+                     (policy_version, actor, trigger_source, status, requested_limit)
+                   VALUES (%s, %s, %s, 'RUNNING', %s) RETURNING id""",
+                (CARE_WITHDRAWAL_POLICY_VERSION, actor, trigger_source, batch_limit),
+            ).fetchone()[0]
+        )
+        conn.commit()
+
+    inventory = _current_care_withdrawal_inventory(settings)
+    selected = inventory["selectable"][:batch_limit]
+    result: dict[str, Any] = {
+        "run_id": run_id,
+        "policy_version": CARE_WITHDRAWAL_POLICY_VERSION,
+        "execution_enabled": True,
+        "recurring_enabled": bool(state[1]),
+        "selected": len(selected),
+        "withdrawn": 0,
+        "skipped": 0,
+        "failed": 0,
+        "audit_rows_created": 0,
+        "unexpected_policy_transitions": 0,
+        "withdrawn_opportunity_ids": [],
+        "failures": [],
+        "eligible_before": len(inventory["eligible"]),
+        "publication_changes": 0,
+        "withdrawal_changes": 0,
+    }
+    for candidate in selected:
+        opportunity_id = str(candidate["opportunity"]["id"])
+        lifecycle = str(candidate["opportunity"].get("customer_lifecycle_stage") or "")
+        try:
+            with connection(settings) as conn:
+                rows = _care_policy_opportunities(conn, opportunity_id=opportunity_id)
+                if not rows:
+                    raise ValueError("opportunity_not_found")
+                current = rows[0]
+                hygiene = audit_opportunities([current])["items"][0]
+                projection, _, _, _ = _care_publication_projection(current, hygiene)
+                current_item = {
+                    "opportunity": current,
+                    "projection": projection,
+                    "hygiene": hygiene,
+                }
+                decision = _care_withdrawal_decision(current_item)
+                lifecycle = str(current.get("customer_lifecycle_stage") or "")
+                if decision.outcome != "AUTO_WITHDRAW_ELIGIBLE":
+                    result["skipped"] += 1
+                    result["unexpected_policy_transitions"] += 1
+                    conn.rollback()
+                    _record_care_withdrawal_run_item(
+                        settings,
+                        run_id=run_id,
+                        opportunity_id=opportunity_id,
+                        status="SKIPPED",
+                        policy_outcome=decision.outcome,
+                        reason=decision.reason,
+                        lifecycle=lifecycle,
+                    )
+                    continue
+                evidence = [
+                    {
+                        "signal_id": str(signal.get("id")),
+                        "source_type": signal.get("source_type"),
+                        "planning_outcome": canonical_planning_outcome(
+                            signal.get("metadata") or {}
+                        ).outcome.value
+                        if signal.get("source_type") == "planning"
+                        else None,
+                    }
+                    for signal in current.get("relationships") or []
+                    if signal.get("status") == "ACTIVE"
+                ]
+                provenance = {
+                    "policy_version": CARE_WITHDRAWAL_POLICY_VERSION,
+                    "policy_outcome": decision.outcome,
+                    "withdrawal_reason": decision.reason,
+                    "lifecycle": lifecycle,
+                    "automation_actor": actor,
+                    "trigger_source": trigger_source,
+                    "run_id": run_id,
+                    "previous_publication_status": "PUBLISHED",
+                    "previous_publication_provenance": current.get(
+                        "publication_automation_provenance"
+                    )
+                    or {},
+                    "evidence": evidence,
+                }
+                updated = conn.execute(
+                    """UPDATE opportunities
+                       SET publication_status = 'WITHDRAWN',
+                           customer_withdrawn_at = now(),
+                           withdrawal_automation_provenance = %s,
+                           updated_at = now()
+                       WHERE id = %s AND vertical = 'CHILDRENS_HOME'
+                         AND publication_status = 'PUBLISHED'
+                         AND NOT publication_automation_blocked
+                         AND publication_automation_provenance ? 'policy_version'
+                       RETURNING id, publication_status, customer_withdrawn_at""",
+                    (Jsonb(provenance), opportunity_id),
+                ).fetchone()
+                if not updated:
+                    conn.rollback()
+                    result["skipped"] += 1
+                    _record_care_withdrawal_run_item(
+                        settings,
+                        run_id=run_id,
+                        opportunity_id=opportunity_id,
+                        status="SKIPPED",
+                        policy_outcome="STATE_CHANGED",
+                        reason="conditional_withdrawal_guard_failed",
+                        lifecycle=lifecycle,
+                    )
+                    continue
+                if updated[1] != "WITHDRAWN" or not updated[2]:
+                    raise ValueError("post_withdrawal_validation_failed")
+                conn.execute(
+                    """INSERT INTO care_withdrawal_run_items
+                         (run_id, opportunity_id, status, policy_outcome,
+                          reason, lifecycle, details)
+                       VALUES (%s, %s, 'WITHDRAWN', %s, %s, %s, %s)""",
+                    (
+                        run_id,
+                        opportunity_id,
+                        decision.outcome,
+                        decision.reason,
+                        lifecycle,
+                        Jsonb({"provenance": provenance, "validated": True}),
+                    ),
+                )
+                conn.execute(
+                    """INSERT INTO admin_audit_events
+                         (actor, action, target_type, details, vertical)
+                       VALUES (%s, 'care_opportunity_auto_withdrawn',
+                               'opportunity', %s, 'CHILDRENS_HOME')""",
+                    (
+                        actor,
+                        Jsonb(
+                            {
+                                "opportunity_id": opportunity_id,
+                                "publication_status": "WITHDRAWN",
+                                **provenance,
+                            }
+                        ),
+                    ),
+                )
+                conn.commit()
+            result["withdrawn"] += 1
+            result["audit_rows_created"] += 1
+            result["publication_changes"] += 1
+            result["withdrawal_changes"] += 1
+            result["withdrawn_opportunity_ids"].append(opportunity_id)
+        except Exception as error:
+            result["failed"] += 1
+            result["failures"].append(
+                {"opportunity_id": opportunity_id, "error": type(error).__name__}
+            )
+            _record_care_withdrawal_run_item(
+                settings,
+                run_id=run_id,
+                opportunity_id=opportunity_id,
+                status="FAILED",
+                policy_outcome=None,
+                reason=type(error).__name__,
+                lifecycle=lifecycle,
+            )
+
+    run_status = "COMPLETED" if result["failed"] == 0 else "PARTIAL"
+    with connection(settings) as conn:
+        conn.execute(
+            """UPDATE care_withdrawal_runs
+               SET status = %s, selected_count = %s, withdrawn_count = %s,
+                   skipped_count = %s, failed_count = %s, details = %s,
+                   completed_at = now() WHERE id = %s""",
+            (
+                run_status,
+                result["selected"],
+                result["withdrawn"],
+                result["skipped"],
+                result["failed"],
+                Jsonb(
+                    {
+                        "unexpected_policy_transitions": result[
+                            "unexpected_policy_transitions"
+                        ],
+                        "publication_changes": result["publication_changes"],
+                    }
+                ),
+                run_id,
+            ),
+        )
+        conn.execute(
+            """UPDATE care_withdrawal_automation_state
+               SET last_execution_at = now(), last_selected = %s,
+                   last_withdrawn = %s, last_skipped = %s, last_failed = %s,
+                   updated_by = %s, updated_at = now() WHERE singleton""",
+            (
+                result["selected"],
+                result["withdrawn"],
+                result["skipped"],
+                result["failed"],
+                actor,
+            ),
+        )
+        conn.commit()
+    result["eligible_after"] = max(result["eligible_before"] - result["withdrawn"], 0)
+    return result
 
 
 def care_publication_automation_preview(
