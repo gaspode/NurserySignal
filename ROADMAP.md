@@ -1490,8 +1490,12 @@ Paid-pilot activation check (2026-09-28):
   conditionally publishes only DRAFT/system-eligible records, persists policy/lifecycle/evidence provenance, records
   per-run and per-opportunity audit outcomes, isolates failures and defers repeated failures. Manual publications,
   QA holdouts, manual-review/ineligible/protected outcomes, blocks and merged/rejected records remain excluded. The
-  initial database and EventBridge switches deploy disabled; activation requires a production dry-run followed by
-  one bounded ten-record batch. A clean first batch gates the six-hour recurring coordinator, which remains capped at
-  25 publications per invocation. Emergency disable preserves all publication history. Automatic withdrawal remains
-  disabled, and the Phase B3 watcher remains independent. Production activation results will be appended after the
-  disabled-first deployment and bounded validation.
+  initial database and EventBridge switches deployed disabled. The production dry-run exactly reproduced the approved
+  v3 snapshot: 1,145 evaluated, 548 eligible unpublished, 68 QA holdouts, 249 manual review, 228 ineligible and 52
+  protected manual publications, with no mutation. The first bounded run selected ten and published all ten with zero
+  skips, failures or policy transitions and ten audit rows. All ten passed post-publication projection checks: safe
+  coarse geography, postcode district only, lifecycle-aware summary and explicit v3/automatic provenance. Published
+  inventory moved from 52 manual to 62 total (ten automatic plus 52 untouched manual); 538 eligible unpublished remain.
+  The independently controlled six-hour recurring coordinator is now enabled and remains capped at 25 publications per
+  invocation. Emergency disable preserves all publication history. Automatic withdrawal remains disabled, and the
+  Phase B3 watcher remains enabled and unchanged at 259 watches with zero requests/errors at activation verification.

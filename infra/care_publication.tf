@@ -1,10 +1,10 @@
-# Phase C2 coordinator is deployed disabled first. It is enabled only after the
-# bounded initial batch has been inspected and confirmed safe.
+# Phase C2 was deployed disabled first and enabled only after the bounded
+# initial production batch was inspected and confirmed safe.
 resource "aws_cloudwatch_event_rule" "care_publication" {
   name                = "${local.name_prefix}-care-publication"
   description         = "Bounded CareProspect automatic publication coordinator"
   schedule_expression = "rate(6 hours)"
-  state               = "DISABLED"
+  state               = "ENABLED"
   tags                = local.common_tags
 }
 
