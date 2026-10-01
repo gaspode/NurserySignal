@@ -1372,6 +1372,15 @@ Paid-pilot activation check (2026-09-28):
   only NULL lifecycle rows, commits each opportunity with one append-only `BOOTSTRAP` history record, isolates
   failures and resumes naturally on rerun. The Sources UI exposes stored/unset progress and a confirmed next-100
   action. The operation reports derived/persisted state counts and hard-codes zero provider requests, Planning-watch
-  enrollment, publication changes and withdrawal changes. EventBridge refresh remains disabled; Phase B2 watcher
-  optimisation and Phase C/D automation are explicitly out of scope. Exact next step: deploy, run the approved
-  bootstrap to zero remaining unset rows, verify idempotency and production invariants, then record final counts.
+  enrollment, publication changes and withdrawal changes. Production bootstrap completed in 12 bounded batches:
+  all 1,145 previously unset opportunities now store their derived lifecycle (416 PLANNING_APPROVED, 344
+  PLANNING_PENDING, 219 STOPPED, 164 NEEDS_REVIEW and two APPEAL_PENDING), with 1,145 append-only bootstrap history
+  rows, zero failures and zero remaining unset. The immediate rerun examined/persisted zero and created no history,
+  confirming idempotency. Stored and freshly derived distributions match exactly. Publication remains 33 and the
+  publication/withdrawal previews are unchanged; no provider requests, watches, publications or withdrawals were
+  created. EventBridge refresh remains DISABLED with zero enrolled watches. Commit `88a8178` deployed successfully
+  in run `36829937816`; CI run `36829691053` and local validation passed 530 backend tests, 93 frontend tests, Ruff,
+  frontend build and Terraform fmt/validate, while the deployment Terraform plan/apply passed. API/database health
+  is green, active queues and non-collector DLQs are empty, and the six retained collector DLQ messages are unchanged.
+  Exact next step: separately design/approve Phase B2 watcher quota optimisation; Phase C publication and Phase D
+  withdrawal automation remain preview-only and unexecuted.
