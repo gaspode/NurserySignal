@@ -70,7 +70,9 @@ Current gate:
   had silently reused the `CareSignalCustomers` session for `willypayne@gmail.com`, while MCP requires
   the existing `NurserySignalAdmins` identity `will@payne.uk`. The admin-only facade now sends
   Cognito `prompt=login` so each MCP connection requires explicit authentication and cannot inherit
-  a customer portal session. Group membership remains unchanged; no customer was promoted.
+  a customer portal session. Group membership remains unchanged; no customer was promoted. Commit
+  `0418bb7` passed 611 backend tests, Ruff and full CI run `36935791260`, then deployed successfully
+  in run `36935894585`.
 - MCP v1 is deployed at the production `/mcp` endpoint with RFC 9728 protected-resource discovery,
   an application-owned 401 Bearer challenge and an OAuth 2.1 authorization-code/PKCE facade. The
   canonical resource is the exact `/mcp` URL and RFC 8707 resource binding is preserved through
