@@ -746,13 +746,15 @@ def _tool_recent(settings: Settings, args: dict[str, Any]) -> dict[str, Any]:
               UNION ALL SELECT 'SIGNAL_REVIEWED', raw_signal_id, reviewed_at,
                 jsonb_build_object('status', review_status, 'reviewed_by', reviewed_by)
               FROM signal_enrichments WHERE reviewed_at IS NOT NULL
-              UNION ALL SELECT 'AUTOMATIC_PUBLICATION', opportunity_id, created_at,
-                jsonb_build_object('status', status, 'policy_version', policy_version)
-              FROM care_publication_run_items
-              UNION ALL SELECT 'AUTOMATIC_WITHDRAWAL', opportunity_id, created_at,
-                jsonb_build_object('status', status, 'policy_version', policy_version,
-                                   'reason', reason)
-              FROM care_withdrawal_run_items
+              UNION ALL SELECT 'AUTOMATIC_PUBLICATION', i.opportunity_id, i.created_at,
+                jsonb_build_object('status', i.status, 'policy_version', r.policy_version)
+              FROM care_publication_run_items i
+              JOIN care_publication_runs r ON r.id = i.run_id
+              UNION ALL SELECT 'AUTOMATIC_WITHDRAWAL', i.opportunity_id, i.created_at,
+                jsonb_build_object('status', i.status, 'policy_version', r.policy_version,
+                                   'reason', i.reason)
+              FROM care_withdrawal_run_items i
+              JOIN care_withdrawal_runs r ON r.id = i.run_id
               UNION ALL SELECT 'ADMIN_AUDIT', id, created_at,
                 jsonb_build_object('action', action, 'target_type', target_type)
               FROM admin_audit_events

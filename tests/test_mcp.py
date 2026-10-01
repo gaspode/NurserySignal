@@ -215,6 +215,32 @@ def test_search_signals_is_bounded_and_cursor_based(monkeypatch):
     assert mcp._offset(result["next_cursor"]) == 20
 
 
+def test_recent_changes_reads_policy_version_from_parent_runs(monkeypatch):
+    statements = []
+
+    class Result:
+        def fetchall(self):
+            return []
+
+    class Conn:
+        def execute(self, statement, params=None):
+            statements.append(statement)
+            return Result()
+
+    @contextmanager
+    def fake_connection(settings):
+        yield Conn()
+
+    monkeypatch.setattr(mcp, "connection", fake_connection)
+    result = mcp._tool_recent(Settings(), {"last_hours": 24, "limit": 20})
+
+    assert result["items"] == []
+    query = statements[0]
+    assert "JOIN care_publication_runs r ON r.id = i.run_id" in query
+    assert "JOIN care_withdrawal_runs r ON r.id = i.run_id" in query
+    assert "'policy_version', r.policy_version" in query
+
+
 def test_rate_limit_rejects_client_before_audit_insert(monkeypatch):
     class Result:
         def fetchone(self):
