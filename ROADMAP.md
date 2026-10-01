@@ -1512,6 +1512,15 @@ Paid-pilot activation check (2026-09-28):
   `care-publication-v3` projection once per request, exposes factual rate numerators/denominators, and labels missing
   collector/queue telemetry unavailable rather than calling AWS or providers synchronously. Investigation links reuse
   the existing queues and detail pages. The endpoint contains no customer data or secrets and performs no mutations,
-  provider calls, watcher enrolment, publication or withdrawal. Phase D remains disabled. Validation currently passes
-  557 backend and 95 frontend tests, Ruff, frontend build and Terraform fmt/validate; production deployment and live
-  metric verification are the remaining completion gate.
+  provider calls, watcher enrolment, publication or withdrawal. Phase D remains disabled. Production verification
+  returned HTTP 200 in 5.4 seconds: 2,417 signals (420 pending), 1,541 active opportunities, 348 needing attention,
+  persisted Care lifecycle 416 approved / 344 pending / 2 appeal / 219 stopped / 164 needs review, and the unchanged
+  259-watch cohort with zero requests/errors and a 532.3/month projection. Publication remains healthy at 87 total
+  (35 automatic, 52 protected manual), 513 eligible unpublished, 68 QA and 249 manual-review records; the latest
+  bounded batch remains 25/25 with no failures. Rolling ingestion is 4/99/283 records over 24h/7d/30d. The endpoint
+  explicitly marks queue depth, collector failures, stale-review age and next scheduler timestamps unavailable because
+  no persisted/cached source exists; direct deployment checks found ingestion/enrichment/Planning queues and their
+  DLQs empty, with the six known collector-DLQ baseline messages unchanged. Commit `50fb4e6` passed CI run
+  `36861402104` and deployed successfully in run `36861536640`; 557 backend and 95 frontend tests, Ruff, frontend
+  build and Terraform fmt/validate/plan/apply pass. API/database/frontend health is green. Exact next step is to use
+  this baseline while designing Phase D; automatic withdrawal remains preview-only and disabled.
