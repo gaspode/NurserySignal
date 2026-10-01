@@ -1391,6 +1391,17 @@ Paid-pilot activation check (2026-09-28):
   explicit unresolved evidence, stale records, decided/terminal applications and irrelevant/missing evidence are
   reported with deterministic exclusion reasons. The admin Sources preview compares projected usage with the prior
   3,651/month estimate and exposes cadence, lifecycle, exclusion and bounded sample breakdowns. Migration 0028
-  persists the policy-version default for a future separately approved enrollment. EventBridge remains disabled;
-  no watches, provider calls, lifecycle changes, publication or withdrawals are authorised in this phase. Exact next
-  step: deploy and inspect the production preview, then decide whether the projected steady-state quota is acceptable.
+  persists the policy-version default for a future separately approved enrollment. Production preview evaluated all
+  1,145 opportunities and 1,216 active Planning candidates: 259 watches are eligible (246 PLANNING_PENDING, ten
+  PLANNING_APPROVED with separate unresolved evidence, two APPEAL_PENDING and one NEEDS_REVIEW appeal exception),
+  split across 55 seven-day, 81 fourteen-day and 123 thirty-day watches. This projects 17.74 requests/day or 532.3
+  per 30 days, 3,118.7 fewer / 85.4% below the prior 3,651 estimate. PLANNING_PENDING contributes 510.4/month and is
+  therefore the dominant cost. Exclusions comprise 575 already decided, 230 terminal lifecycle, 65 unknown without
+  unresolved evidence, 43 stale and 53 without relevant Planning evidence. Forty-seven old 30-day watches are
+  candidates for a later, separately reviewed cadence relaxation. EventBridge remains DISABLED, watch rows remain
+  zero and the preview queued/called zero providers and changed zero lifecycle/publication/withdrawal state; all 33
+  published opportunities and Phase C/D previews are unchanged. Commit `a60b459` deployed successfully in run
+  `36841795769` after CI run `36841660553`; 534 backend and 93 frontend tests, Ruff, frontend build and Terraform
+  fmt/validate/plan/apply pass. API/database health is green, active queues and non-collector DLQs are empty, and the
+  six retained collector DLQ messages are unchanged. Exact next step: decide whether 532.3/month is acceptable or
+  separately preview a slower cadence for the 47 oldest watches; do not enable enrollment/scheduling implicitly.
