@@ -66,6 +66,10 @@ Current gate:
   grant, response or token-auth declarations. The authorization request itself remains constrained to
   code + PKCE S256, and the exact requested redirect must be present in the fetched ChatGPT allowlist;
   sanitized rejection diagnostics are retained for any further interoperability issue.
+- Production diagnostics identified the real caller as OpenAI's native Codex CIMD client, which uses
+  RFC 8252 loopback redirects with an ephemeral port. SignalHub now matches those redirects against
+  the advertised loopback host/path while allowing only the port to vary; browser ChatGPT redirects
+  retain exact HTTPS matching.
 
 ## Phase 1 — Foundation — COMPLETE
 

@@ -1093,7 +1093,7 @@ def _validate_chatgpt_client(
     if redirect_uri is not None:
         parsed = urllib.parse.urlparse(redirect_uri)
         callback_path = re.fullmatch(r"/connector/oauth/[A-Za-z0-9_-]{1,200}", parsed.path)
-        safe_redirect = redirect_uri == CHATGPT_REDIRECT_URI or (
+        safe_web_redirect = redirect_uri == CHATGPT_REDIRECT_URI or (
             parsed.scheme == "https"
             and parsed.hostname == "chatgpt.com"
             and parsed.port is None
@@ -1103,13 +1103,37 @@ def _validate_chatgpt_client(
             and not parsed.fragment
             and callback_path is not None
         )
-        if not safe_redirect or redirect_uri not in metadata.get("redirect_uris", []):
+        advertised_redirects = metadata.get("redirect_uris", [])
+        exact_redirect = safe_web_redirect and redirect_uri in advertised_redirects
+        loopback_redirect = False
+        if (
+            parsed.scheme == "http"
+            and parsed.hostname in {"127.0.0.1", "localhost"}
+            and parsed.port is not None
+            and not parsed.query
+            and not parsed.fragment
+        ):
+            for advertised in advertised_redirects:
+                advertised_uri = urllib.parse.urlparse(str(advertised))
+                if (
+                    advertised_uri.scheme == "http"
+                    and advertised_uri.hostname == parsed.hostname
+                    and advertised_uri.port is None
+                    and advertised_uri.path == parsed.path
+                    and not advertised_uri.query
+                    and not advertised_uri.fragment
+                ):
+                    loopback_redirect = True
+                    break
+        if not exact_redirect and not loopback_redirect:
             logger.warning(
-                "mcp_oauth_redirect_rejected client_id=%s redirect_uri=%s safe=%s advertised=%s",
+                "mcp_oauth_redirect_rejected client_id=%s redirect_uri=%s "
+                "safe_web=%s loopback=%s advertised=%s",
                 client_id,
                 redirect_uri,
-                safe_redirect,
-                len(metadata.get("redirect_uris", [])),
+                safe_web_redirect,
+                loopback_redirect,
+                len(advertised_redirects),
             )
             raise MCPError("invalid_argument", "Redirect URI rejected")
     return metadata

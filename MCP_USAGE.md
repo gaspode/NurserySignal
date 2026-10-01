@@ -23,6 +23,9 @@ It is intended for investigation and prioritisation; it cannot perform administr
 - Client identification: CIMD with public-client token authentication method `none`
 - Redirect URI: the redirect declared by the verified ChatGPT CIMD document (stable platform redirect
   or a connection-specific callback); opaque client and callback identifiers are not assumed equal
+- Native Codex clients use `https://chatgpt.com/oauth/codex/client.json` and an RFC 8252 loopback
+  redirect. SignalHub permits only the advertised `127.0.0.1`/`localhost` callback path while allowing
+  the ephemeral port selected by the native client.
 - The facade pins the official stable ChatGPT registration and securely resolves connection-specific
   CIMD only from an allowlisted `chatgpt.com` URL. It adds RFC 9207 `iss` to successful and error
   callbacks and forwards the exact MCP `resource` through Cognito's RFC 8707 binding.

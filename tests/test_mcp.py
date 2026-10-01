@@ -231,6 +231,45 @@ def test_callback_specific_cimd_rejects_untrusted_client_without_fetch(monkeypat
         )
 
 
+def test_codex_cimd_allows_rfc8252_ephemeral_loopback_port(monkeypatch):
+    client_id = "https://chatgpt.com/oauth/codex/client.json"
+    monkeypatch.setattr(
+        mcp,
+        "_fetch_chatgpt_cimd",
+        lambda requested_client: {
+            "client_id": requested_client,
+            "redirect_uris": [
+                "http://127.0.0.1/callback",
+                "http://localhost/callback",
+            ],
+        },
+    )
+    metadata = mcp._validate_chatgpt_client(
+        client_id, "http://127.0.0.1:57117/callback"
+    )
+    assert metadata["client_id"] == client_id
+
+
+@pytest.mark.parametrize(
+    "redirect_uri",
+    [
+        "http://attacker.example:57117/callback",
+        "http://127.0.0.1:57117/not-callback",
+        "https://127.0.0.1:57117/callback",
+    ],
+)
+def test_codex_cimd_rejects_nonmatching_loopback_redirect(monkeypatch, redirect_uri):
+    monkeypatch.setattr(
+        mcp,
+        "_fetch_chatgpt_cimd",
+        lambda requested_client: {"redirect_uris": ["http://127.0.0.1/callback"]},
+    )
+    with pytest.raises(mcp.MCPError, match="Redirect URI rejected"):
+        mcp._validate_chatgpt_client(
+            "https://chatgpt.com/oauth/codex/client.json", redirect_uri
+        )
+
+
 def test_oauth_transaction_uses_single_use_ttl_store_without_database(monkeypatch):
     items = {}
 
