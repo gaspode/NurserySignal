@@ -155,6 +155,24 @@ resource "aws_apigatewayv2_integration" "mcp" {
   payload_format_version = "2.0"
 }
 
+# Retained for the first deployment of application-level MCP authentication so
+# API Gateway can detach it from both MCP routes before a subsequent cleanup.
+# It is deliberately not referenced by either route below.
+resource "aws_apigatewayv2_authorizer" "mcp" {
+  api_id           = aws_apigatewayv2_api.http.id
+  authorizer_type  = "JWT"
+  identity_sources = ["$request.header.Authorization"]
+  name             = "${local.name_prefix}-mcp-oauth"
+  jwt_configuration {
+    audience = [
+      local.mcp_resource_url,
+      aws_cognito_user_pool_client.mcp_chatgpt.id,
+      aws_cognito_user_pool_client.mcp_service.id,
+    ]
+    issuer = "https://${aws_cognito_user_pool.main.endpoint}"
+  }
+}
+
 resource "aws_apigatewayv2_route" "mcp" {
   api_id    = aws_apigatewayv2_api.http.id
   route_key = "ANY /mcp"
