@@ -1384,3 +1384,13 @@ Paid-pilot activation check (2026-09-28):
   is green, active queues and non-collector DLQs are empty, and the six retained collector DLQ messages are unchanged.
   Exact next step: separately design/approve Phase B2 watcher quota optimisation; Phase C publication and Phase D
   withdrawal automation remain preview-only and unexecuted.
+- CareProspect Phase B2 introduces preview-only `care-planning-watcher-v2`: watch eligibility now uses persisted
+  customer lifecycle, approved foundational Planning semantics, canonical non-terminal outcome, usable authority /
+  reference identity and manual automation blocks. Polling is age-aware at 7/14/30 days for pending applications,
+  14/30 days for appeals and no faster than 14/30 days for exceptional NEEDS_REVIEW cases. Unknown status without
+  explicit unresolved evidence, stale records, decided/terminal applications and irrelevant/missing evidence are
+  reported with deterministic exclusion reasons. The admin Sources preview compares projected usage with the prior
+  3,651/month estimate and exposes cadence, lifecycle, exclusion and bounded sample breakdowns. Migration 0028
+  persists the policy-version default for a future separately approved enrollment. EventBridge remains disabled;
+  no watches, provider calls, lifecycle changes, publication or withdrawals are authorised in this phase. Exact next
+  step: deploy and inspect the production preview, then decide whether the projected steady-state quota is acceptable.

@@ -4,15 +4,44 @@ import hashlib
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, date, datetime
 from enum import StrEnum
 from typing import Any
 
 from app.evidence_support import EvidenceSupport, classify_evidence_support
-from app.planning_outcomes import PlanningOutcome, canonical_planning_outcome
+from app.planning_outcomes import (
+    PlanningOutcome,
+    canonical_planning_outcome,
+    normalize_structured_planning_value,
+)
 
 CARE_LIFECYCLE_POLICY_VERSION = "care-opportunity-lifecycle-v1"
 CARE_PUBLICATION_POLICY_VERSION = "care-opportunity-publication-v1"
 CARE_WITHDRAWAL_POLICY_VERSION = "care-opportunity-withdrawal-v1"
+CARE_PLANNING_WATCHER_POLICY_VERSION = "care-planning-watcher-v2"
+CARE_PLANNING_WATCHER_PREVIOUS_MONTHLY_REQUESTS = 3651
+
+WATCHABLE_LIFECYCLES = {
+    "PLANNING_PENDING",
+    "PLANNING_APPROVED",
+    "APPEAL_PENDING",
+    "NEEDS_REVIEW",
+}
+TERMINAL_PLANNING_OUTCOMES = {
+    PlanningOutcome.APPROVED,
+    PlanningOutcome.REFUSED,
+    PlanningOutcome.WITHDRAWN,
+    PlanningOutcome.APPEAL_ALLOWED,
+    PlanningOutcome.APPEAL_DISMISSED,
+}
+_EXPLICIT_UNRESOLVED_STATUSES = {
+    "IN PROGRESS",
+    "AWAITING COMMITTEE",
+    "AWAITING DETERMINATION",
+    "CONSULTATION",
+    "CONSULTATION IN PROGRESS",
+    "UNDER ASSESSMENT",
+}
 
 
 class CareLifecycle(StrEnum):
@@ -39,6 +68,153 @@ class AutomationDecision:
     outcome: str
     reason: str
     exclusions: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class PlanningWatchDecision:
+    eligible: bool
+    reason: str
+    cadence_days: int | None
+    planning_outcome: str
+    age_days: int | None
+    age_source: str | None
+
+
+def _watch_datetime(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, date):
+        parsed = datetime.combine(value, datetime.min.time(), UTC)
+    elif isinstance(value, str) and value.strip():
+        try:
+            parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    else:
+        return None
+    return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
+
+
+def planning_watch_activity_date(signal: dict[str, Any]) -> tuple[datetime | None, str | None]:
+    """Choose the best existing Planning activity timestamp without provider access."""
+    metadata = signal.get("metadata") if isinstance(signal.get("metadata"), dict) else {}
+    provider_value = metadata.get("provider_record")
+    provider = provider_value if isinstance(provider_value, dict) else {}
+    candidates = (
+        (signal.get("latest_revision_at"), "latest_revision"),
+        (metadata.get("status_changed_at"), "status_change"),
+        (metadata.get("last_updated"), "status_update"),
+        (metadata.get("updated_at"), "status_update"),
+        (provider.get("last_updated"), "provider_status_update"),
+        (provider.get("updated_at"), "provider_status_update"),
+        (provider.get("date_updated"), "provider_status_update"),
+        (metadata.get("decision_date"), "decision_date"),
+        (provider.get("date_decided"), "decision_date"),
+        (metadata.get("application_date"), "application_date"),
+        (provider.get("date_received"), "application_date"),
+        (signal.get("discovered_at"), "discovered_at"),
+    )
+    for value, source in candidates:
+        if parsed := _watch_datetime(value):
+            return parsed, source
+    return None, None
+
+
+def _strong_watch_evidence(signal: dict[str, Any]) -> bool:
+    facts = signal.get("extracted_facts") or {}
+    return (
+        signal.get("review_status") == "APPROVED"
+        and facts.get("opportunity_creation_decision") == "CREATE_OPPORTUNITY"
+        and classify_evidence_support(signal) == EvidenceSupport.FOUNDATIONAL
+    )
+
+
+def _explicit_unresolved_status(metadata: dict[str, Any]) -> bool:
+    return any(
+        normalize_structured_planning_value(metadata.get(field)) in _EXPLICIT_UNRESOLVED_STATUSES
+        for field in ("planning_status", "status")
+    )
+
+
+def evaluate_planning_watch(
+    opportunity: dict[str, Any],
+    signal: dict[str, Any],
+    *,
+    has_planning_identity: bool,
+    now: datetime | None = None,
+) -> PlanningWatchDecision:
+    """Evaluate one existing Planning application for Phase-B2 preview enrollment."""
+    current_time = (now or datetime.now(UTC)).astimezone(UTC)
+    metadata = signal.get("metadata") if isinstance(signal.get("metadata"), dict) else {}
+    outcome = canonical_planning_outcome(metadata).outcome
+    activity_at, age_source = planning_watch_activity_date(signal)
+    age_days = max((current_time - activity_at).days, 0) if activity_at else None
+    lifecycle = str(opportunity.get("customer_lifecycle_stage") or "")
+
+    def excluded(reason: str) -> PlanningWatchDecision:
+        return PlanningWatchDecision(False, reason, None, outcome.value, age_days, age_source)
+
+    if opportunity.get("publication_automation_blocked"):
+        return excluded("manual_automation_block")
+    if lifecycle == CareLifecycle.STOPPED.value:
+        return excluded("lifecycle_terminal")
+    if lifecycle not in WATCHABLE_LIFECYCLES:
+        return excluded("lifecycle_not_watchable")
+    if signal.get("source_type") != "planning" or signal.get(
+        "relationship_status", signal.get("status")
+    ) != "ACTIVE":
+        return excluded("no_relevant_planning_evidence")
+    if outcome in TERMINAL_PLANNING_OUTCOMES:
+        return excluded("planning_already_decided")
+    if not _strong_watch_evidence(signal) and outcome != PlanningOutcome.REFUSED_UNDER_APPEAL:
+        return excluded("no_relevant_planning_evidence")
+    if not has_planning_identity:
+        return excluded("insufficient_planning_identity")
+    if outcome == PlanningOutcome.UNKNOWN:
+        if age_days is not None and age_days > 180:
+            return excluded("stale_application")
+        if not _explicit_unresolved_status(metadata):
+            return excluded("unknown_status_without_unresolved_evidence")
+    if outcome not in {
+        PlanningOutcome.PENDING,
+        PlanningOutcome.UNKNOWN,
+        PlanningOutcome.REFUSED_UNDER_APPEAL,
+    }:
+        return excluded("planning_already_decided")
+    if outcome == PlanningOutcome.PENDING and age_days is not None and age_days > 730:
+        return excluded("stale_application")
+
+    if outcome == PlanningOutcome.REFUSED_UNDER_APPEAL:
+        cadence = 30 if age_days is not None and age_days > 180 else 14
+        return PlanningWatchDecision(
+            True, "eligible_active_appeal", cadence, outcome.value, age_days, age_source
+        )
+    if lifecycle == CareLifecycle.NEEDS_REVIEW.value:
+        cadence = 14 if age_days is not None and age_days <= 30 else 30
+        return PlanningWatchDecision(
+            True, "eligible_needs_review_exception", cadence, outcome.value, age_days, age_source
+        )
+    if age_days is None or age_days <= 30:
+        cadence = 7
+    elif age_days <= 90:
+        cadence = 14
+    else:
+        cadence = 30
+    return PlanningWatchDecision(
+        True, "eligible_planning_pending", cadence, outcome.value, age_days, age_source
+    )
+
+
+def project_planning_watch_requests(cadence_counts: dict[str, int]) -> tuple[float, float]:
+    """Return deterministic daily/30-day request projections for cadence buckets."""
+    monthly = round(
+        sum(
+            count * 30 / int(cadence.removesuffix("_days"))
+            for cadence, count in cadence_counts.items()
+        ),
+        1,
+    )
+    return round(monthly / 30, 2), monthly
 
 
 def bootstrap_lifecycle_records(

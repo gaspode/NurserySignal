@@ -13,14 +13,18 @@ from psycopg.types.json import Jsonb
 
 from app.care_lifecycle import (
     CARE_LIFECYCLE_POLICY_VERSION,
+    CARE_PLANNING_WATCHER_POLICY_VERSION,
+    CARE_PLANNING_WATCHER_PREVIOUS_MONTHLY_REQUESTS,
     CARE_PUBLICATION_POLICY_VERSION,
     CARE_WITHDRAWAL_POLICY_VERSION,
     CareLifecycle,
     LifecycleDecision,
     bootstrap_lifecycle_records,
     derive_care_lifecycle,
+    evaluate_planning_watch,
     evaluate_publication,
     evaluate_withdrawal,
+    project_planning_watch_requests,
 )
 from app.care_planning_review import (
     CARE_PLANNING_AI_APPROVAL_BLOCKED_OUTCOMES,
@@ -6269,6 +6273,9 @@ def care_opportunity_lifecycle_preview(settings: Settings) -> dict[str, Any]:
                 'relationship_status', os.status, 'source_type', rs.source_type,
                 'external_id', rs.external_id,
                 'title', rs.title, 'metadata', rs.metadata,
+                'discovered_at', rs.discovered_at,
+                'latest_revision_at', (SELECT max(rev.observed_at)
+                  FROM raw_signal_revisions rev WHERE rev.raw_signal_id = rs.id),
                 'review_status', se.review_status, 'extracted_facts', se.extracted_facts,
                 'relationship_extracted_facts', os.extracted_facts,
                 'planning_family_relationship_types', COALESCE(
@@ -6349,7 +6356,16 @@ def care_opportunity_lifecycle_preview(settings: Settings) -> dict[str, Any]:
     withdrawal_counts: Counter[str] = Counter()
     published_lifecycle_counts: Counter[str] = Counter()
     watch_outcomes: Counter[str] = Counter()
+    watch_eligibility: Counter[str] = Counter()
+    watch_exclusions: Counter[str] = Counter()
+    watch_cadences: Counter[str] = Counter()
+    watch_eligible_lifecycles: Counter[str] = Counter()
+    watch_excluded_lifecycles: Counter[str] = Counter()
+    watch_monthly_by_lifecycle: Counter[str] = Counter()
+    watch_samples: dict[str, list[dict[str, Any]]] = {}
     watched_candidates: set[str] = set()
+    watch_candidates_evaluated = 0
+    further_relaxation_candidates = 0
     examples: list[dict[str, Any]] = []
 
     for opportunity in opportunities:
@@ -6402,37 +6418,70 @@ def care_opportunity_lifecycle_preview(settings: Settings) -> dict[str, Any]:
         if opportunity.get("publication_status") == "PUBLISHED":
             published_lifecycle_counts[decision.lifecycle.value] += 1
 
-        for signal in opportunity["relationships"] or []:
-            if signal.get("source_type") != "planning" or signal.get("status") != "ACTIVE":
-                continue
-            outcome = canonical_planning_outcome(signal.get("metadata") or {}).outcome
-            if outcome not in {
-                PlanningOutcome.PENDING,
-                PlanningOutcome.UNKNOWN,
-                PlanningOutcome.REFUSED_UNDER_APPEAL,
-            }:
-                continue
-            facts = signal.get("extracted_facts") or {}
-            family_roles = set(signal.get("planning_family_relationship_types") or [])
-            eligible_origin = (
-                facts.get("opportunity_creation_decision") == "CREATE_OPPORTUNITY"
-                or (
-                    outcome == PlanningOutcome.REFUSED_UNDER_APPEAL
-                    and "PRIMARY_APPLICATION" in family_roles
+        planning_signals = [
+            signal
+            for signal in opportunity["relationships"] or []
+            if signal.get("source_type") == "planning" and signal.get("status") == "ACTIVE"
+        ]
+        if not planning_signals:
+            watch_exclusions["no_relevant_planning_evidence"] += 1
+            watch_excluded_lifecycles[
+                str(opportunity.get("customer_lifecycle_stage") or "UNSET")
+            ] += 1
+            samples = watch_samples.setdefault("no_relevant_planning_evidence", [])
+            if len(samples) < 3:
+                samples.append(
+                    {
+                        "opportunity_id": opportunity_id,
+                        "signal_id": None,
+                        "planning_reference": None,
+                        "lifecycle": str(
+                            opportunity.get("customer_lifecycle_stage") or "UNSET"
+                        ),
+                        "planning_outcome": None,
+                        "age_days": None,
+                        "age_source": None,
+                        "cadence_days": None,
+                    }
                 )
-            )
-            if not eligible_origin or (
-                outcome != PlanningOutcome.REFUSED_UNDER_APPEAL
-                and signal.get("review_status") != "APPROVED"
-            ):
-                continue
+        for signal in planning_signals:
             authority = planning_authority(signal.get("metadata") or {})
             reference = primary_planning_reference(
                 signal.get("external_id"), signal.get("metadata") or {}
             )
-            if authority and reference:
-                watched_candidates.add(str(signal["id"]))
-                watch_outcomes[outcome.value] += 1
+            watch = evaluate_planning_watch(
+                opportunity,
+                signal,
+                has_planning_identity=bool(authority and reference),
+            )
+            watch_candidates_evaluated += 1
+            lifecycle_value = str(opportunity.get("customer_lifecycle_stage") or "UNSET")
+            sample = {
+                "opportunity_id": opportunity_id,
+                "signal_id": str(signal.get("id") or ""),
+                "planning_reference": reference,
+                "lifecycle": lifecycle_value,
+                "planning_outcome": watch.planning_outcome,
+                "age_days": watch.age_days,
+                "age_source": watch.age_source,
+                "cadence_days": watch.cadence_days,
+            }
+            samples = watch_samples.setdefault(watch.reason, [])
+            if len(samples) < 3:
+                samples.append(sample)
+            if not watch.eligible:
+                watch_exclusions[watch.reason] += 1
+                watch_excluded_lifecycles[lifecycle_value] += 1
+                continue
+            watched_candidates.add(str(signal["id"]))
+            watch_eligibility[watch.reason] += 1
+            watch_outcomes[watch.planning_outcome] += 1
+            watch_eligible_lifecycles[lifecycle_value] += 1
+            watch_cadences[f"{watch.cadence_days}_days"] += 1
+            monthly_requests = 30 / int(watch.cadence_days or 30)
+            watch_monthly_by_lifecycle[lifecycle_value] += monthly_requests
+            if watch.cadence_days == 30 and watch.age_days is not None and watch.age_days > 365:
+                further_relaxation_candidates += 1
         if len(examples) < 25 and (
             publication.outcome != "NOT_ELIGIBLE"
             or withdrawal.outcome in {"AUTO_WITHDRAW", "MANUAL_REVIEW"}
@@ -6451,15 +6500,9 @@ def care_opportunity_lifecycle_preview(settings: Settings) -> dict[str, Any]:
                 }
             )
 
-    estimated_daily = round(
-        (
-            watch_outcomes[PlanningOutcome.PENDING.value]
-            + watch_outcomes[PlanningOutcome.UNKNOWN.value]
-        )
-        / 3
-        + watch_outcomes[PlanningOutcome.REFUSED_UNDER_APPEAL.value] / 5,
-        1,
-    )
+    estimated_daily, estimated_monthly = project_planning_watch_requests(watch_cadences)
+    previous_monthly = CARE_PLANNING_WATCHER_PREVIOUS_MONTHLY_REQUESTS
+    reduction = round((previous_monthly - estimated_monthly) / previous_monthly * 100, 1)
     return {
         "preview": True,
         "mutations": 0,
@@ -6467,13 +6510,25 @@ def care_opportunity_lifecycle_preview(settings: Settings) -> dict[str, Any]:
             "lifecycle": CARE_LIFECYCLE_POLICY_VERSION,
             "publication": CARE_PUBLICATION_POLICY_VERSION,
             "withdrawal": CARE_WITHDRAWAL_POLICY_VERSION,
+            "planning_watcher": CARE_PLANNING_WATCHER_POLICY_VERSION,
         },
         "opportunities_inspected": len(opportunities),
         "inventory_complete": len(opportunities) < 5000,
         "derived_lifecycle_counts": dict(sorted(lifecycle_counts.items())),
         "stored_lifecycle_counts": dict(sorted(stored_lifecycle_counts.items())),
         "watcher": {
+            "status": "DISABLED",
+            "policy_version": CARE_PLANNING_WATCHER_POLICY_VERSION,
+            "opportunities_evaluated": len(opportunities),
+            "watch_candidates_evaluated": watch_candidates_evaluated,
             "would_watch": len(watched_candidates),
+            "eligible_watches": len(watched_candidates),
+            "excluded_watches": sum(watch_exclusions.values()),
+            "eligibility_reasons": dict(sorted(watch_eligibility.items())),
+            "exclusion_reasons": dict(sorted(watch_exclusions.items())),
+            "eligible_by_lifecycle": dict(sorted(watch_eligible_lifecycles.items())),
+            "excluded_by_lifecycle": dict(sorted(watch_excluded_lifecycles.items())),
+            "cadence_counts": dict(sorted(watch_cadences.items())),
             "candidate_outcomes": dict(sorted(watch_outcomes.items())),
             "stored_total": int(watch_rows[0] or 0),
             "stored_enabled": int(watch_rows[1] or 0),
@@ -6481,8 +6536,20 @@ def care_opportunity_lifecycle_preview(settings: Settings) -> dict[str, Any]:
             "checked_last_24h": int(watch_rows[3] or 0),
             "provider_errors": int(watch_rows[4] or 0),
             "estimated_requests_per_day": estimated_daily,
-            "estimated_requests_per_30_days": round(estimated_daily * 30),
+            "estimated_requests_per_30_days": estimated_monthly,
+            "previous_estimated_requests_per_30_days": previous_monthly,
+            "estimated_monthly_reduction": round(previous_monthly - estimated_monthly, 1),
+            "estimated_reduction_percent": reduction,
+            "projected_requests_by_lifecycle_per_30_days": {
+                key: round(value, 1) for key, value in sorted(watch_monthly_by_lifecycle.items())
+            },
+            "further_relaxation_candidates": further_relaxation_candidates,
+            "samples": watch_samples,
             "provider_requests_executed": 0,
+            "watch_enrolments": 0,
+            "lifecycle_changes": 0,
+            "publication_changes": 0,
+            "withdrawal_changes": 0,
         },
         "publication_preview": {
             "outcomes": dict(sorted(publication_counts.items())),

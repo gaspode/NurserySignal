@@ -606,20 +606,34 @@ describe("admin frontend", () => {
         opportunities_inspected: 1145,
         stored_lifecycle_counts: { UNSET: 100 },
         watcher: {
-          would_watch: 42,
+          status: "DISABLED",
+          policy_version: "care-planning-watcher-v2",
+          eligible_watches: 42,
+          excluded_watches: 1103,
+          cadence_counts: { "7_days": 7, "14_days": 14, "30_days": 21 },
+          exclusion_reasons: { planning_already_decided: 416, lifecycle_terminal: 219 },
           due: 0,
           checked_last_24h: 0,
           provider_errors: 0,
           estimated_requests_per_day: 14,
           estimated_requests_per_30_days: 420,
+          previous_estimated_requests_per_30_days: 3651,
+          estimated_reduction_percent: 88.5,
+          provider_requests_executed: 0,
         },
       })
       .mockResolvedValueOnce({ persisted: 100, remaining_unset: 0 })
       .mockResolvedValueOnce({ opportunities_inspected: 1145, stored_lifecycle_counts: {}, watcher: {} });
     render(<SourcesPage apiClient={apiClient} selectedVertical="CHILDRENS_HOME" />);
     expect(await screen.findByRole("heading", { name: "Lifecycle refresh preview" })).toBeInTheDocument();
-    expect(screen.getByText("Preview only")).toBeInTheDocument();
-    expect(screen.getByText(/Automatic refresh, publication and withdrawal remain disabled/)).toBeInTheDocument();
+    expect(screen.getByText("DISABLED")).toBeInTheDocument();
+    expect(screen.getByText(/Watcher schedule disabled/)).toBeInTheDocument();
+    expect(screen.getByText("care-planning-watcher-v2")).toBeInTheDocument();
+    expect(screen.getByText("3651")).toBeInTheDocument();
+    await userEvent.click(screen.getByText("Polling cadence"));
+    expect(screen.getByText("7 days")).toBeInTheDocument();
+    await userEvent.click(screen.getByText("Exclusion reasons"));
+    expect(screen.getByText("Planning Already Decided")).toBeInTheDocument();
     expect(apiClient).toHaveBeenCalledWith("/admin/opportunities/lifecycle-preview");
     await userEvent.click(screen.getByRole("button", { name: "Bootstrap next 100 lifecycle states" }));
     await userEvent.click(screen.getByRole("button", { name: "Bootstrap next 100" }));

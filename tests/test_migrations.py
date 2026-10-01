@@ -33,6 +33,7 @@ def test_initial_migration_exists_and_contains_provenance_tables() -> None:
         "0025_public_authority_organisations.sql",
         "0026_planning_application_families.sql",
         "0027_care_opportunity_lifecycle_v1.sql",
+        "0028_care_planning_watcher_v2.sql",
     ]
     sql = "\n".join(path.read_text(encoding="utf-8") for path in files)
     tables = (
@@ -83,6 +84,7 @@ def test_initial_migration_exists_and_contains_provenance_tables() -> None:
     assert "CREATE TABLE IF NOT EXISTS opportunity_lifecycle_history" in sql
     assert "CREATE TABLE IF NOT EXISTS planning_lifecycle_watches" in sql
     assert "publication_automation_blocked" in sql
+    assert "care-planning-watcher-v2" in sql
 
 
 def test_ai_review_insert_has_one_value_placeholder_per_column() -> None:

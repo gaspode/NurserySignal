@@ -1,11 +1,14 @@
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from app.care_lifecycle import (
     CareLifecycle,
     bootstrap_lifecycle_records,
     derive_care_lifecycle,
+    evaluate_planning_watch,
     evaluate_publication,
     evaluate_withdrawal,
+    project_planning_watch_requests,
     publication_qa_holdout,
 )
 
@@ -43,6 +46,131 @@ def opportunity(**overrides) -> dict:
         "publication_automation_blocked": False,
         **overrides,
     }
+
+
+def watch_signal(
+    now: datetime,
+    *,
+    outcome: str = "Pending",
+    age_days: int = 10,
+    review_status: str = "APPROVED",
+    decision: str = "CREATE_OPPORTUNITY",
+    planning_status: str | None = None,
+) -> dict:
+    signal = planning(outcome, review_status=review_status, decision=decision)
+    signal["discovered_at"] = (now - timedelta(days=age_days)).isoformat()
+    signal["metadata"].update(
+        {
+            "application_date": (now - timedelta(days=age_days)).date().isoformat(),
+            "planning_status": planning_status,
+        }
+    )
+    return signal
+
+
+def watch_opportunity(stage: str = "PLANNING_PENDING", **overrides) -> dict:
+    return opportunity(customer_lifecycle_stage=stage, **overrides)
+
+
+def test_planning_watcher_pending_cadence_is_age_aware_and_deterministic() -> None:
+    now = datetime(2026, 10, 1, tzinfo=UTC)
+    expected = ((10, 7), (60, 14), (120, 30), (200, 30))
+    for age_days, cadence in expected:
+        signal = watch_signal(now, age_days=age_days)
+        first = evaluate_planning_watch(
+            watch_opportunity(), signal, has_planning_identity=True, now=now
+        )
+        second = evaluate_planning_watch(
+            watch_opportunity(), signal, has_planning_identity=True, now=now
+        )
+        assert first == second
+        assert first.eligible is True
+        assert first.cadence_days == cadence
+
+
+def test_planning_watcher_appeals_and_needs_review_are_conservative() -> None:
+    now = datetime(2026, 10, 1, tzinfo=UTC)
+    appeal = watch_signal(
+        now,
+        outcome="Refused",
+        planning_status="Appeal Lodged: REFUSE",
+        age_days=40,
+    )
+    assert evaluate_planning_watch(
+        watch_opportunity("APPEAL_PENDING"), appeal, has_planning_identity=True, now=now
+    ).cadence_days == 14
+    stale_appeal = watch_signal(
+        now,
+        outcome="Refused",
+        planning_status="Appeal Lodged: REFUSE",
+        age_days=200,
+    )
+    assert evaluate_planning_watch(
+        watch_opportunity("APPEAL_PENDING"),
+        stale_appeal,
+        has_planning_identity=True,
+        now=now,
+    ).cadence_days == 30
+    recent_exception = evaluate_planning_watch(
+        watch_opportunity("NEEDS_REVIEW"),
+        watch_signal(now, age_days=20),
+        has_planning_identity=True,
+        now=now,
+    )
+    assert recent_exception.eligible is True
+    assert recent_exception.cadence_days == 14
+
+
+def test_planning_watcher_excludes_unknown_stale_terminal_and_unsafe_cases() -> None:
+    now = datetime(2026, 10, 1, tzinfo=UTC)
+    unknown = watch_signal(now, outcome="", planning_status="Unknown", age_days=20)
+    assert evaluate_planning_watch(
+        watch_opportunity(), unknown, has_planning_identity=True, now=now
+    ).reason == "unknown_status_without_unresolved_evidence"
+    unresolved = watch_signal(now, outcome="", planning_status="In progress", age_days=20)
+    admitted = evaluate_planning_watch(
+        watch_opportunity(), unresolved, has_planning_identity=True, now=now
+    )
+    assert admitted.eligible is True
+    assert admitted.cadence_days == 7
+    stale = watch_signal(now, age_days=731)
+    assert evaluate_planning_watch(
+        watch_opportunity(), stale, has_planning_identity=True, now=now
+    ).reason == "stale_application"
+    approved = watch_signal(now, outcome="Approved")
+    assert evaluate_planning_watch(
+        watch_opportunity("PLANNING_APPROVED"),
+        approved,
+        has_planning_identity=True,
+        now=now,
+    ).reason == "planning_already_decided"
+    assert evaluate_planning_watch(
+        watch_opportunity("STOPPED"),
+        watch_signal(now),
+        has_planning_identity=True,
+        now=now,
+    ).reason == "lifecycle_terminal"
+    assert evaluate_planning_watch(
+        watch_opportunity(publication_automation_blocked=True),
+        watch_signal(now),
+        has_planning_identity=True,
+        now=now,
+    ).reason == "manual_automation_block"
+    assert evaluate_planning_watch(
+        watch_opportunity(), watch_signal(now), has_planning_identity=False, now=now
+    ).reason == "insufficient_planning_identity"
+    support_only = watch_signal(now, decision="SUPPORT_EXISTING_ONLY")
+    assert evaluate_planning_watch(
+        watch_opportunity(), support_only, has_planning_identity=True, now=now
+    ).reason == "no_relevant_planning_evidence"
+
+
+def test_planning_watcher_projection_is_bounded_and_side_effect_free() -> None:
+    daily, monthly = project_planning_watch_requests(
+        {"7_days": 7, "14_days": 14, "30_days": 30}
+    )
+    assert daily == 3.0
+    assert monthly == 90.0
 
 
 def test_planning_lifecycle_transitions_are_deterministic() -> None:
