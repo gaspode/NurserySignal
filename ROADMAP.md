@@ -25,8 +25,10 @@ The MVP succeeds by being trustworthy and actionable, not by maximizing raw sign
 
 Current gate:
 - code/tests and Terraform validation are complete;
-- production deployment, agent-style smoke results and final API/database/queue health will be
-  recorded here after the GitHub Actions/OIDC rollout;
+- initial OIDC apply stopped before MCP exposure because the new role was absent from the explicit
+  IAM role-tag allowlist and the in-flight session could not use its newly added secret permission;
+- a fresh OIDC rollout with the corrected least-privilege allowlist is the exact next step, followed
+  by agent-style smoke tests and final API/database/queue health;
 - mutation tools remain explicitly deferred until read-only use demonstrates narrow safe needs.
 
 ## Phase 1 — Foundation — COMPLETE

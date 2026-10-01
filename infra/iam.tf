@@ -199,6 +199,7 @@ resource "aws_iam_policy" "github_actions" {
           "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.name_prefix}-ofsted-collector",
           "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.name_prefix}-companies-house-collector",
           "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.name_prefix}-procurement-collector",
+          "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.name_prefix}-mcp",
           "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.name_prefix}-customer-digest-sender",
           "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.name_prefix}-customer-provisioner"
         ]
