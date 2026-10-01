@@ -2,6 +2,7 @@ from uuid import UUID
 
 from app.care_lifecycle import (
     CareLifecycle,
+    bootstrap_lifecycle_records,
     derive_care_lifecycle,
     evaluate_publication,
     evaluate_withdrawal,
@@ -243,3 +244,84 @@ def test_holdout_is_approximately_ten_percent() -> None:
     ids = [str(UUID(int=value)) for value in range(1, 1001)]
     held = sum(publication_qa_holdout(value) for value in ids)
     assert 70 <= held <= 130
+
+
+def test_lifecycle_bootstrap_is_idempotent_and_preserves_versioned_history() -> None:
+    records = [
+        {"id": "one", "customer_lifecycle_stage": None, "signals": [planning("Pending")]},
+        {"id": "two", "customer_lifecycle_stage": None, "signals": [planning("Granted")]},
+    ]
+    history = []
+
+    def persist(record, decision):
+        if record["customer_lifecycle_stage"]:
+            return False
+        record["customer_lifecycle_stage"] = decision.lifecycle.value
+        history.append(
+            {
+                "id": record["id"],
+                "lifecycle": decision.lifecycle.value,
+                "policy_version": "care-opportunity-lifecycle-v1",
+                "actor_type": "BOOTSTRAP",
+            }
+        )
+        return True
+
+    first = bootstrap_lifecycle_records(records, preview=False, persist=persist)
+    assert first["persisted"] == 2
+    assert first["history_rows_created"] == 2
+    assert first["counts_by_persisted_lifecycle"] == {
+        "PLANNING_APPROVED": 1,
+        "PLANNING_PENDING": 1,
+    }
+    second = bootstrap_lifecycle_records(records, preview=False, persist=persist)
+    assert second["persisted"] == 0
+    assert second["already_populated_skipped"] == 2
+    assert len(history) == 2
+    assert {item["policy_version"] for item in history} == {"care-opportunity-lifecycle-v1"}
+    assert {item["actor_type"] for item in history} == {"BOOTSTRAP"}
+
+
+def test_lifecycle_bootstrap_continues_after_partial_batch_and_isolates_errors() -> None:
+    records = [
+        {"id": "one", "customer_lifecycle_stage": None, "signals": [planning("Pending")]},
+        {"id": "bad", "customer_lifecycle_stage": None, "signals": [planning("Granted")]},
+        {"id": "three", "customer_lifecycle_stage": None, "signals": [planning("Granted")]},
+    ]
+    provider_calls = 0
+    publication_changes = 0
+    withdrawal_changes = 0
+
+    def persist(record, decision):
+        if record["id"] == "bad":
+            raise RuntimeError("isolated write failure")
+        record["customer_lifecycle_stage"] = decision.lifecycle.value
+        return True
+
+    partial = bootstrap_lifecycle_records(records[:1], preview=False, persist=persist)
+    continued = bootstrap_lifecycle_records(records[1:], preview=False, persist=persist)
+    assert partial["persisted"] == 1
+    assert continued["persisted"] == 1
+    assert continued["failed"] == 1
+    assert continued["failures"] == [{"opportunity_id": "bad", "error": "RuntimeError"}]
+    assert records[2]["customer_lifecycle_stage"] == "PLANNING_APPROVED"
+    assert provider_calls == publication_changes == withdrawal_changes == 0
+
+
+def test_lifecycle_bootstrap_preview_performs_no_writes() -> None:
+    calls = 0
+
+    def persist(record, decision):
+        nonlocal calls
+        calls += 1
+        return True
+
+    result = bootstrap_lifecycle_records(
+        [{"id": "one", "customer_lifecycle_stage": None, "signals": [planning("Pending")]}],
+        preview=True,
+        persist=persist,
+    )
+    assert result["examined"] == 1
+    assert result["would_persist"] == 1
+    assert result["persisted"] == 0
+    assert calls == 0

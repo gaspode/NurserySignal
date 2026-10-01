@@ -603,6 +603,8 @@ describe("admin frontend", () => {
     const apiClient = vi.fn()
       .mockResolvedValueOnce({ items: [] })
       .mockResolvedValueOnce({
+        opportunities_inspected: 1145,
+        stored_lifecycle_counts: { UNSET: 100 },
         watcher: {
           would_watch: 42,
           due: 0,
@@ -611,12 +613,21 @@ describe("admin frontend", () => {
           estimated_requests_per_day: 14,
           estimated_requests_per_30_days: 420,
         },
-      });
+      })
+      .mockResolvedValueOnce({ persisted: 100, remaining_unset: 0 })
+      .mockResolvedValueOnce({ opportunities_inspected: 1145, stored_lifecycle_counts: {}, watcher: {} });
     render(<SourcesPage apiClient={apiClient} selectedVertical="CHILDRENS_HOME" />);
     expect(await screen.findByRole("heading", { name: "Lifecycle refresh preview" })).toBeInTheDocument();
     expect(screen.getByText("Preview only")).toBeInTheDocument();
-    expect(screen.getByText(/Automatic refresh, lifecycle bootstrap, publication and withdrawal remain disabled/)).toBeInTheDocument();
+    expect(screen.getByText(/Automatic refresh, publication and withdrawal remain disabled/)).toBeInTheDocument();
     expect(apiClient).toHaveBeenCalledWith("/admin/opportunities/lifecycle-preview");
+    await userEvent.click(screen.getByRole("button", { name: "Bootstrap next 100 lifecycle states" }));
+    await userEvent.click(screen.getByRole("button", { name: "Bootstrap next 100" }));
+    await waitFor(() => expect(apiClient).toHaveBeenCalledWith(
+      "/admin/opportunities/lifecycle-bootstrap",
+      { method: "POST", body: JSON.stringify({ preview: false, limit: 100 }) },
+    ));
+    expect(await screen.findByText(/persisted 100 opportunities; 0 remain unset/i)).toBeInTheDocument();
   });
 
   it("runs a bounded CareProspect backfill from stored evidence", async () => {

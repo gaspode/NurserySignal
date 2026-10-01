@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+from collections import Counter
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
@@ -37,6 +39,55 @@ class AutomationDecision:
     outcome: str
     reason: str
     exclusions: tuple[str, ...] = ()
+
+
+def bootstrap_lifecycle_records(
+    opportunities: list[dict[str, Any]],
+    *,
+    preview: bool,
+    persist: Callable[[dict[str, Any], LifecycleDecision], bool],
+) -> dict[str, Any]:
+    """Derive and persist a bounded record set without coupling to providers."""
+    counts: Counter[str] = Counter()
+    persisted_counts: Counter[str] = Counter()
+    result: dict[str, Any] = {
+        "examined": 0,
+        "would_persist": 0,
+        "persisted": 0,
+        "already_populated_skipped": 0,
+        "unchanged_skipped": 0,
+        "failed": 0,
+        "history_rows_created": 0,
+        "failures": [],
+    }
+    for opportunity in opportunities:
+        result["examined"] += 1
+        if opportunity.get("customer_lifecycle_stage"):
+            result["already_populated_skipped"] += 1
+            continue
+        try:
+            decision = derive_care_lifecycle(opportunity.get("signals") or [])
+            counts[decision.lifecycle.value] += 1
+            result["would_persist"] += 1
+            if preview:
+                continue
+            if not persist(opportunity, decision):
+                result["unchanged_skipped"] += 1
+                continue
+            result["persisted"] += 1
+            result["history_rows_created"] += 1
+            persisted_counts[decision.lifecycle.value] += 1
+        except Exception as error:  # per-record isolation is part of the bootstrap contract
+            result["failed"] += 1
+            result["failures"].append(
+                {
+                    "opportunity_id": str(opportunity.get("id") or ""),
+                    "error": type(error).__name__,
+                }
+            )
+    result["counts_by_derived_lifecycle"] = dict(sorted(counts.items()))
+    result["counts_by_persisted_lifecycle"] = dict(sorted(persisted_counts.items()))
+    return result
 
 
 def publication_qa_holdout(opportunity_id: str) -> bool:

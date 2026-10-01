@@ -65,6 +65,7 @@ from app.organisation_lookup import ManualCompanyLookupError, lookup_manual_comp
 from app.planning_backfill import PlanningBackfillBounds, chunk_payload
 from app.repository import (
     backfill_historical_planning_family_metadata,
+    bootstrap_care_opportunity_lifecycles,
     care_opportunity_hygiene_audit,
     care_opportunity_lifecycle_preview,
     care_opportunity_semantic_drift_cleanup,
@@ -377,6 +378,8 @@ def _admin_path(path: str) -> tuple[str, str | None]:
         return "opportunity-hygiene-audit", None
     if path == "/admin/opportunities/lifecycle-preview":
         return "opportunity-lifecycle-preview", None
+    if path == "/admin/opportunities/lifecycle-bootstrap":
+        return "opportunity-lifecycle-bootstrap", None
     if path.startswith("/admin/opportunities/"):
         parts = path[len("/admin/opportunities/") :].split("/")
         if len(parts) == 2 and parts[1] == "publication":
@@ -1701,6 +1704,21 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 if admin_error:
                     return admin_error
                 return _response(200, care_opportunity_lifecycle_preview(settings))
+            if action == "opportunity-lifecycle-bootstrap" and method == "POST":
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                payload = parse_json_payload(_raw_body(event))
+                actor = str(claims.get("sub") or claims.get("username") or "unknown")
+                return _response(
+                    200,
+                    bootstrap_care_opportunity_lifecycles(
+                        settings,
+                        actor=actor,
+                        limit=min(max(int(payload.get("limit") or 100), 1), 100),
+                        preview=bool(payload.get("preview", True)),
+                    ),
+                )
             if action == "opportunity-automation-block" and method == "POST" and signal_id:
                 admin_error = _require_admin(claims, settings)
                 if admin_error:

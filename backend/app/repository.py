@@ -16,6 +16,8 @@ from app.care_lifecycle import (
     CARE_PUBLICATION_POLICY_VERSION,
     CARE_WITHDRAWAL_POLICY_VERSION,
     CareLifecycle,
+    LifecycleDecision,
+    bootstrap_lifecycle_records,
     derive_care_lifecycle,
     evaluate_publication,
     evaluate_withdrawal,
@@ -6490,6 +6492,157 @@ def care_opportunity_lifecycle_preview(settings: Settings) -> dict[str, Any]:
         "published_lifecycle_counts": dict(sorted(published_lifecycle_counts.items())),
         "hygiene_counts": hygiene["category_counts"],
         "examples": examples,
+    }
+
+
+def bootstrap_care_opportunity_lifecycles(
+    settings: Settings,
+    *,
+    actor: str,
+    limit: int = 100,
+    preview: bool = True,
+) -> dict[str, Any]:
+    """Persist one bounded, deterministic batch of previously unset Care lifecycles."""
+    bounded_limit = min(max(int(limit), 1), 100)
+    with connection(settings) as conn:
+        before = conn.execute(
+            """SELECT count(*) FILTER (WHERE customer_lifecycle_stage IS NULL),
+                      count(*) FILTER (WHERE customer_lifecycle_stage IS NOT NULL)
+               FROM opportunities WHERE vertical = 'CHILDRENS_HOME'"""
+        ).fetchone()
+        rows = conn.execute(
+            """SELECT o.id, o.customer_lifecycle_stage,
+                      COALESCE(rel.relationships, '[]'::jsonb)
+               FROM opportunities o
+               LEFT JOIN LATERAL (
+                 SELECT jsonb_agg(jsonb_build_object(
+                   'id', rs.id, 'signal_id', rs.id,
+                   'status', os.status, 'relationship_status', os.status,
+                   'source_type', rs.source_type, 'metadata', rs.metadata,
+                   'review_status', se.review_status,
+                   'extracted_facts', se.extracted_facts,
+                   'relationship_extracted_facts', os.extracted_facts,
+                   'planning_family_relationship_types', COALESCE(
+                     (SELECT jsonb_agg(DISTINCT pfr.relationship_type)
+                      FROM planning_signal_family_relationships pfr
+                      WHERE pfr.raw_signal_id = rs.id), '[]'::jsonb)
+                 ) ORDER BY rs.discovered_at, rs.id) AS relationships
+                 FROM opportunity_signals os
+                 JOIN raw_signals rs ON rs.id = os.raw_signal_id
+                 LEFT JOIN signal_enrichments se ON se.raw_signal_id = rs.id
+                 WHERE os.opportunity_id = o.id
+               ) rel ON TRUE
+               WHERE o.vertical = 'CHILDRENS_HOME'
+                 AND o.customer_lifecycle_stage IS NULL
+               ORDER BY o.id
+               LIMIT %s""",
+            (bounded_limit,),
+        ).fetchall()
+        opportunities = [
+            {
+                "id": str(row[0]),
+                "customer_lifecycle_stage": row[1],
+                "signals": row[2] or [],
+            }
+            for row in rows
+        ]
+
+        def persist(opportunity: dict[str, Any], decision: LifecycleDecision) -> bool:
+            try:
+                updated = conn.execute(
+                    """UPDATE opportunities
+                       SET customer_lifecycle_stage = %s,
+                           customer_lifecycle_reason = %s,
+                           customer_lifecycle_policy_version = %s,
+                           customer_lifecycle_evaluated_at = now(),
+                           updated_at = now()
+                       WHERE id = %s AND vertical = 'CHILDRENS_HOME'
+                         AND customer_lifecycle_stage IS NULL
+                       RETURNING id""",
+                    (
+                        decision.lifecycle.value,
+                        decision.reason,
+                        CARE_LIFECYCLE_POLICY_VERSION,
+                        opportunity["id"],
+                    ),
+                ).fetchone()
+                if not updated:
+                    conn.rollback()
+                    return False
+                source_type = {
+                    CareLifecycle.REGISTERED: "ofsted",
+                    CareLifecycle.REGISTRATION_DETECTED: "ofsted",
+                    CareLifecycle.DELIVERY_SIGNAL_DETECTED: "recruitment",
+                    CareLifecycle.PLANNING_APPROVED: "planning",
+                    CareLifecycle.PLANNING_PENDING: "planning",
+                    CareLifecycle.APPEAL_PENDING: "planning",
+                    CareLifecycle.STOPPED: "planning",
+                }.get(decision.lifecycle)
+                conn.execute(
+                    """INSERT INTO opportunity_lifecycle_history
+                       (opportunity_id, old_lifecycle, new_lifecycle, reason,
+                        triggering_signal_ids, source_type, policy_version,
+                        actor_type, actor)
+                       VALUES (%s, NULL, %s, %s, %s, %s, %s, 'BOOTSTRAP', %s)""",
+                    (
+                        opportunity["id"],
+                        decision.lifecycle.value,
+                        decision.reason,
+                        [UUID(value) for value in decision.triggering_signal_ids],
+                        source_type,
+                        CARE_LIFECYCLE_POLICY_VERSION,
+                        actor,
+                    ),
+                )
+                conn.commit()
+                return True
+            except Exception:
+                conn.rollback()
+                raise
+
+        result = bootstrap_lifecycle_records(
+            opportunities,
+            preview=preview,
+            persist=persist,
+        )
+        remaining = conn.execute(
+            """SELECT count(*) FROM opportunities
+               WHERE vertical = 'CHILDRENS_HOME'
+                 AND customer_lifecycle_stage IS NULL"""
+        ).fetchone()[0]
+        if not preview and (result["persisted"] or result["failed"]):
+            conn.execute(
+                """INSERT INTO admin_audit_events
+                   (action, actor, target_type, details, vertical)
+                   VALUES ('care_lifecycle_bootstrap_batch', %s,
+                           'opportunity_lifecycle', %s, 'CHILDRENS_HOME')""",
+                (
+                    actor,
+                    Jsonb(
+                        {
+                            "policy_version": CARE_LIFECYCLE_POLICY_VERSION,
+                            "limit": bounded_limit,
+                            "examined": result["examined"],
+                            "persisted": result["persisted"],
+                            "failed": result["failed"],
+                            "remaining_unset": int(remaining),
+                        }
+                    ),
+                ),
+            )
+            conn.commit()
+    return {
+        "preview": preview,
+        "policy_version": CARE_LIFECYCLE_POLICY_VERSION,
+        "batch_limit": bounded_limit,
+        "before_unset": int(before[0] or 0),
+        "already_populated_total": int(before[1] or 0),
+        **result,
+        "remaining_unset": int(remaining or 0),
+        "provider_requests": 0,
+        "planning_watches_created": 0,
+        "publication_changes": 0,
+        "withdrawal_changes": 0,
     }
 
 

@@ -1367,3 +1367,11 @@ Paid-pilot activation check (2026-09-28):
   active queues and non-collector DLQs are empty, and the six retained collector DLQ messages remain untouched.
   Exact next step: approve only a bounded lifecycle bootstrap and separately define an acceptable watch cohort /
   quota before enabling Phase B refresh. Phase C publication backlog and Phase D withdrawal remain unexecuted.
+- CareProspect Phase B1 adds an admin-only, bounded lifecycle bootstrap that processes at most 100 previously unset
+  opportunities per call in stable ID order. It reuses `care-opportunity-lifecycle-v1` unchanged, compare-and-sets
+  only NULL lifecycle rows, commits each opportunity with one append-only `BOOTSTRAP` history record, isolates
+  failures and resumes naturally on rerun. The Sources UI exposes stored/unset progress and a confirmed next-100
+  action. The operation reports derived/persisted state counts and hard-codes zero provider requests, Planning-watch
+  enrollment, publication changes and withdrawal changes. EventBridge refresh remains disabled; Phase B2 watcher
+  optimisation and Phase C/D automation are explicitly out of scope. Exact next step: deploy, run the approved
+  bootstrap to zero remaining unset rows, verify idempotency and production invariants, then record final counts.

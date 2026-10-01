@@ -361,6 +361,8 @@ export function SourcesPage({ apiClient, selectedVertical = "NURSERY", onNavigat
   const [notice, setNotice] = useState("");
   const [backfillBusy, setBackfillBusy] = useState(false);
   const [lifecyclePreview, setLifecyclePreview] = useState(null);
+  const [lifecycleBootstrapBusy, setLifecycleBootstrapBusy] = useState(false);
+  const [lifecycleBootstrapConfirm, setLifecycleBootstrapConfirm] = useState(false);
   const today = new Date().toISOString().slice(0, 10);
   const historicalStart = new Date(Date.now() - (547 * 86400000)).toISOString().slice(0, 10);
   const [historicalForm, setHistoricalForm] = useState({ from_date: historicalStart, to_date: today, max_records: 4000 });
@@ -424,6 +426,19 @@ export function SourcesPage({ apiClient, selectedVertical = "NURSERY", onNavigat
       setError({ title: "CareProspect backfill could not be completed", message: backfillError.message || "Please try again later." });
     } finally { setBackfillBusy(false); }
   }
+  async function runLifecycleBootstrap() {
+    setLifecycleBootstrapBusy(true); setLifecycleBootstrapConfirm(false); setError(null);
+    try {
+      const result = await apiClient("/admin/opportunities/lifecycle-bootstrap", {
+        method: "POST",
+        body: JSON.stringify({ preview: false, limit: 100 }),
+      });
+      setNotice(`Lifecycle bootstrap persisted ${result.persisted} opportunities; ${result.remaining_unset} remain unset.`);
+      setLifecyclePreview(await apiClient("/admin/opportunities/lifecycle-preview"));
+    } catch (bootstrapError) {
+      setError({ title: "Lifecycle bootstrap failed", message: bootstrapError.message || "The bounded lifecycle batch could not be completed." });
+    } finally { setLifecycleBootstrapBusy(false); }
+  }
   useEffect(() => {
     if (!historicalRun?.run_id || historicalRun.status !== "RUNNING") return undefined;
     const timer = window.setInterval(async () => {
@@ -482,8 +497,9 @@ export function SourcesPage({ apiClient, selectedVertical = "NURSERY", onNavigat
     </article>
     {selectedVertical === "CHILDRENS_HOME" && <article className="panel source-card">
       <div className="source-card-heading"><div><p className="eyebrow">Planning lifecycle watcher</p><h2>Lifecycle refresh preview</h2><p className="muted">Phase A derives due watches and provider cost without calling Plota or changing lifecycle/publication state.</p></div><Badge>Preview only</Badge></div>
-      <div className="source-counts"><span>Would watch <strong>{lifecyclePreview?.watcher?.would_watch ?? "—"}</strong></span><span>Due <strong>{lifecyclePreview?.watcher?.due ?? "—"}</strong></span><span>Checked 24h <strong>{lifecyclePreview?.watcher?.checked_last_24h ?? "—"}</strong></span><span>Provider errors <strong>{lifecyclePreview?.watcher?.provider_errors ?? "—"}</strong></span><span>Est. requests/day <strong>{lifecyclePreview?.watcher?.estimated_requests_per_day ?? "—"}</strong></span><span>Est. requests/month <strong>{lifecyclePreview?.watcher?.estimated_requests_per_30_days ?? "—"}</strong></span></div>
-      <p className="muted small-text">Automatic refresh, lifecycle bootstrap, publication and withdrawal remain disabled pending rollout approval.</p>
+      <div className="source-counts"><span>Stored lifecycle <strong>{lifecyclePreview ? lifecyclePreview.opportunities_inspected - (lifecyclePreview.stored_lifecycle_counts?.UNSET || 0) : "—"}</strong></span><span>Unset <strong>{lifecyclePreview?.stored_lifecycle_counts?.UNSET || 0}</strong></span><span>Would watch <strong>{lifecyclePreview?.watcher?.would_watch ?? "—"}</strong></span><span>Due <strong>{lifecyclePreview?.watcher?.due ?? "—"}</strong></span><span>Checked 24h <strong>{lifecyclePreview?.watcher?.checked_last_24h ?? "—"}</strong></span><span>Provider errors <strong>{lifecyclePreview?.watcher?.provider_errors ?? "—"}</strong></span><span>Est. requests/day <strong>{lifecyclePreview?.watcher?.estimated_requests_per_day ?? "—"}</strong></span><span>Est. requests/month <strong>{lifecyclePreview?.watcher?.estimated_requests_per_30_days ?? "—"}</strong></span></div>
+      <button className="button secondary" disabled={lifecycleBootstrapBusy || !lifecyclePreview?.stored_lifecycle_counts?.UNSET} onClick={() => setLifecycleBootstrapConfirm(true)}>{lifecycleBootstrapBusy ? "Bootstrapping…" : "Bootstrap next 100 lifecycle states"}</button>
+      <p className="muted small-text">Lifecycle bootstrap is bounded and local-only. Automatic refresh, publication and withdrawal remain disabled.</p>
     </article>}
     <article className="panel source-card">
       <div className="source-card-heading"><div><p className="eyebrow">CareProspect activation</p><h2>Stored-evidence backfill</h2><p className="muted">Re-evaluate up to 25 preserved Planning records and Care-targeted Recruitment records from the last 60 days. Providers are not called.</p></div><Badge>Bounded</Badge></div>
@@ -501,6 +517,7 @@ export function SourcesPage({ apiClient, selectedVertical = "NURSERY", onNavigat
       {historicalRun && <div className="historical-backfill-status" role="status"><div className="source-card-heading"><strong>{historicalRun.status}</strong><span>{historicalRun.counts?.chunks_completed || 0} / {historicalRun.parameters?.chunks_total || historicalRun.counts?.chunks_total || 0} chunks</span></div><div className="source-counts"><span>Fetched <strong>{historicalRun.counts?.records_fetched || 0}</strong></span><span>NurserySignal <strong>{historicalRun.counts?.nursery_matched || 0}</strong></span><span>CareProspect <strong>{historicalRun.counts?.care_matched || 0}</strong></span><span>Queued <strong>{historicalRun.counts?.signals_queued || 0}</strong></span><span>Excluded <strong>{historicalRun.counts?.excluded || 0}</strong></span><span>Errors <strong>{historicalRun.counts?.errors || 0}</strong></span></div>{historicalRun.failure_message && <p className="inline-alert">{historicalRun.failure_message}</p>}{historicalRun.status === "SUCCESS" && <button className="button secondary" onClick={recalculateHistoricalBackfill} disabled={historicalBusy}>{historicalBusy ? "Recalculating…" : "Recalculate current recruitment"}</button>}</div>}
     </article>
     {error && <AlertModal title={error.title} message={error.message} onClose={() => setError(null)} />}
+    {lifecycleBootstrapConfirm && <ConfirmationModal title="Bootstrap lifecycle states?" message="Persist the next 100 unset CareProspect lifecycle projections with append-only bootstrap history. This does not call Plota or change publication." confirmLabel="Bootstrap next 100" busy={lifecycleBootstrapBusy} onCancel={() => setLifecycleBootstrapConfirm(false)} onConfirm={runLifecycleBootstrap} />}
   </section>;
 }
 

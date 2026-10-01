@@ -1227,6 +1227,36 @@ def test_care_lifecycle_coordinator_is_preview_only(monkeypatch) -> None:
         )
 
 
+def test_care_lifecycle_bootstrap_is_admin_only_and_bounded(monkeypatch) -> None:
+    captured = {}
+
+    def fake_bootstrap(settings, **kwargs):
+        captured.update(kwargs)
+        return {"preview": kwargs["preview"], "persisted": 100, "remaining_unset": 1045}
+
+    monkeypatch.setattr("app.handler.bootstrap_care_opportunity_lifecycles", fake_bootstrap)
+    denied = handler(
+        event(
+            "/admin/opportunities/lifecycle-bootstrap",
+            "POST",
+            body=json.dumps({"preview": False, "limit": 999}),
+            claims={"sub": "staff", "cognito:groups": ["Other"]},
+        ),
+        None,
+    )
+    assert denied["statusCode"] == 403
+    response = handler(
+        event(
+            "/admin/opportunities/lifecycle-bootstrap",
+            "POST",
+            body=json.dumps({"preview": False, "limit": 999}),
+        ),
+        None,
+    )
+    assert response["statusCode"] == 200
+    assert captured == {"actor": "reviewer-123", "limit": 100, "preview": False}
+
+
 def test_opportunity_publication_automation_block_is_admin_only_and_audited(
     monkeypatch,
 ) -> None:
