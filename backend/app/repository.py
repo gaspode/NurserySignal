@@ -6724,7 +6724,17 @@ def care_opportunity_lifecycle_preview(settings: Settings) -> dict[str, Any]:
                 opportunity.get("publication_status") == "PUBLISHED"
                 for opportunity in opportunities
             ),
-            "outcomes": dict(sorted(publication_counts.items())),
+            "outcomes": {
+                outcome: publication_counts[outcome]
+                for outcome in (
+                    "AUTO_PUBLISH_ELIGIBLE",
+                    "QA_HOLDOUT",
+                    "MANUAL_REVIEW",
+                    "INELIGIBLE",
+                    "ALREADY_PUBLISHED",
+                    "MANUAL_PROTECTION",
+                )
+            },
             "exclusions": dict(sorted(publication_exclusions.items())),
             "outcomes_by_lifecycle": {
                 outcome: dict(sorted(values.items()))
