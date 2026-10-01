@@ -24,25 +24,35 @@ The MVP succeeds by being trustworthy and actionable, not by maximizing raw sign
 - `MCP_USAGE.md` documents connection, tools and the explicit read-only boundary.
 
 Current gate:
-- MCP v1 is deployed at the production `/mcp` endpoint with public OAuth discovery and authenticated
-  tool/capability access. Unauthenticated MCP requests return 401; service smoke uses a short-lived,
-  scoped client-credentials token, while ChatGPT uses administrator authorization-code + PKCE.
-- Production smoke run `36895648892` exercised initialization, discovery and all ten tools, including
-  known signal/opportunity detail, manual-publication reasoning, QA, unmatched-strong, source,
-  automation and 24-hour recent-change workflows. It returned 348 Needs Attention records, 68 QA
-  holdouts, 11 unmatched strong signals and a bounded 20-change page. Representative mean latency was
-  3.061 seconds across 15 calls (7.889 seconds maximum for the heaviest policy-backed QA projection).
-- Runtime health from the same read-only smoke: watcher v2 ENABLED with 259 watches, six requests this
-  month and two historical failed polls; publication v3 ENABLED with 87 published (35 automatic) and
-  no latest-run failures; withdrawal v1 ENABLED with zero automatic withdrawals and no latest-run
-  failures. The smoke itself made zero provider calls and zero business-state mutations.
-- Commit `2f4801b` passed CI run `36895135690` and deployed successfully in run `36895258548`; 586
-  backend tests, 95 frontend tests, Ruff, frontend build and Terraform fmt/validate/plan/apply pass.
-  Production smoke also caught and verified the repair for recent-change policy provenance, which now
-  reads policy versions from parent automation runs rather than item rows.
-- Exact next step: connect the production URL as a ChatGPT custom MCP app using the documented OAuth
-  setup, then operate it read-only long enough to identify genuinely repetitive, narrowly scoped
-  administration. Mutation tools remain explicitly deferred.
+- MCP v1 is deployed at the production `/mcp` endpoint with RFC 9728 protected-resource discovery,
+  an application-owned 401 Bearer challenge and an OAuth 2.1 authorization-code/PKCE facade. The
+  canonical resource is the exact `/mcp` URL and RFC 8707 resource binding is preserved through
+  Cognito into the access-token audience.
+- ChatGPT is identified by its official CIMD client ID (`https://chatgpt.com/oauth/client.json`) and
+  stable redirect (`https://chatgpt.com/connector_platform_oauth_redirect`). RFC 9207 issuer response
+  identification is implemented on both success and error redirects; no connection-specific callback
+  is required. The exact public ChatGPT registration is pinned because the data-plane Lambda has no
+  public egress.
+- OAuth authorization/token exchange is isolated in a non-VPC Lambda with a single-use, ten-minute
+  DynamoDB transaction store. The read-only MCP data Lambda remains private in the VPC and validates
+  Cognito JWT signatures against deployment-pinned public JWKS, including issuer, audience, scope,
+  client and administrator-group checks. No static bearer-token workaround or NAT gateway was added.
+- Production smoke run `36909826132` used the official Python MCP client and exercised initialization,
+  all ten tools and the full investigation workflow. It returned 352 Needs Attention records, 68 QA
+  holdouts, 11 unmatched strong signals and a bounded 20-change page; initialization and tools/list
+  were 0.359s and 0.377s, with a 2.924s mean across 15 calls.
+- Runtime health from the same read-only smoke: watcher v2 ENABLED with 259 watches, six provider
+  requests this month and two historical failed polls; publication v3 ENABLED with 112 published
+  (60 automatic) and no latest-run failures; withdrawal v1 ENABLED with zero automatic withdrawals
+  and no latest-run failures. OAuth/protocol diagnostics made zero provider calls and zero business-
+  state mutations.
+- Commits `49e33ee` through `ef9ec99` passed final CI run `36909395493` and deployed successfully in
+  run `36909549150`; 594 backend tests, 95 frontend tests, Ruff, frontend build and Terraform
+  fmt/validate/plan/apply pass. The initial API Gateway challenge interception and both VPC egress
+  dependencies (CIMD and JWKS/token exchange) are resolved without weakening authentication.
+- Exact next step: remove the failed ChatGPT custom-app connection, add the production Streamable HTTP
+  URL again, complete the Cognito administrator login and verify the first real ChatGPT tool call.
+  Continue read-only operation before designing any mutation tools.
 
 ## Phase 1 — Foundation — COMPLETE
 
