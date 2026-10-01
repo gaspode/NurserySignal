@@ -48,7 +48,9 @@ Current gate:
   the legacy singular `private_key_jwt` preference as mandatory. Token exchange now accepts either
   advertised method while retaining exact CIMD identity/redirect validation, one-time authorization
   codes, PKCE S256, scope and resource binding. Redacted boundary diagnostics record only field
-  presence and public client identifiers if another interoperability failure occurs.
+  presence and public client identifiers if another interoperability failure occurs. Commit
+  `bb2f758` passed 40 focused OAuth/MCP tests and full CI run `36932170550`, then deployed
+  successfully in run `36932302783`.
 - MCP v1 is deployed at the production `/mcp` endpoint with RFC 9728 protected-resource discovery,
   an application-owned 401 Bearer challenge and an OAuth 2.1 authorization-code/PKCE facade. The
   canonical resource is the exact `/mcp` URL and RFC 8707 resource binding is preserved through
