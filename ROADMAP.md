@@ -1413,5 +1413,18 @@ Paid-pilot activation check (2026-09-28):
   handling. Database and schedule kill switches are independent; guardrails are 50 watcher requests/day and
   2,000/month against the 20,000-request plan. Sources exposes persisted/due/cadence, actual/projected usage,
   changed/unchanged/failure counts and emergency disable. Publication and withdrawal automation remain disabled.
-  The first deployment deliberately keeps EventBridge and database execution disabled; production enrolment,
-  stagger verification and activation results will be recorded here before Phase B3 is complete.
+  The first deployment deliberately kept EventBridge and database execution disabled. Production then enrolled
+  all 259 eligible watches (55 seven-day, 81 fourteen-day and 123 thirty-day) with 259 append-only enrolment events,
+  zero failures and zero provider requests; an immediate repeat created/updated/disabled zero rows and created no
+  history. Initial polls are deterministically spread from 2026-10-01 11:11 UTC through 2026-10-31 04:47 UTC, with
+  18 due in the first 24 hours and 116 in the first seven days, avoiding an activation burst. EventBridge is now
+  ENABLED on a six-hour schedule and the independent database execution switch is enabled. The first bounded
+  coordinator execution selected zero because no watch was yet naturally due, so activation consumed zero Plota
+  requests and caused zero evidence, lifecycle, publication or withdrawal changes. Runtime guardrails are active
+  at 15 polls/invocation, 50/day and 2,000/month; projected steady-state usage remains 17.74/day or 532.3/30 days.
+  All 33 published opportunities and the Phase C/D previews are unchanged. Commits `6079d6b` and `c7d847f`
+  deployed successfully in runs `36845502284` and `36846363239` after CI runs `36845351997` and `36846239237`;
+  540 backend and 93 frontend tests, Ruff, frontend build and Terraform fmt/validate/plan/apply pass. API/database
+  health is green, active Planning/ingestion/enrichment queues and their DLQs are empty, and the six pre-existing
+  collector DLQ messages remain untouched. Exact next step: observe naturally due bounded polls and quota/error
+  metrics; Phase C publication and Phase D withdrawal automation remain preview-only and disabled.
