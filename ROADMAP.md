@@ -62,6 +62,10 @@ Current gate:
   to equal the opaque identifier in its redirect URI. Redirect authorization now follows the fetched
   CIMD `redirect_uris` allowlist directly, with an independent strict ChatGPT redirect-origin/path
   check, instead of imposing that undocumented identifier equality.
+- CIMD registration no longer rejects clients based on optional/negotiated metadata fields such as
+  grant, response or token-auth declarations. The authorization request itself remains constrained to
+  code + PKCE S256, and the exact requested redirect must be present in the fetched ChatGPT allowlist;
+  sanitized rejection diagnostics are retained for any further interoperability issue.
 
 ## Phase 1 — Foundation — COMPLETE
 

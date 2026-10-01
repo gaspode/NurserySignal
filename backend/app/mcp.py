@@ -1066,21 +1066,22 @@ def _fetch_chatgpt_cimd(client_id: str = CHATGPT_CIMD_URL) -> dict[str, Any]:
         metadata = json.loads(payload)
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise MCPError("invalid_argument", "Invalid OAuth client metadata") from exc
-    # The client identifier is the metadata-document URL itself. Do not assume
-    # the opaque identifier in that URL is reused in a redirect URI; the CIMD
-    # redirect_uris property is authoritative for that binding.
-    grant_types = metadata.get("grant_types", ["authorization_code"])
-    response_types = metadata.get("response_types", ["code"])
-    auth_methods = metadata.get("token_endpoint_auth_methods_supported")
-    if auth_methods is None:
-        auth_methods = [metadata.get("token_endpoint_auth_method", "none")]
+    # The URL is the CIMD client identifier. Authorization-request semantics
+    # are validated below; at registration time the security-critical client
+    # binding is the exact redirect allowlist published by ChatGPT.
     if (
-        not isinstance(metadata.get("redirect_uris"), list)
+        not isinstance(metadata, dict)
+        or not isinstance(metadata.get("redirect_uris"), list)
         or not metadata["redirect_uris"]
-        or "authorization_code" not in grant_types
-        or "code" not in response_types
-        or "none" not in auth_methods
     ):
+        logger.warning(
+            "mcp_oauth_cimd_rejected client_id=%s fields=%s redirect_uris_type=%s",
+            client_id,
+            sorted(str(key) for key in metadata) if isinstance(metadata, dict) else [],
+            type(metadata.get("redirect_uris")).__name__
+            if isinstance(metadata, dict)
+            else type(metadata).__name__,
+        )
         raise MCPError("invalid_argument", "OAuth client metadata rejected")
     return metadata
 
@@ -1103,6 +1104,13 @@ def _validate_chatgpt_client(
             and callback_path is not None
         )
         if not safe_redirect or redirect_uri not in metadata.get("redirect_uris", []):
+            logger.warning(
+                "mcp_oauth_redirect_rejected client_id=%s redirect_uri=%s safe=%s advertised=%s",
+                client_id,
+                redirect_uri,
+                safe_redirect,
+                len(metadata.get("redirect_uris", [])),
+            )
             raise MCPError("invalid_argument", "Redirect URI rejected")
     return metadata
 

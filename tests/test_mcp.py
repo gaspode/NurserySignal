@@ -204,11 +204,7 @@ def test_callback_specific_chatgpt_cimd_is_verified(monkeypatch):
             assert limit == 65_537
             return json.dumps(
                 {
-                    "client_id": client_id,
                     "redirect_uris": [redirect_uri],
-                    "grant_types": ["authorization_code"],
-                    "response_types": ["code"],
-                    "token_endpoint_auth_methods_supported": ["none", "private_key_jwt"],
                 }
             ).encode()
 
@@ -219,7 +215,7 @@ def test_callback_specific_chatgpt_cimd_is_verified(monkeypatch):
 
     monkeypatch.setattr(mcp.urllib.request, "urlopen", urlopen)
     metadata = mcp._validate_chatgpt_client(client_id, redirect_uri)
-    assert metadata["client_id"] == client_id
+    assert metadata["redirect_uris"] == [redirect_uri]
 
 
 def test_callback_specific_cimd_rejects_untrusted_client_without_fetch(monkeypatch):
