@@ -1264,21 +1264,36 @@ def _validate_token_client(args: dict[str, str], settings: Settings) -> str:
         else None
     )
     metadata = _validate_chatgpt_client(client_id, redirect_uri)
-    auth_method = str(metadata.get("token_endpoint_auth_method") or "none")
-    if auth_method == "private_key_jwt":
-        if args.get("client_assertion_type") != CLIENT_ASSERTION_TYPE or not assertion:
-            raise MCPError("unauthorized", "OAuth private_key_jwt required", rpc_code=-32001)
+    advertised_methods = metadata.get("token_endpoint_auth_methods_supported")
+    if isinstance(advertised_methods, list):
+        auth_methods = {
+            str(method)
+            for method in advertised_methods
+            if method in {"none", "private_key_jwt"}
+        }
+    else:
+        legacy_method = str(metadata.get("token_endpoint_auth_method") or "none")
+        auth_methods = (
+            {legacy_method} if legacy_method in {"none", "private_key_jwt"} else set()
+        )
+    if assertion:
+        if (
+            "private_key_jwt" not in auth_methods
+            or args.get("client_assertion_type") != CLIENT_ASSERTION_TYPE
+        ):
+            raise MCPError(
+                "unauthorized", "OAuth client authentication mismatch", rpc_code=-32001
+            )
         _validate_private_key_jwt(
             assertion,
             client_id=client_id,
             metadata=metadata,
             settings=settings,
         )
-    elif auth_method == "none":
-        if assertion:
-            raise MCPError("unauthorized", "OAuth client authentication mismatch", rpc_code=-32001)
-    else:
-        raise MCPError("unauthorized", "Unsupported OAuth client authentication", rpc_code=-32001)
+    elif "none" not in auth_methods or args.get("client_assertion_type"):
+        raise MCPError(
+            "unauthorized", "Unsupported OAuth client authentication", rpc_code=-32001
+        )
     return client_id
 
 
@@ -1485,6 +1500,16 @@ def _oauth_token(event: dict[str, Any], settings: Settings) -> dict[str, Any]:
     try:
         _validate_token_client(args, settings)
     except MCPError as exc:
+        logger.warning(
+            "mcp_oauth_token_client_rejected client_id=%s assertion_present=%s "
+            "assertion_type_present=%s fields=%s error_code=%s error=%s",
+            args.get("client_id"),
+            bool(args.get("client_assertion")),
+            bool(args.get("client_assertion_type")),
+            sorted(args),
+            exc.code,
+            str(exc),
+        )
         status = 503 if exc.code == "unavailable" else 401
         error = "temporarily_unavailable" if status == 503 else "invalid_client"
         return _response(status, {"error": error})

@@ -636,7 +636,7 @@ def test_private_key_jwt_signature_issuer_subject_and_audience_are_verified(monk
         )
 
 
-def test_chatgpt_web_token_exchange_rejects_missing_or_mismatched_assertion(monkeypatch):
+def test_chatgpt_web_token_exchange_negotiates_none_or_private_key_jwt(monkeypatch):
     request = event(method="POST", path="/oauth/token", authorized=False)
     base = {
         "grant_type": "authorization_code",
@@ -646,8 +646,10 @@ def test_chatgpt_web_token_exchange_rejects_missing_or_mismatched_assertion(monk
         "code_verifier": PKCE_VALUE,
         "resource": "https://api.example/mcp",
     }
-    request["body"] = urlencode(base)
-    assert mcp.handler(request, None)["statusCode"] == 401
+    assert (
+        mcp._validate_token_client(base, Settings(mcp_oauth_issuer="https://api.example"))
+        == mcp.CHATGPT_CIMD_URL
+    )
 
     assertion = mcp.jwt.encode(
         {"iss": mcp.CODEX_CIMD_URL},

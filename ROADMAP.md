@@ -42,6 +42,13 @@ Current gate:
   `private_key_jwt`/RS256 client authentication, and the unauthenticated MCP endpoint returns the
   required `401` resource-metadata challenge. The remaining gate is one fresh ChatGPT web reconnect
   to exercise OpenAI's signed assertion end to end; no authentication boundary was weakened.
+- A subsequent live web retry still returned `401` before private-key verification. OpenAI's current
+  CIMD transition contract permits the client to negotiate either `none` or `private_key_jwt` from
+  the plural `token_endpoint_auth_methods_supported` intersection; SignalHub had incorrectly treated
+  the legacy singular `private_key_jwt` preference as mandatory. Token exchange now accepts either
+  advertised method while retaining exact CIMD identity/redirect validation, one-time authorization
+  codes, PKCE S256, scope and resource binding. Redacted boundary diagnostics record only field
+  presence and public client identifiers if another interoperability failure occurs.
 - MCP v1 is deployed at the production `/mcp` endpoint with RFC 9728 protected-resource discovery,
   an application-owned 401 Bearer challenge and an OAuth 2.1 authorization-code/PKCE facade. The
   canonical resource is the exact `/mcp` URL and RFC 8707 resource binding is preserved through
