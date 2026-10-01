@@ -10,6 +10,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from jwt.algorithms import RSAAlgorithm
 
 REAL_DECODE_ACCESS_TOKEN = mcp._decode_access_token
+PKCE_VALUE = "A" * 43
 
 
 def event(body=None, *, authorized=True, method="POST", path="/mcp"):
@@ -153,7 +154,8 @@ def test_oauth_server_metadata_advertises_cognito_pkce_facade():
     assert body["token_endpoint"] == "https://api.example/oauth/token"
     assert body["code_challenge_methods_supported"] == ["S256"]
     assert body["scopes_supported"] == [mcp.READ_SCOPE]
-    assert body["token_endpoint_auth_methods_supported"] == ["none"]
+    assert body["token_endpoint_auth_methods_supported"] == ["none", "private_key_jwt"]
+    assert body["token_endpoint_auth_signing_alg_values_supported"] == ["RS256"]
     assert body["client_id_metadata_document_supported"] is True
     assert body["authorization_response_iss_parameter_supported"] is True
     resource = mcp.protected_resource_metadata(mcp.Settings.from_env())
@@ -176,7 +178,19 @@ def test_chatgpt_cimd_registration_is_pinned_without_runtime_network(monkeypatch
     assert metadata["client_id"] == mcp.CHATGPT_CIMD_URL
     assert metadata["redirect_uris"] == [mcp.CHATGPT_REDIRECT_URI]
     assert "authorization_code" in metadata["grant_types"]
-    assert "none" in metadata["token_endpoint_auth_methods_supported"]
+    assert metadata["token_endpoint_auth_method"] == "private_key_jwt"
+    assert metadata["jwks_uri"] == "https://chatgpt.com/oauth/jwks.json"
+
+
+def test_codex_cimd_registration_is_pinned_without_runtime_network(monkeypatch):
+    monkeypatch.setattr(
+        mcp.urllib.request,
+        "urlopen",
+        lambda *args, **kwargs: pytest.fail("Codex CIMD must not require runtime egress"),
+    )
+    metadata = mcp._fetch_chatgpt_cimd(mcp.CODEX_CIMD_URL)
+    assert metadata["client_id"] == mcp.CODEX_CIMD_URL
+    assert metadata["token_endpoint_auth_method"] == "none"
 
 
 def test_callback_specific_chatgpt_cimd_is_verified(monkeypatch):
@@ -232,7 +246,7 @@ def test_callback_specific_cimd_rejects_untrusted_client_without_fetch(monkeypat
 
 
 def test_codex_cimd_allows_rfc8252_ephemeral_loopback_port(monkeypatch):
-    client_id = "https://chatgpt.com/oauth/codex/client.json"
+    client_id = mcp.CODEX_CIMD_URL
     monkeypatch.setattr(
         mcp,
         "_fetch_chatgpt_cimd",
@@ -320,7 +334,7 @@ def test_cimd_authorization_preserves_pkce_scope_and_resource(monkeypatch):
         "redirect_uri": mcp.CHATGPT_REDIRECT_URI,
         "scope": mcp.READ_SCOPE,
         "state": "chatgpt-state",
-        "code_challenge": "challenge",
+        "code_challenge": PKCE_VALUE,
         "code_challenge_method": "S256",
         "resource": "https://api.example/mcp",
     }
@@ -359,7 +373,7 @@ def test_callback_specific_cimd_authorization_is_accepted(monkeypatch):
         "redirect_uri": redirect_uri,
         "scope": mcp.READ_SCOPE,
         "state": "chatgpt-state",
-        "code_challenge": "challenge",
+        "code_challenge": PKCE_VALUE,
         "code_challenge_method": "S256",
         "resource": "https://api.example/mcp",
     }
@@ -406,7 +420,7 @@ def test_oauth_authorization_rejects_wrong_resource_without_provider_call(monkey
         "redirect_uri": mcp.CHATGPT_REDIRECT_URI,
         "scope": mcp.READ_SCOPE,
         "state": "state",
-        "code_challenge": "challenge",
+        "code_challenge": PKCE_VALUE,
         "code_challenge_method": "S256",
         "resource": "https://attacker.example/mcp",
     }
@@ -414,6 +428,46 @@ def test_oauth_authorization_rejects_wrong_resource_without_provider_call(monkey
     query = parse_qs(urlparse(response["headers"]["location"]).query)
     assert query["error"] == ["invalid_target"]
     assert query["iss"] == ["https://api.example"]
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("client_id", "https://attacker.example/oauth/client.json"),
+        ("redirect_uri", "https://attacker.example/callback"),
+        ("code_challenge_method", "plain"),
+        ("code_challenge", "too-short"),
+        ("state", ""),
+    ],
+)
+def test_oauth_authorization_rejects_invalid_web_request(field, value, monkeypatch):
+    request = event(method="GET", path="/oauth/authorize", authorized=False)
+    request["queryStringParameters"] = {
+        "response_type": "code",
+        "client_id": mcp.CHATGPT_CIMD_URL,
+        "redirect_uri": mcp.CHATGPT_REDIRECT_URI,
+        "scope": mcp.READ_SCOPE,
+        "state": "state",
+        "code_challenge": PKCE_VALUE,
+        "code_challenge_method": "S256",
+        "resource": "https://api.example/mcp",
+        field: value,
+    }
+    response = mcp.handler(request, None)
+    assert response["statusCode"] == 400 or (
+        response["statusCode"] == 302
+        and parse_qs(urlparse(response["headers"]["location"]).query)["error"]
+        == ["invalid_request"]
+    )
+
+
+def test_oauth_callback_rejects_unknown_or_replayed_state(monkeypatch):
+    monkeypatch.setattr(mcp, "_consume_oauth_transaction", lambda settings, state: None)
+    request = event(method="GET", path="/oauth/callback", authorized=False)
+    request["queryStringParameters"] = {"state": "unknown", "code": "code"}
+    response = mcp.handler(request, None)
+    assert response["statusCode"] == 400
+    assert json.loads(response["body"])["message"] == "OAuth state expired"
 
 
 def test_oauth_token_proxy_preserves_resource_and_validates_admin_token(monkeypatch):
@@ -460,7 +514,7 @@ def test_oauth_token_proxy_preserves_resource_and_validates_admin_token(monkeypa
             "client_id": mcp.CHATGPT_CIMD_URL,
             "redirect_uri": mcp.CHATGPT_REDIRECT_URI,
             "code": "authorization-code",
-            "code_verifier": "verifier",
+            "code_verifier": PKCE_VALUE,
             "resource": "https://api.example/mcp",
         }
     )
@@ -469,6 +523,147 @@ def test_oauth_token_proxy_preserves_resource_and_validates_admin_token(monkeypa
     assert captured["client_id"] == ["user-client"]
     assert captured["redirect_uri"] == ["https://api.example/oauth/callback"]
     assert captured["resource"] == ["https://api.example/mcp"]
+
+
+def test_chatgpt_web_token_exchange_accepts_verified_private_key_jwt(monkeypatch):
+    captured = {}
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        @staticmethod
+        def read(limit):
+            return json.dumps({"access_token": "bound-token", "token_type": "Bearer"}).encode()
+
+    monkeypatch.setattr(
+        mcp,
+        "_validate_private_key_jwt",
+        lambda assertion, **kwargs: captured.update(
+            assertion=assertion, client_id=kwargs["client_id"]
+        ),
+    )
+    monkeypatch.setattr(mcp.urllib.request, "urlopen", lambda request, timeout: Response())
+    monkeypatch.setattr(
+        mcp,
+        "_decode_access_token",
+        lambda token, settings: {
+            "client_id": "user-client",
+            "scope": mcp.READ_SCOPE,
+            "token_use": "access",
+            "aud": "https://api.example/mcp",
+            "cognito:groups": ["NurserySignalAdmins"],
+        },
+    )
+    assertion = mcp.jwt.encode(
+        {
+            "iss": mcp.CHATGPT_CIMD_URL,
+            "sub": mcp.CHATGPT_CIMD_URL,
+            "aud": "https://api.example/oauth/token",
+            "iat": datetime.now(UTC),
+            "exp": datetime.now(UTC) + timedelta(minutes=5),
+            "jti": "assertion-id",
+        },
+        "not-used-by-mocked-validator-key-1234567890",
+        algorithm="HS256",
+    )
+    request = event(method="POST", path="/oauth/token", authorized=False)
+    request["body"] = urlencode(
+        {
+            "grant_type": "authorization_code",
+            "redirect_uri": mcp.CHATGPT_REDIRECT_URI,
+            "code": "authorization-code",
+            "code_verifier": PKCE_VALUE,
+            "resource": "https://api.example/mcp",
+            "client_assertion_type": mcp.CLIENT_ASSERTION_TYPE,
+            "client_assertion": assertion,
+        }
+    )
+    response = mcp.handler(request, None)
+    assert response["statusCode"] == 200
+    assert captured == {"assertion": assertion, "client_id": mcp.CHATGPT_CIMD_URL}
+
+
+def test_private_key_jwt_signature_issuer_subject_and_audience_are_verified(monkeypatch):
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+
+    class SigningKey:
+        key = private_key.public_key()
+
+    class Jwks:
+        def __init__(self, uri, cache_keys, timeout):
+            assert uri == "https://chatgpt.com/oauth/jwks.json"
+            assert cache_keys is True
+            assert timeout == 5
+
+        @staticmethod
+        def get_signing_key_from_jwt(assertion):
+            return SigningKey()
+
+    monkeypatch.setattr(mcp, "PyJWKClient", Jwks)
+    mcp._jwk_clients.clear()
+    settings = Settings(mcp_oauth_issuer="https://api.example")
+    now = datetime.now(UTC)
+    claims = {
+        "iss": mcp.CHATGPT_CIMD_URL,
+        "sub": mcp.CHATGPT_CIMD_URL,
+        "aud": "https://api.example/oauth/token",
+        "iat": now,
+        "exp": now + timedelta(minutes=5),
+        "jti": "assertion-id",
+    }
+    assertion = mcp.jwt.encode(
+        claims, private_key, algorithm="RS256", headers={"kid": "test"}
+    )
+    mcp._validate_private_key_jwt(
+        assertion,
+        client_id=mcp.CHATGPT_CIMD_URL,
+        metadata=mcp.CHATGPT_CIMD,
+        settings=settings,
+    )
+
+    claims["aud"] = "https://attacker.example/oauth/token"
+    wrong_audience = mcp.jwt.encode(
+        claims, private_key, algorithm="RS256", headers={"kid": "test"}
+    )
+    with pytest.raises(mcp.MCPError, match="assertion is invalid"):
+        mcp._validate_private_key_jwt(
+            wrong_audience,
+            client_id=mcp.CHATGPT_CIMD_URL,
+            metadata=mcp.CHATGPT_CIMD,
+            settings=settings,
+        )
+
+
+def test_chatgpt_web_token_exchange_rejects_missing_or_mismatched_assertion(monkeypatch):
+    request = event(method="POST", path="/oauth/token", authorized=False)
+    base = {
+        "grant_type": "authorization_code",
+        "client_id": mcp.CHATGPT_CIMD_URL,
+        "redirect_uri": mcp.CHATGPT_REDIRECT_URI,
+        "code": "authorization-code",
+        "code_verifier": PKCE_VALUE,
+        "resource": "https://api.example/mcp",
+    }
+    request["body"] = urlencode(base)
+    assert mcp.handler(request, None)["statusCode"] == 401
+
+    assertion = mcp.jwt.encode(
+        {"iss": mcp.CODEX_CIMD_URL},
+        "not-verified-test-key-12345678901234567890",
+        algorithm="HS256",
+    )
+    request["body"] = urlencode(
+        {
+            **base,
+            "client_assertion_type": mcp.CLIENT_ASSERTION_TYPE,
+            "client_assertion": assertion,
+        }
+    )
+    assert mcp.handler(request, None)["statusCode"] == 401
 
 
 def test_access_token_validation_accepts_bound_user_and_rejects_wrong_audience(monkeypatch):

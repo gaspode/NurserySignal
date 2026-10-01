@@ -17,7 +17,7 @@ from uuid import UUID
 
 import boto3
 import jwt
-from jwt import PyJWK, PyJWKClient, PyJWTError
+from jwt import PyJWK, PyJWKClient, PyJWKClientError, PyJWTError
 from psycopg.types.json import Jsonb
 
 from app.config import Settings
@@ -44,6 +44,9 @@ DEFAULT_LIMIT = 20
 MAX_LIMIT = 100
 CHATGPT_CIMD_URL = "https://chatgpt.com/oauth/client.json"
 CHATGPT_REDIRECT_URI = "https://chatgpt.com/connector_platform_oauth_redirect"
+CODEX_CIMD_URL = "https://chatgpt.com/oauth/codex/client.json"
+CLIENT_ASSERTION_TYPE = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
+PKCE_VALUE = re.compile(r"^[A-Za-z0-9._~-]{43,128}$")
 CHATGPT_CALLBACK_CIMD_PATH = re.compile(r"^/oauth/([A-Za-z0-9_-]{1,200})/client\.json$")
 CHATGPT_CIMD = {
     "client_id": CHATGPT_CIMD_URL,
@@ -53,6 +56,18 @@ CHATGPT_CIMD = {
     "response_types": ["code"],
     "token_endpoint_auth_methods_supported": ["none", "private_key_jwt"],
     "token_endpoint_auth_method": "private_key_jwt",
+    "token_endpoint_auth_signing_alg": "RS256",
+    "jwks_uri": "https://chatgpt.com/oauth/jwks.json",
+}
+CODEX_CIMD = {
+    "client_id": CODEX_CIMD_URL,
+    "client_name": "Codex",
+    "application_type": "native",
+    "redirect_uris": ["http://127.0.0.1/callback", "http://localhost/callback"],
+    "grant_types": ["authorization_code", "refresh_token"],
+    "response_types": ["code"],
+    "token_endpoint_auth_methods_supported": ["none"],
+    "token_endpoint_auth_method": "none",
 }
 _jwk_clients: dict[str, PyJWKClient] = {}
 SOURCE_SCHEDULES = {
@@ -932,7 +947,8 @@ def authorization_server_metadata(settings: Settings) -> dict[str, Any]:
         "response_types_supported": ["code"],
         "grant_types_supported": ["authorization_code", "refresh_token"],
         "code_challenge_methods_supported": ["S256"],
-        "token_endpoint_auth_methods_supported": ["none"],
+        "token_endpoint_auth_methods_supported": ["none", "private_key_jwt"],
+        "token_endpoint_auth_signing_alg_values_supported": ["RS256"],
         "scopes_supported": [READ_SCOPE],
         "client_id_metadata_document_supported": True,
         "authorization_response_iss_parameter_supported": True,
@@ -1046,6 +1062,8 @@ def _fetch_chatgpt_cimd(client_id: str = CHATGPT_CIMD_URL) -> dict[str, Any]:
         raise MCPError("invalid_argument", "Unsupported OAuth client")
     if client_id == CHATGPT_CIMD_URL:
         return dict(CHATGPT_CIMD)
+    if client_id == CODEX_CIMD_URL:
+        return dict(CODEX_CIMD)
     match = CHATGPT_CALLBACK_CIMD_PATH.fullmatch(parsed.path)
     if not match:
         raise MCPError("invalid_argument", "Unsupported OAuth client")
@@ -1137,6 +1155,101 @@ def _validate_chatgpt_client(
             )
             raise MCPError("invalid_argument", "Redirect URI rejected")
     return metadata
+
+
+def _unverified_client_assertion_issuer(assertion: str) -> str:
+    try:
+        claims = jwt.decode(
+            assertion,
+            options={
+                "verify_signature": False,
+                "verify_aud": False,
+                "verify_exp": False,
+            },
+        )
+    except PyJWTError as exc:
+        raise MCPError(
+            "unauthorized", "OAuth client assertion is invalid", rpc_code=-32001
+        ) from exc
+    issuer = claims.get("iss")
+    if not isinstance(issuer, str) or not issuer:
+        raise MCPError("unauthorized", "OAuth client assertion issuer missing", rpc_code=-32001)
+    return issuer
+
+
+def _validate_private_key_jwt(
+    assertion: str,
+    *,
+    client_id: str,
+    metadata: dict[str, Any],
+    settings: Settings,
+) -> None:
+    jwks_uri = str(metadata.get("jwks_uri") or "")
+    parsed_jwks = urllib.parse.urlparse(jwks_uri)
+    if (
+        parsed_jwks.scheme != "https"
+        or parsed_jwks.hostname != "chatgpt.com"
+        or parsed_jwks.port is not None
+        or parsed_jwks.username is not None
+        or parsed_jwks.password is not None
+        or parsed_jwks.query
+        or parsed_jwks.fragment
+    ):
+        raise MCPError("unauthorized", "OAuth client JWKS is invalid", rpc_code=-32001)
+    token_endpoint = f"{str(settings.mcp_oauth_issuer).rstrip('/')}/oauth/token"
+    try:
+        key = _jwk_clients.setdefault(
+            jwks_uri, PyJWKClient(jwks_uri, cache_keys=True, timeout=5)
+        ).get_signing_key_from_jwt(assertion).key
+        claims = jwt.decode(
+            assertion,
+            key,
+            algorithms=["RS256"],
+            issuer=client_id,
+            audience=token_endpoint,
+            options={"require": ["iss", "sub", "aud", "exp", "iat", "jti"]},
+        )
+    except (PyJWKClientError, PyJWTError) as exc:
+        raise MCPError(
+            "unauthorized", "OAuth client assertion is invalid", rpc_code=-32001
+        ) from exc
+    if claims.get("sub") != client_id:
+        raise MCPError("unauthorized", "OAuth client assertion subject mismatch", rpc_code=-32001)
+
+
+def _validate_token_client(args: dict[str, str], settings: Settings) -> str:
+    assertion = str(args.get("client_assertion") or "")
+    client_id = str(args.get("client_id") or "")
+    if assertion:
+        asserted_client_id = _unverified_client_assertion_issuer(assertion)
+        if client_id and client_id != asserted_client_id:
+            raise MCPError("unauthorized", "OAuth client identity mismatch", rpc_code=-32001)
+        client_id = asserted_client_id
+    if not client_id:
+        raise MCPError("unauthorized", "OAuth client identity missing", rpc_code=-32001)
+
+    redirect_uri = (
+        str(args.get("redirect_uri") or "")
+        if args.get("grant_type") == "authorization_code"
+        else None
+    )
+    metadata = _validate_chatgpt_client(client_id, redirect_uri)
+    auth_method = str(metadata.get("token_endpoint_auth_method") or "none")
+    if auth_method == "private_key_jwt":
+        if args.get("client_assertion_type") != CLIENT_ASSERTION_TYPE or not assertion:
+            raise MCPError("unauthorized", "OAuth private_key_jwt required", rpc_code=-32001)
+        _validate_private_key_jwt(
+            assertion,
+            client_id=client_id,
+            metadata=metadata,
+            settings=settings,
+        )
+    elif auth_method == "none":
+        if assertion:
+            raise MCPError("unauthorized", "OAuth client authentication mismatch", rpc_code=-32001)
+    else:
+        raise MCPError("unauthorized", "Unsupported OAuth client authentication", rpc_code=-32001)
+    return client_id
 
 
 def _store_oauth_transaction(
@@ -1233,7 +1346,7 @@ def _oauth_authorize(event: dict[str, Any], settings: Settings) -> dict[str, Any
         "code_challenge_method",
         "resource",
     }
-    if required - args.keys():
+    if required - args.keys() or any(not args.get(name) for name in required):
         return _response(400, {"error": "invalid_request", "message": "Missing OAuth parameter"})
     try:
         _validate_chatgpt_client(args["client_id"], args["redirect_uri"])
@@ -1241,7 +1354,11 @@ def _oauth_authorize(event: dict[str, Any], settings: Settings) -> dict[str, Any
         status = 503 if exc.code == "unavailable" else 400
         error = "temporarily_unavailable" if status == 503 else "invalid_client"
         return _response(status, {"error": error, "message": exc.message})
-    if args["response_type"] != "code" or args["code_challenge_method"] != "S256":
+    if (
+        args["response_type"] != "code"
+        or args["code_challenge_method"] != "S256"
+        or not PKCE_VALUE.fullmatch(args["code_challenge"])
+    ):
         return _oauth_error_redirect(
             settings,
             args["redirect_uri"],
@@ -1326,13 +1443,17 @@ def _oauth_token(event: dict[str, Any], settings: Settings) -> dict[str, Any]:
     grant_type = args.get("grant_type")
     if grant_type not in {"authorization_code", "refresh_token"}:
         return _response(400, {"error": "unsupported_grant_type"})
+    logger.info(
+        "mcp_oauth_token_request grant_type=%s client_id_present=%s "
+        "client_assertion_present=%s redirect_uri_present=%s resource_match=%s",
+        grant_type,
+        bool(args.get("client_id")),
+        bool(args.get("client_assertion")),
+        bool(args.get("redirect_uri")),
+        args.get("resource") == settings.mcp_resource_url,
+    )
     try:
-        redirect_uri = (
-            str(args.get("redirect_uri") or "")
-            if grant_type == "authorization_code"
-            else None
-        )
-        _validate_chatgpt_client(str(args.get("client_id") or ""), redirect_uri)
+        _validate_token_client(args, settings)
     except MCPError as exc:
         status = 503 if exc.code == "unavailable" else 401
         error = "temporarily_unavailable" if status == 503 else "invalid_client"
@@ -1340,7 +1461,11 @@ def _oauth_token(event: dict[str, Any], settings: Settings) -> dict[str, Any]:
     if args.get("resource") != settings.mcp_resource_url:
         return _response(400, {"error": "invalid_target"})
     if grant_type == "authorization_code":
-        if not args.get("code") or not args.get("code_verifier"):
+        if (
+            not args.get("code")
+            or not args.get("code_verifier")
+            or not PKCE_VALUE.fullmatch(str(args["code_verifier"]))
+        ):
             return _response(400, {"error": "invalid_request"})
     if not settings.mcp_user_client_id or not settings.mcp_oauth_callback_url:
         raise MCPError("unavailable", "OAuth facade is not configured", rpc_code=-32003)

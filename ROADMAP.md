@@ -24,6 +24,10 @@ The MVP succeeds by being trustworthy and actionable, not by maximizing raw sign
 - `MCP_USAGE.md` documents connection, tools and the explicit read-only boundary.
 
 Current gate:
+- ChatGPT web OAuth compatibility now covers its stable CIMD client's `private_key_jwt` token-endpoint
+  authentication, while retaining Codex's `none` authentication and RFC 8252 loopback callback.
+  Web assertions are RS256-verified against ChatGPT's published JWKS with exact issuer, subject and
+  SignalHub token-endpoint audience checks; the facade continues to bind the exact MCP resource.
 - MCP v1 is deployed at the production `/mcp` endpoint with RFC 9728 protected-resource discovery,
   an application-owned 401 Bearer challenge and an OAuth 2.1 authorization-code/PKCE facade. The
   canonical resource is the exact `/mcp` URL and RFC 8707 resource binding is preserved through
