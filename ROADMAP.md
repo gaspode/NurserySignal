@@ -36,7 +36,12 @@ Current gate:
 - The first live web callback confirmed signed client authentication reached `/oauth/token`; the
   remaining `401` exposed an over-strict assertion profile that treated optional RFC 7523 `iat`/`jti`
   claims as mandatory. The validator now requires the standard `iss`/`sub`/`aud`/`exp` set and emits
-  only redacted claim-shape diagnostics on rejection.
+  only redacted claim-shape diagnostics on rejection. Commit `3ae857f` passed 40 focused OAuth/MCP
+  tests and full CI run `36930809020`, then deployed successfully in run `36930942470`. Post-deploy
+  discovery returns the exact canonical resource and issuer, advertises S256 plus `none` and
+  `private_key_jwt`/RS256 client authentication, and the unauthenticated MCP endpoint returns the
+  required `401` resource-metadata challenge. The remaining gate is one fresh ChatGPT web reconnect
+  to exercise OpenAI's signed assertion end to end; no authentication boundary was weakened.
 - MCP v1 is deployed at the production `/mcp` endpoint with RFC 9728 protected-resource discovery,
   an application-owned 401 Bearer challenge and an OAuth 2.1 authorization-code/PKCE facade. The
   canonical resource is the exact `/mcp` URL and RFC 8707 resource binding is preserved through
