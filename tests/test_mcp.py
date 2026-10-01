@@ -696,6 +696,24 @@ def test_access_token_validation_accepts_bound_user_and_rejects_wrong_audience(m
     }
     token = mcp.jwt.encode(claims, private_key, algorithm="RS256", headers={"kid": "test"})
     assert REAL_DECODE_ACCESS_TOKEN(token, settings)["aud"] == "https://api.example/mcp"
+
+    # Cognito access tokens omit `aud` even when the facade receives and
+    # validates RFC 8707 `resource`. Only the dedicated MCP user client may
+    # use that compatibility path.
+    claims.pop("aud")
+    cognito_user_token = mcp.jwt.encode(
+        claims, private_key, algorithm="RS256", headers={"kid": "test"}
+    )
+    assert REAL_DECODE_ACCESS_TOKEN(cognito_user_token, settings)["client_id"] == "user-client"
+
+    claims["client_id"] = "unrelated-client"
+    unrelated = mcp.jwt.encode(
+        claims, private_key, algorithm="RS256", headers={"kid": "test"}
+    )
+    with pytest.raises(mcp.MCPError, match="audience"):
+        REAL_DECODE_ACCESS_TOKEN(unrelated, settings)
+
+    claims["client_id"] = "user-client"
     claims["aud"] = "https://other.example/mcp"
     wrong = mcp.jwt.encode(claims, private_key, algorithm="RS256", headers={"kid": "test"})
     with pytest.raises(mcp.MCPError, match="audience"):

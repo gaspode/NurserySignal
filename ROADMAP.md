@@ -58,6 +58,12 @@ Current gate:
   standard error code and claim-name/match booleans; authorization codes, PKCE verifiers, assertions
   and tokens are never logged. Diagnostic commit `b1f5871` passed 40 focused tests and full CI run
   `36933966389`, then deployed successfully in run `36934090611`.
+- The resulting live trace isolated the final incompatibility: Cognito issued a correctly signed
+  admin access token with the dedicated MCP client ID, access-token type and `signalhub-mcp/read`
+  scope, but omitted `aud` despite receiving the RFC 8707 resource parameter. SignalHub now has a
+  narrow Cognito compatibility path for an absent audience only when the token belongs to that
+  dedicated MCP user client; exact issuer/signature/expiry, access-token type, MCP scope and admin
+  group remain mandatory, and any present wrong audience or any unrelated client remains rejected.
 - MCP v1 is deployed at the production `/mcp` endpoint with RFC 9728 protected-resource discovery,
   an application-owned 401 Bearer challenge and an OAuth 2.1 authorization-code/PKCE facade. The
   canonical resource is the exact `/mcp` URL and RFC 8707 resource binding is preserved through

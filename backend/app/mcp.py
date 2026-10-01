@@ -854,8 +854,24 @@ def _decode_access_token(token: str, settings: Settings) -> dict[str, Any]:
         is_service = bool(
             settings.mcp_service_client_id and client_id == settings.mcp_service_client_id
         )
-        if not is_service and audience != settings.mcp_resource_url:
-            raise MCPError("unauthorized", "MCP token audience is invalid", rpc_code=-32001)
+        is_user_client = bool(
+            settings.mcp_user_client_id and client_id == settings.mcp_user_client_id
+        )
+        if not is_service:
+            if audience is None:
+                # Cognito does not currently project RFC 8707 `resource` into
+                # access-token `aud`. The facade accepts only the exact MCP
+                # resource on both authorization and token requests, and this
+                # dedicated app client is additionally constrained by the MCP
+                # scope and administrator group in `_authenticate`.
+                if not is_user_client:
+                    raise MCPError(
+                        "unauthorized", "MCP token audience is invalid", rpc_code=-32001
+                    )
+            elif audience != settings.mcp_resource_url:
+                raise MCPError(
+                    "unauthorized", "MCP token audience is invalid", rpc_code=-32001
+                )
         issuer = settings.mcp_token_issuer.rstrip("/")
         if settings.mcp_token_jwks:
             try:
@@ -872,13 +888,20 @@ def _decode_access_token(token: str, settings: Settings) -> dict[str, Any]:
                 issuer, PyJWKClient(f"{issuer}/.well-known/jwks.json", cache_keys=True)
             )
             key = jwks.get_signing_key_from_jwt(token).key
-        options = {"require": ["exp", "iat", "iss"], "verify_aud": not is_service}
+        options = {
+            "require": ["exp", "iat", "iss"],
+            "verify_aud": not is_service and audience is not None,
+        }
         return jwt.decode(
             token,
             key,
             algorithms=["RS256"],
             issuer=issuer,
-            audience=settings.mcp_resource_url if not is_service else None,
+            audience=(
+                settings.mcp_resource_url
+                if not is_service and audience is not None
+                else None
+            ),
             options=options,
         )
     except MCPError:
