@@ -4,7 +4,7 @@ resource "aws_cloudwatch_event_rule" "care_lifecycle_refresh" {
   name                = "${local.name_prefix}-care-lifecycle-refresh"
   description         = "Bounded CareProspect Planning lifecycle refresh coordinator"
   schedule_expression = "rate(6 hours)"
-  state               = "DISABLED"
+  state               = "ENABLED"
   tags                = local.common_tags
 }
 
