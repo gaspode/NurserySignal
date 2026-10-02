@@ -1760,5 +1760,9 @@ Paid-pilot activation check (2026-09-28):
   Needs Attention is now four, comprising only the pending signal decisions. A live wording defect
   found in the Ampthill record is fixed so “Certificate of Existing
   Lawful Development” deterministically maps to `LAWFULNESS_EXISTING` / support-only rather than a
-  new opening. Deployment, bounded v2 preview/apply, production counts and queue health remain the
-  current completion gate; no publication, withdrawal, watcher or collector policy is changed.
+  new opening. The watch-aware Operations projection now reports the same four actionable records as
+  Needs Attention. Runtime commits `38b7a4d`, `ed50eb8` and `c407503` passed CI runs
+  `37002671904`, `37003519168` and `37004361415`, with deployments `37002792266`, `37003619018`
+  and `37004482019`. Production queues are empty apart from the six known collector-DLQ baseline
+  messages. No publication, withdrawal, watcher or collector policy changed; the next work is the
+  four explicit pending-signal reviews and separate investigation of the existing watcher 404s.
