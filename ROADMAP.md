@@ -1836,3 +1836,16 @@ Paid-pilot activation check (2026-09-28):
   historical labels include errors or their semantics are not safely homogeneous. CI `37045221518` and
   `37045905259`, deployments `37045373570` and `37046044053`, passed. No provider, CareProspect,
   lifecycle/publication/watcher/matching changes occurred.
+- A subsequent read-only ranking of the remaining 295 Nursery Planning manual-only records deliberately
+  did **not** add another rule. The former high-confidence standalone existing-nursery extension cohort is
+  already covered by `nursery-planning-extension-v2`; its remaining pending examples are stable QA holdouts
+  or fail the rule's deliberate boundaries. Every larger unhandled semantic cluster has material historical
+  reviewer disagreement: procedural/follow-up wording (71 approved / 22 rejected), opening/conversion wording
+  (74 / 37), mixed/outline wording (38 / 6), school wording (58 / 13), lawfulness/certificate wording (17 / 10),
+  ancillary works (115 / 52), and new-build wording (43 / 6). A stricter dwelling-to-day-nursery conversion
+  probe was worse (5 approved / 6 rejected), so it was rejected as an automation candidate. Exact clean
+  subclusters left after those exclusions have fewer than ten comparable human decisions and/or only a handful
+  of live records; they do not meet the existing minimum validation gate. No policy, review status, opportunity,
+  provider, CareProspect, watcher, publication or queue state changed. The next safe increment requires more
+  reviewed examples or an independently verified, narrowly scoped semantic cohort rather than relaxing the
+  precision threshold.
