@@ -5,6 +5,7 @@ from app.config import Settings
 from app.repository import (
     apply_safe_approval_policy,
     auto_reject_refused_planning,
+    nursery_planning_arboriculture_backlog,
     nursery_routine_recruitment_backlog,
     pending_review_triage_ids,
 )
@@ -13,6 +14,7 @@ from app.review_triage import (
     deterministic_review_recommendation,
     explicit_nursery_loss_candidate,
     normalize_planning_decision,
+    nursery_arboriculture_disagreement_candidate,
     planning_refusal_assessment,
     review_triage_bucket,
     routine_recruitment_candidate,
@@ -383,6 +385,112 @@ def test_explicit_nursery_loss_requires_primary_conversion_to_residential_use() 
         source_type="planning",
         review_status="PENDING",
         title="Change of use from day nursery (Class E) to dwellinghouse (Class C3).",
+    )
+
+
+def test_nursery_arboriculture_disagreement_requires_standalone_tree_work() -> None:
+    facts = {
+        "planning_candidate_matched": True,
+        "opportunity_creation_decision": "CREATE_OPPORTUNITY",
+    }
+    assert nursery_arboriculture_disagreement_candidate(
+        vertical="NURSERY",
+        source_type="planning",
+        review_status="PENDING",
+        title="T1 Oak - fell and replace with a nursery grown tree stock.",
+        extracted_facts=facts,
+        ai_status="SUCCEEDED",
+        ai_recommendation="REJECT",
+        ai_confidence=0.8,
+    )
+
+
+def test_nursery_arboriculture_backlog_is_audited_and_idempotent(monkeypatch) -> None:
+    signal_id = str(uuid4())
+    facts = {
+        "planning_candidate_matched": True,
+        "opportunity_creation_decision": "CREATE_OPPORTUNITY",
+    }
+    pending = {
+        "id": signal_id,
+        "title": "T1 Oak - fell and replace with a nursery grown tree stock.",
+        "vertical": "NURSERY",
+        "source_type": "planning",
+        "review_status": "PENDING",
+        "extracted_facts": facts,
+        "ai_status": "SUCCEEDED",
+        "ai_recommendation": "REJECT",
+        "ai_confidence": 0.8,
+        "reviewed_by": None,
+    }
+
+    class FakeConnection:
+        is_pending = True
+        audit_count = 0
+
+        def execute(self, sql, params=None):
+            if "SET review_status = 'REJECTED'" in sql and self.is_pending:
+                self.is_pending = False
+                self.result = [(signal_id,)]
+            elif "INSERT INTO admin_audit_events" in sql:
+                self.audit_count += 1
+                self.result = []
+            else:
+                self.result = []
+            return self
+
+        def fetchone(self):
+            return self.result[0] if self.result else None
+
+        def commit(self):
+            return None
+
+    fake = FakeConnection()
+
+    @contextmanager
+    def fake_connection(settings):
+        yield fake
+
+    historical = [
+        {**pending, "id": str(uuid4()), "review_status": "REJECTED", "reviewed_by": "admin"}
+        for _ in range(8)
+    ]
+
+    def rows(_conn, status, _vertical):
+        if status == "PENDING":
+            return [pending] if fake.is_pending else []
+        return historical if status == "REJECTED" else []
+
+    monkeypatch.setattr("app.repository.connection", fake_connection)
+    monkeypatch.setattr("app.repository._review_triage_rows", rows)
+
+    applied = nursery_planning_arboriculture_backlog(Settings(), actor="admin", preview=False)
+    assert applied["execution_allowed"] is True
+    assert applied["auto_rejected"] == 1
+    assert applied["errors"] == 0
+    assert fake.audit_count == 1
+    repeat = nursery_planning_arboriculture_backlog(Settings(), actor="admin", preview=False)
+    assert repeat["updated"] == 0
+    assert fake.audit_count == 1
+    assert not nursery_arboriculture_disagreement_candidate(
+        vertical="NURSERY",
+        source_type="planning",
+        review_status="PENDING",
+        title="Erection of a new nursery building with tree planting.",
+        extracted_facts=facts,
+        ai_status="SUCCEEDED",
+        ai_recommendation="REJECT",
+        ai_confidence=0.9,
+    )
+    assert not nursery_arboriculture_disagreement_candidate(
+        vertical="NURSERY",
+        source_type="planning",
+        review_status="PENDING",
+        title="T1 Oak - fell and replace with a nursery grown tree stock.",
+        extracted_facts=facts,
+        ai_status="SUCCEEDED",
+        ai_recommendation="REJECT",
+        ai_confidence=0.7,
     )
     assert not explicit_nursery_loss_candidate(
         vertical="NURSERY",

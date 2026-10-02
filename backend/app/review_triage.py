@@ -20,6 +20,8 @@ ROUTINE_RECRUITMENT_POLICY_VERSION = "nursery-routine-recruitment-v1"
 ROUTINE_RECRUITMENT_QA_MODULUS = 10
 NURSERY_PLANNING_LOSS_POLICY_VERSION = "nursery-planning-loss-v2"
 NURSERY_PLANNING_LOSS_QA_MODULUS = 10
+NURSERY_PLANNING_ARBORICULTURE_POLICY_VERSION = "nursery-planning-arboriculture-v1"
+NURSERY_PLANNING_ARBORICULTURE_QA_MODULUS = 10
 
 _EXPLICIT_NURSERY_LOSS_RE = re.compile(
     # The source use must itself be the nursery. In particular, do not let a
@@ -35,6 +37,18 @@ _EXPLICIT_NURSERY_LOSS_RE = re.compile(
 
 _NURSERY_LOSS_FOLLOW_UP_RE = re.compile(
     r"\b(?:condition|variation|pursuant|details|non[- ]material|amendment)\b", re.IGNORECASE
+)
+
+_NURSERY_ARBORICULTURE_RE = re.compile(
+    r"\b(?:tree(?:s)?|arboricultural|arborist|tree\s+surgeon|"
+    r"crown\s+(?:lift|reduce)|pollard|fell|prun(?:e|ing)|canopy)\b",
+    re.IGNORECASE,
+)
+_NURSERY_ARBORICULTURE_EXCLUSION_RE = re.compile(
+    r"\b(?:condition|variation|pursuant|details|non[- ]material|amendment|"
+    r"change\s+of\s+use|conversion|demolition|erection|extension|"
+    r"new\s+(?:nursery|building))\b",
+    re.IGNORECASE,
 )
 TRIAGE_BUCKETS = frozenset(
     {
@@ -312,3 +326,68 @@ def explicit_nursery_loss_policy_outcome(
     ):
         return "INELIGIBLE"
     return "QA_HOLDOUT" if explicit_nursery_loss_qa_holdout(signal_id) else "AUTO_REJECT"
+
+
+def nursery_arboriculture_disagreement_candidate(
+    *,
+    vertical: str,
+    source_type: str,
+    review_status: str,
+    title: str | None,
+    extracted_facts: Any,
+    ai_status: str | None,
+    ai_recommendation: str | None,
+    ai_confidence: float | None,
+) -> bool:
+    """Recognise pure arboricultural works misclassified by nursery wording.
+
+    This intentionally leaves proposals which could alter nursery capacity or
+    use (including extensions, construction and procedural applications) with
+    human review. The AI disagreement is a corroborating guard, not the
+    source of the semantic decision.
+    """
+    text = str(title or "")
+    return (
+        vertical == "NURSERY"
+        and source_type == "planning"
+        and review_status == "PENDING"
+        and deterministic_review_recommendation(extracted_facts) == "APPROVE"
+        and ai_status == "SUCCEEDED"
+        and ai_recommendation == "REJECT"
+        and ai_confidence is not None
+        and float(ai_confidence) >= 0.8
+        and bool(_NURSERY_ARBORICULTURE_RE.search(text[:180]))
+        and not _NURSERY_ARBORICULTURE_EXCLUSION_RE.search(text)
+    )
+
+
+def nursery_arboriculture_disagreement_qa_holdout(signal_id: str) -> bool:
+    return UUID(str(signal_id)).int % NURSERY_PLANNING_ARBORICULTURE_QA_MODULUS == 0
+
+
+def nursery_arboriculture_disagreement_policy_outcome(
+    *,
+    signal_id: str,
+    vertical: str,
+    source_type: str,
+    review_status: str,
+    title: str | None,
+    extracted_facts: Any,
+    ai_status: str | None,
+    ai_recommendation: str | None,
+    ai_confidence: float | None,
+) -> str:
+    if not nursery_arboriculture_disagreement_candidate(
+        vertical=vertical,
+        source_type=source_type,
+        review_status=review_status,
+        title=title,
+        extracted_facts=extracted_facts,
+        ai_status=ai_status,
+        ai_recommendation=ai_recommendation,
+        ai_confidence=ai_confidence,
+    ):
+        return "INELIGIBLE"
+    return (
+        "QA_HOLDOUT" if nursery_arboriculture_disagreement_qa_holdout(signal_id) else "AUTO_REJECT"
+    )

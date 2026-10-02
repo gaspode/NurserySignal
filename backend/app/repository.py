@@ -137,6 +137,8 @@ from app.planning_outcomes import (
 from app.queueing import EnrichmentMessage, send_enrichment_message
 from app.recruitment import recruitment_record_from_signal
 from app.review_triage import (
+    NURSERY_PLANNING_ARBORICULTURE_POLICY_VERSION,
+    NURSERY_PLANNING_ARBORICULTURE_QA_MODULUS,
     NURSERY_PLANNING_LOSS_POLICY_VERSION,
     NURSERY_PLANNING_LOSS_QA_MODULUS,
     REFUSAL_POLICY_VERSION,
@@ -146,6 +148,7 @@ from app.review_triage import (
     SAFE_APPROVAL_VERTICALS,
     deterministic_review_recommendation,
     explicit_nursery_loss_policy_outcome,
+    nursery_arboriculture_disagreement_policy_outcome,
     planning_refusal_assessment,
     review_triage_bucket,
     routine_recruitment_policy_outcome,
@@ -4358,6 +4361,155 @@ def nursery_planning_loss_backlog(
                         ),
                     ).fetchone()
                     action = "NURSERY_PLANNING_LOSS_AUTO_REJECT"
+                if row:
+                    conn.execute(
+                        """
+                        INSERT INTO admin_audit_events
+                            (action, actor, target_type, target_count, details, vertical)
+                        VALUES (%s, %s, 'signal', 1, %s, 'NURSERY')
+                        """,
+                        (action, actor, Jsonb({"signal_id": signal_id, **marker})),
+                    )
+                    conn.commit()
+                    updated += 1
+                    rejected += int(decision == "AUTO_REJECT")
+                    holdout_writes += int(decision == "QA_HOLDOUT")
+        except Exception:
+            errors += 1
+    return {
+        **result,
+        "preview": False,
+        "updated": updated,
+        "auto_rejected": rejected,
+        "qa_holdouts_recorded": holdout_writes,
+        "errors": errors,
+        "actor": actor,
+    }
+
+
+def nursery_planning_arboriculture_backlog(
+    settings: Settings, *, actor: str, preview: bool, limit: int = 100
+) -> dict[str, Any]:
+    """Preview/apply the narrow tree-work disagreement policy only."""
+    bounded_limit = min(max(int(limit), 1), 100)
+    with connection(settings) as conn:
+        pending = _review_triage_rows(conn, "PENDING", "NURSERY")
+        reviewed = _review_triage_rows(conn, "APPROVED", "NURSERY") + _review_triage_rows(
+            conn, "REJECTED", "NURSERY"
+        )
+
+    def outcome(item: dict[str, Any], status: str | None = None) -> str:
+        return nursery_arboriculture_disagreement_policy_outcome(
+            signal_id=str(item["id"]),
+            vertical=str(item["vertical"]),
+            source_type=str(item["source_type"]),
+            review_status=status or str(item["review_status"]),
+            title=item.get("title"),
+            extracted_facts=item.get("extracted_facts"),
+            ai_status=item.get("ai_status"),
+            ai_recommendation=item.get("ai_recommendation"),
+            ai_confidence=(float(item["ai_confidence"]) if item.get("ai_confidence") else None),
+        )
+
+    eligible = [item for item in pending if outcome(item) != "INELIGIBLE"]
+    historical = [
+        item
+        for item in reviewed
+        if not str(item.get("reviewed_by") or "").startswith("system:")
+        and outcome(item, "PENDING") != "INELIGIBLE"
+    ]
+    historical_approved = sum(item["review_status"] == "APPROVED" for item in historical)
+    # Eight exact human examples plus a structural tree-work exclusion is a
+    # deliberately small, auditable initial cohort; the QA holdout remains.
+    execution_allowed = len(historical) >= 8 and historical_approved == 0
+    batch = eligible[:bounded_limit]
+    auto = [item for item in batch if outcome(item) == "AUTO_REJECT"]
+    holdouts = [item for item in batch if outcome(item) == "QA_HOLDOUT"]
+    result = {
+        "preview": bool(preview),
+        "policy_version": NURSERY_PLANNING_ARBORICULTURE_POLICY_VERSION,
+        "vertical": "NURSERY",
+        "source_type": "planning",
+        "pending_planning_total": sum(item["source_type"] == "planning" for item in pending),
+        "eligible_total": len(eligible),
+        "batch_count": len(batch),
+        "would_auto_reject": len(auto),
+        "qa_holdouts": len(holdouts),
+        "limit": bounded_limit,
+        "historical_validation": {
+            "human_reviewed": len(historical),
+            "approved": historical_approved,
+            "rejected": len(historical) - historical_approved,
+            "precision": (len(historical) - historical_approved) / len(historical)
+            if historical
+            else None,
+        },
+        "execution_allowed": execution_allowed,
+        "samples": [
+            {
+                "signal_id": str(item["id"]),
+                "title": item.get("title"),
+                "ai_recommendation": item.get("ai_recommendation"),
+                "ai_confidence": item.get("ai_confidence"),
+                "outcome": outcome(item),
+            }
+            for item in batch[:10]
+        ],
+    }
+    if preview or not execution_allowed:
+        return result
+
+    updated = rejected = holdout_writes = errors = 0
+    for item in batch:
+        signal_id = str(item["id"])
+        decision = outcome(item)
+        marker = {
+            "policy_version": NURSERY_PLANNING_ARBORICULTURE_POLICY_VERSION,
+            "outcome": decision,
+            "qa_bucket": UUID(signal_id).int % NURSERY_PLANNING_ARBORICULTURE_QA_MODULUS,
+            "reason": "Primary evidence is standalone arboricultural work, not childcare change.",
+            "deterministic_recommendation": deterministic_review_recommendation(
+                item.get("extracted_facts")
+            ),
+            "ai_recommendation": item.get("ai_recommendation"),
+            "ai_confidence": item.get("ai_confidence"),
+            "trigger": "admin_backlog",
+        }
+        try:
+            with connection(settings) as conn:
+                if decision == "QA_HOLDOUT":
+                    row = conn.execute(
+                        """
+                        UPDATE signal_enrichments
+                        SET extracted_facts = extracted_facts || %s, updated_at = now()
+                        WHERE raw_signal_id = %s AND review_status = 'PENDING'
+                          AND COALESCE(extracted_facts->'nursery_planning_arboriculture_review'
+                              ->>'policy_version', '') <> %s
+                        RETURNING raw_signal_id
+                        """,
+                        (
+                            Jsonb({"nursery_planning_arboriculture_review": marker}),
+                            signal_id,
+                            NURSERY_PLANNING_ARBORICULTURE_POLICY_VERSION,
+                        ),
+                    ).fetchone()
+                    action = "NURSERY_PLANNING_ARBORICULTURE_QA_HOLDOUT"
+                else:
+                    row = conn.execute(
+                        """
+                        UPDATE signal_enrichments
+                        SET review_status = 'REJECTED', reviewed_by = %s, reviewed_at = now(),
+                            extracted_facts = extracted_facts || %s, updated_at = now()
+                        WHERE raw_signal_id = %s AND review_status = 'PENDING'
+                        RETURNING raw_signal_id
+                        """,
+                        (
+                            f"system:{NURSERY_PLANNING_ARBORICULTURE_POLICY_VERSION}",
+                            Jsonb({"nursery_planning_arboriculture_review": marker}),
+                            signal_id,
+                        ),
+                    ).fetchone()
+                    action = "NURSERY_PLANNING_ARBORICULTURE_AUTO_REJECT"
                 if row:
                     conn.execute(
                         """

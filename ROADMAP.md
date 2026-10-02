@@ -1804,3 +1804,10 @@ Paid-pilot activation check (2026-09-28):
   opportunity/lifecycle/publication/watcher/matching changes or queue work occurred. CI `37038266490` and
   `37039077768`, and deployments `37038396695` and `37039218436`, passed. Active ingestion, enrichment and
   planning queues/DLQs are empty; the collector-manual DLQ retains its known six baseline messages.
+- Nursery Planning disagreement analysis found 86 current deterministic-APPROVE/AI-REJECT records. Broad
+  disagreement cohorts remain unsafe or under-specified: conversion/change-use history includes human approvals,
+  procedural follow-ups include a human approval, and lawfulness/school/expansion cohorts are too small or
+  semantically mixed. The only proposed follow-up is `nursery-planning-arboriculture-v1`: standalone tree-work
+  wording with no construction, conversion, extension, demolition or procedural wording. It has eight exact
+  human precedents (8 rejected / 0 approved), uses a stable ten-percent QA holdout, and is deployment/production
+  preview pending. CareProspect remains out of scope.
