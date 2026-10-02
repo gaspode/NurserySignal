@@ -4472,7 +4472,11 @@ def nursery_planning_arboriculture_backlog(
                 item.get("extracted_facts")
             ),
             "ai_recommendation": item.get("ai_recommendation"),
-            "ai_confidence": item.get("ai_confidence"),
+            # psycopg returns NUMERIC confidence as Decimal; audit JSON must
+            # remain JSON-serialisable rather than failing the whole batch.
+            "ai_confidence": (
+                float(item["ai_confidence"]) if item.get("ai_confidence") is not None else None
+            ),
             "trigger": "admin_backlog",
         }
         try:

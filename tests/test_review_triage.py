@@ -1,5 +1,6 @@
 from contextlib import contextmanager
-from uuid import uuid4
+from decimal import Decimal
+from uuid import UUID, uuid4
 
 from app.config import Settings
 from app.repository import (
@@ -407,6 +408,8 @@ def test_nursery_arboriculture_disagreement_requires_standalone_tree_work() -> N
 
 def test_nursery_arboriculture_backlog_is_audited_and_idempotent(monkeypatch) -> None:
     signal_id = str(uuid4())
+    while UUID(signal_id).int % 10 == 0:
+        signal_id = str(uuid4())
     facts = {
         "planning_candidate_matched": True,
         "opportunity_creation_decision": "CREATE_OPPORTUNITY",
@@ -420,7 +423,7 @@ def test_nursery_arboriculture_backlog_is_audited_and_idempotent(monkeypatch) ->
         "extracted_facts": facts,
         "ai_status": "SUCCEEDED",
         "ai_recommendation": "REJECT",
-        "ai_confidence": 0.8,
+        "ai_confidence": Decimal("0.8"),
         "reviewed_by": None,
     }
 
