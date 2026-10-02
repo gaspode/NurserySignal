@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import logging
 import re
@@ -17,6 +18,7 @@ from uuid import UUID
 
 import boto3
 import jwt
+from botocore.exceptions import BotoCoreError, ClientError
 from jwt import PyJWK, PyJWKClient, PyJWKClientError, PyJWTError
 from psycopg.types.json import Jsonb
 
@@ -929,7 +931,10 @@ def _authenticate(event: dict[str, Any], settings: Settings) -> dict[str, Any]:
     is_admin_user = bool(
         settings.mcp_user_client_id
         and client_id == settings.mcp_user_client_id
-        and settings.admin_group in groups
+        and (
+            settings.admin_group in groups
+            or _has_oauth_admin_grant(token.strip(), claims, settings)
+        )
     )
     if not (is_service or is_admin_user):
         raise MCPError("unauthorized", "MCP admin/service authorization required", rpc_code=-32001)
@@ -945,6 +950,95 @@ def _claim_groups(claims: dict[str, Any]) -> set[str]:
     if isinstance(values, str):
         return {value.strip() for value in values.strip("[]").split(",") if value.strip()}
     return {str(value) for value in values}
+
+
+def _oauth_grant_key(token: str) -> str:
+    return f"token#{hashlib.sha256(token.encode()).hexdigest()}"
+
+
+def _store_oauth_admin_grant(
+    token: str, claims: dict[str, Any], settings: Settings
+) -> None:
+    if not settings.mcp_oauth_transactions_table_name:
+        raise MCPError("unavailable", "OAuth grant store is not configured", rpc_code=-32003)
+    expires_at = min(int(claims.get("exp") or 0), int(time.time()) + 3_600)
+    if expires_at <= int(time.time()):
+        raise MCPError("unauthorized", "OAuth access token is expired", rpc_code=-32001)
+    boto3.client("dynamodb").put_item(
+        TableName=settings.mcp_oauth_transactions_table_name,
+        Item={
+            "state": {"S": _oauth_grant_key(token)},
+            "record_type": {"S": "mcp_admin_token_grant"},
+            "subject": {"S": str(claims.get("sub") or "")},
+            "client_id": {"S": str(claims.get("client_id") or "")},
+            "resource": {"S": str(settings.mcp_resource_url or "")},
+            "scope": {"S": READ_SCOPE},
+            "admin_group": {"S": settings.admin_group},
+            "expires_at": {"N": str(expires_at)},
+        },
+    )
+
+
+def _has_oauth_admin_grant(
+    token: str, claims: dict[str, Any], settings: Settings
+) -> bool:
+    if not settings.mcp_oauth_transactions_table_name:
+        return False
+    try:
+        response = boto3.client("dynamodb").get_item(
+            TableName=settings.mcp_oauth_transactions_table_name,
+            Key={"state": {"S": _oauth_grant_key(token)}},
+            ConsistentRead=True,
+        )
+    except (BotoCoreError, ClientError):
+        logger.exception("mcp_oauth_admin_grant_lookup_failed")
+        return False
+    item = response.get("Item") or {}
+    return bool(
+        item.get("record_type", {}).get("S") == "mcp_admin_token_grant"
+        and int(item.get("expires_at", {}).get("N", "0")) >= int(time.time())
+        and item.get("subject", {}).get("S") == str(claims.get("sub") or "")
+        and item.get("client_id", {}).get("S") == str(claims.get("client_id") or "")
+        and item.get("resource", {}).get("S") == settings.mcp_resource_url
+        and item.get("scope", {}).get("S") == READ_SCOPE
+        and item.get("admin_group", {}).get("S") == settings.admin_group
+    )
+
+
+def _authoritative_user_groups(
+    claims: dict[str, Any], settings: Settings
+) -> set[str]:
+    if not settings.cognito_user_pool_id:
+        raise MCPError("unavailable", "Cognito user pool is not configured", rpc_code=-32003)
+    username = str(claims.get("username") or claims.get("sub") or "")
+    if not username:
+        raise MCPError("unauthorized", "OAuth user identity is missing", rpc_code=-32001)
+    groups: set[str] = set()
+    next_token: str | None = None
+    try:
+        for _ in range(10):
+            request: dict[str, Any] = {
+                "UserPoolId": settings.cognito_user_pool_id,
+                "Username": username,
+                "Limit": 60,
+            }
+            if next_token:
+                request["NextToken"] = next_token
+            response = boto3.client("cognito-idp").admin_list_groups_for_user(**request)
+            groups.update(
+                str(group.get("GroupName"))
+                for group in response.get("Groups", [])
+                if group.get("GroupName")
+            )
+            next_token = response.get("NextToken")
+            if not next_token:
+                break
+    except (BotoCoreError, ClientError) as exc:
+        logger.exception("mcp_oauth_admin_group_lookup_failed")
+        raise MCPError(
+            "unavailable", "OAuth administrator authorization unavailable", rpc_code=-32003
+        ) from exc
+    return groups
 
 
 def protected_resource_metadata(settings: Settings) -> dict[str, Any]:
@@ -1466,17 +1560,16 @@ def _oauth_authorize(event: dict[str, Any], settings: Settings) -> dict[str, Any
         "response_type": "code",
         "client_id": settings.mcp_user_client_id,
         "redirect_uri": settings.mcp_oauth_callback_url,
-        "scope": READ_SCOPE,
+        "scope": f"openid email {READ_SCOPE}",
         "state": transaction_state,
         "code_challenge": args["code_challenge"],
         "code_challenge_method": "S256",
         "resource": settings.mcp_resource_url,
+        # MCP is admin-only. Do not silently reuse another Cognito session.
+        "prompt": "login",
     }
     provider = settings.mcp_oauth_authorization_server.rstrip("/")
-    # This pool uses Cognito's classic hosted UI, where `prompt=login` has no
-    # effect. Starting at `/logout` clears any customer-portal session and
-    # forwards the complete PKCE/resource-bound request to a fresh login.
-    return _redirect(f"{provider}/logout?{urllib.parse.urlencode(provider_args)}")
+    return _redirect(f"{provider}/oauth2/authorize?{urllib.parse.urlencode(provider_args)}")
 
 
 def _oauth_callback(event: dict[str, Any], settings: Settings) -> dict[str, Any]:
@@ -1633,9 +1726,16 @@ def _oauth_token(event: dict[str, Any], settings: Settings) -> dict[str, Any]:
     if claims.get("client_id") != settings.mcp_user_client_id:
         logger.warning("mcp_oauth_provider_access_token_client_mismatch")
         raise MCPError("unauthorized", "OAuth token client is invalid", rpc_code=-32001)
-    if settings.admin_group not in _claim_groups(claims):
+    provider_groups = _authoritative_user_groups(claims, settings)
+    if settings.admin_group not in provider_groups:
         logger.warning("mcp_oauth_provider_access_token_admin_group_missing")
         return _response(403, {"error": "access_denied", "message": "Admin access required"})
+    _store_oauth_admin_grant(access_token, claims, settings)
+    # The upstream OIDC scopes are an implementation detail of the Cognito
+    # login. Expose only the scope that the MCP client requested and avoid
+    # returning the provider ID token to the client.
+    payload.pop("id_token", None)
+    payload["scope"] = READ_SCOPE
     return _response(200, payload)
 
 

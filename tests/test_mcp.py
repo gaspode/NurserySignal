@@ -34,6 +34,7 @@ def auth(monkeypatch):
     monkeypatch.setenv("MCP_TOKEN_ISSUER", "https://tokens.example")
     monkeypatch.setenv("MCP_OAUTH_CALLBACK_URL", "https://api.example/oauth/callback")
     monkeypatch.setenv("MCP_OAUTH_TRANSACTIONS_TABLE_NAME", "oauth-transactions")
+    monkeypatch.setenv("COGNITO_USER_POOL_ID", "eu-west-1_test")
     monkeypatch.setattr(
         mcp,
         "_decode_access_token",
@@ -80,6 +81,7 @@ def test_admin_user_requires_admin_group(monkeypatch):
         "cognito:groups": "NurserySignalAdmins",
     }
     monkeypatch.setattr(mcp, "_decode_access_token", lambda token, settings: claims)
+    monkeypatch.setattr(mcp, "_has_oauth_admin_grant", lambda *args: False)
     assert mcp._authenticate(request, mcp.Settings.from_env())["auth_kind"] == "admin_user"
     claims["cognito:groups"] = "CareSignalCustomers"
     with pytest.raises(mcp.MCPError, match="admin/service"):
@@ -342,11 +344,13 @@ def test_cimd_authorization_preserves_pkce_scope_and_resource(monkeypatch):
     assert response["statusCode"] == 302
     provider = urlparse(response["headers"]["location"])
     query = parse_qs(provider.query)
-    assert provider.path == "/logout"
+    assert provider.path == "/oauth2/authorize"
     assert query["client_id"] == ["user-client"]
     assert query["redirect_uri"] == ["https://api.example/oauth/callback"]
     assert query["resource"] == ["https://api.example/mcp"]
+    assert set(query["scope"][0].split()) == {"openid", "email", mcp.READ_SCOPE}
     assert query["code_challenge_method"] == ["S256"]
+    assert query["prompt"] == ["login"]
     assert stored["original_state"] == "chatgpt-state"
 
 
@@ -497,13 +501,25 @@ def test_oauth_token_proxy_preserves_resource_and_validates_admin_token(monkeypa
     monkeypatch.setattr(mcp.urllib.request, "urlopen", fake_urlopen)
     monkeypatch.setattr(
         mcp,
+        "_authoritative_user_groups",
+        lambda claims, settings: {"NurserySignalAdmins"},
+    )
+    stored_grants = []
+    monkeypatch.setattr(
+        mcp,
+        "_store_oauth_admin_grant",
+        lambda token, claims, settings: stored_grants.append(token),
+    )
+    monkeypatch.setattr(
+        mcp,
         "_decode_access_token",
         lambda token, settings: {
             "client_id": "user-client",
             "scope": mcp.READ_SCOPE,
             "token_use": "access",
             "aud": "https://api.example/mcp",
-            "cognito:groups": ["NurserySignalAdmins"],
+            "username": "admin-user",
+            "exp": int((datetime.now(UTC) + timedelta(minutes=5)).timestamp()),
         },
     )
     request = event(method="POST", path="/oauth/token", authorized=False)
@@ -523,6 +539,162 @@ def test_oauth_token_proxy_preserves_resource_and_validates_admin_token(monkeypa
     assert captured["client_id"] == ["user-client"]
     assert captured["redirect_uri"] == ["https://api.example/oauth/callback"]
     assert captured["resource"] == ["https://api.example/mcp"]
+    assert stored_grants == ["bound-token"]
+    assert json.loads(response["body"])["scope"] == mcp.READ_SCOPE
+
+
+def test_missing_group_claim_uses_exact_resource_bound_admin_grant(monkeypatch):
+    claims = {
+        "client_id": "user-client",
+        "sub": "admin-user",
+        "scope": mcp.READ_SCOPE,
+        "token_use": "access",
+    }
+    monkeypatch.setattr(mcp, "_decode_access_token", lambda token, settings: claims)
+
+    class DynamoDB:
+        @staticmethod
+        def get_item(**kwargs):
+            assert kwargs["Key"] == {"state": {"S": mcp._oauth_grant_key("test-token")}}
+            return {
+                "Item": {
+                    "record_type": {"S": "mcp_admin_token_grant"},
+                    "subject": {"S": "admin-user"},
+                    "client_id": {"S": "user-client"},
+                    "resource": {"S": "https://api.example/mcp"},
+                    "scope": {"S": mcp.READ_SCOPE},
+                    "admin_group": {"S": "NurserySignalAdmins"},
+                    "expires_at": {"N": str(int(datetime.now(UTC).timestamp()) + 300)},
+                }
+            }
+
+    monkeypatch.setattr(mcp.boto3, "client", lambda service: DynamoDB())
+    assert mcp._authenticate(event({}), mcp.Settings.from_env())["auth_kind"] == "admin_user"
+
+
+def test_oauth_admin_grant_rejects_wrong_subject_resource_and_expiry(monkeypatch):
+    claims = {"client_id": "user-client", "sub": "admin-user"}
+    settings = mcp.Settings.from_env()
+    item = {
+        "record_type": {"S": "mcp_admin_token_grant"},
+        "subject": {"S": "different-user"},
+        "client_id": {"S": "user-client"},
+        "resource": {"S": "https://api.example/mcp"},
+        "scope": {"S": mcp.READ_SCOPE},
+        "admin_group": {"S": "NurserySignalAdmins"},
+        "expires_at": {"N": str(int(datetime.now(UTC).timestamp()) + 300)},
+    }
+
+    class DynamoDB:
+        @staticmethod
+        def get_item(**kwargs):
+            return {"Item": item}
+
+    monkeypatch.setattr(mcp.boto3, "client", lambda service: DynamoDB())
+    assert not mcp._has_oauth_admin_grant("token", claims, settings)
+    item["subject"] = {"S": "admin-user"}
+    item["resource"] = {"S": "https://other.example/mcp"}
+    assert not mcp._has_oauth_admin_grant("token", claims, settings)
+    item["resource"] = {"S": "https://api.example/mcp"}
+    item["expires_at"] = {"N": "1"}
+    assert not mcp._has_oauth_admin_grant("token", claims, settings)
+
+
+def test_authoritative_admin_group_lookup_uses_cognito_membership(monkeypatch):
+    calls = []
+
+    class Cognito:
+        @staticmethod
+        def admin_list_groups_for_user(**kwargs):
+            calls.append(kwargs)
+            return {"Groups": [{"GroupName": "NurserySignalAdmins"}]}
+
+    monkeypatch.setattr(mcp.boto3, "client", lambda service: Cognito())
+    groups = mcp._authoritative_user_groups(
+        {"username": "admin-user"}, mcp.Settings.from_env()
+    )
+    assert groups == {"NurserySignalAdmins"}
+    assert calls == [
+        {"UserPoolId": "eu-west-1_test", "Username": "admin-user", "Limit": 60}
+    ]
+
+
+def test_oauth_admin_grant_stores_hash_not_raw_token(monkeypatch):
+    stored = {}
+
+    class DynamoDB:
+        @staticmethod
+        def put_item(**kwargs):
+            stored.update(kwargs)
+
+    monkeypatch.setattr(mcp.boto3, "client", lambda service: DynamoDB())
+    token = "sensitive-provider-access-token"
+    claims = {
+        "sub": "admin-user",
+        "client_id": "user-client",
+        "exp": int((datetime.now(UTC) + timedelta(minutes=5)).timestamp()),
+    }
+    mcp._store_oauth_admin_grant(token, claims, mcp.Settings.from_env())
+    item = stored["Item"]
+    assert item["state"]["S"] == mcp._oauth_grant_key(token)
+    assert token not in json.dumps(item)
+    assert item["resource"]["S"] == "https://api.example/mcp"
+
+
+def test_oauth_token_exchange_denies_non_admin_membership(monkeypatch):
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        @staticmethod
+        def read(limit):
+            return json.dumps({"access_token": "customer-token"}).encode()
+
+    monkeypatch.setattr(mcp.urllib.request, "urlopen", lambda request, timeout: Response())
+    monkeypatch.setattr(
+        mcp,
+        "_fetch_chatgpt_cimd",
+        lambda client_id: {"redirect_uris": [mcp.CHATGPT_REDIRECT_URI]},
+    )
+    monkeypatch.setattr(
+        mcp,
+        "_decode_access_token",
+        lambda token, settings: {
+            "sub": "customer-user",
+            "username": "customer-user",
+            "client_id": "user-client",
+            "scope": mcp.READ_SCOPE,
+            "token_use": "access",
+            "exp": int((datetime.now(UTC) + timedelta(minutes=5)).timestamp()),
+        },
+    )
+    monkeypatch.setattr(
+        mcp,
+        "_authoritative_user_groups",
+        lambda claims, settings: {"CareSignalCustomers"},
+    )
+    monkeypatch.setattr(
+        mcp,
+        "_store_oauth_admin_grant",
+        lambda *args: pytest.fail("customer token must not receive an MCP grant"),
+    )
+    request = event(method="POST", path="/oauth/token", authorized=False)
+    request["body"] = urlencode(
+        {
+            "grant_type": "authorization_code",
+            "client_id": mcp.CHATGPT_CIMD_URL,
+            "redirect_uri": mcp.CHATGPT_REDIRECT_URI,
+            "code": "authorization-code",
+            "code_verifier": PKCE_VALUE,
+            "resource": "https://api.example/mcp",
+        }
+    )
+    response = mcp.handler(request, None)
+    assert response["statusCode"] == 403
+    assert json.loads(response["body"])["error"] == "access_denied"
 
 
 def test_chatgpt_web_token_exchange_accepts_verified_private_key_jwt(monkeypatch):
@@ -549,13 +721,20 @@ def test_chatgpt_web_token_exchange_accepts_verified_private_key_jwt(monkeypatch
     monkeypatch.setattr(mcp.urllib.request, "urlopen", lambda request, timeout: Response())
     monkeypatch.setattr(
         mcp,
+        "_authoritative_user_groups",
+        lambda claims, settings: {"NurserySignalAdmins"},
+    )
+    monkeypatch.setattr(mcp, "_store_oauth_admin_grant", lambda *args: None)
+    monkeypatch.setattr(
+        mcp,
         "_decode_access_token",
         lambda token, settings: {
             "client_id": "user-client",
             "scope": mcp.READ_SCOPE,
             "token_use": "access",
             "aud": "https://api.example/mcp",
-            "cognito:groups": ["NurserySignalAdmins"],
+            "username": "admin-user",
+            "exp": int((datetime.now(UTC) + timedelta(minutes=5)).timestamp()),
         },
     )
     assertion = mcp.jwt.encode(

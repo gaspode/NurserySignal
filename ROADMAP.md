@@ -73,11 +73,14 @@ Current gate:
   a customer portal session. Group membership remains unchanged; no customer was promoted. Commit
   `0418bb7` passed 611 backend tests, Ruff and full CI run `36935791260`, then deployed successfully
   in run `36935894585`.
-- Live verification then proved the shared pool uses Cognito's classic hosted UI, which ignores
-  `prompt=login`; the supposedly fresh admin attempt therefore still returned the cached customer
-  identity. Production probing confirmed Cognito `/logout` preserves the complete authorization
-  code, PKCE S256 and resource-bound request while clearing that session and forwarding to login.
-  The MCP facade now starts there so the operator must enter the intended admin credentials.
+- A subsequent explicit `will@payne.uk` login proved session reuse was not the remaining fault.
+  Cognito issued a valid user access token without its documented `cognito:groups` claim even though
+  the production user remains a member of `NurserySignalAdmins` and no token-generation trigger is
+  configured. The OAuth facade now verifies group membership authoritatively with Cognito during
+  token exchange and stores only a short-lived SHA-256-token-keyed grant. The MCP resource server
+  accepts the claim-less token only when that grant matches its subject, dedicated app client,
+  exact MCP resource, read scope, admin group and expiry. The original `/oauth2/authorize` PKCE flow
+  remains in place; customer-group tokens remain denied and no raw token is persisted.
 - MCP v1 is deployed at the production `/mcp` endpoint with RFC 9728 protected-resource discovery,
   an application-owned 401 Bearer challenge and an OAuth 2.1 authorization-code/PKCE facade. The
   canonical resource is the exact `/mcp` URL and RFC 8707 resource binding is preserved through

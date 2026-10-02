@@ -144,9 +144,12 @@ resource "aws_iam_role_policy" "mcp_readonly" {
         Resource = [aws_secretsmanager_secret.database.arn]
       },
       {
-        Effect   = "Allow"
-        Action   = ["dynamodb:GetItem", "dynamodb:Query"]
-        Resource = aws_dynamodb_table.source_runs.arn
+        Effect = "Allow"
+        Action = ["dynamodb:GetItem", "dynamodb:Query"]
+        Resource = [
+          aws_dynamodb_table.source_runs.arn,
+          aws_dynamodb_table.mcp_oauth_transactions.arn,
+        ]
       }
     ]
   })
@@ -169,14 +172,21 @@ resource "aws_iam_role_policy" "mcp_oauth_transactions" {
   role = aws_iam_role.mcp_oauth.id
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [{
-      Effect = "Allow"
-      Action = [
-        "dynamodb:PutItem",
-        "dynamodb:DeleteItem",
-      ]
-      Resource = aws_dynamodb_table.mcp_oauth_transactions.arn
-    }]
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "dynamodb:PutItem",
+          "dynamodb:DeleteItem",
+        ]
+        Resource = aws_dynamodb_table.mcp_oauth_transactions.arn
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["cognito-idp:AdminListGroupsForUser"]
+        Resource = aws_cognito_user_pool.main.arn
+      },
+    ]
   })
 }
 
@@ -195,20 +205,21 @@ resource "aws_lambda_function" "mcp" {
   }
   environment {
     variables = {
-      ADMIN_GROUP                    = aws_cognito_user_group.administrators.name
-      APP_ENV                        = var.environment
-      SERVICE_NAME                   = "${local.name_prefix}-mcp"
-      DB_SECRET_ARN                  = aws_secretsmanager_secret.database.arn
-      MCP_RESOURCE_URL               = local.mcp_resource_url
-      MCP_OAUTH_ISSUER               = aws_apigatewayv2_api.http.api_endpoint
-      MCP_OAUTH_AUTHORIZATION_SERVER = "https://${aws_cognito_user_pool_domain.mcp.domain}.auth.${var.aws_region}.amazoncognito.com"
-      MCP_TOKEN_ISSUER               = "https://${aws_cognito_user_pool.main.endpoint}"
-      MCP_TOKEN_JWKS                 = data.http.mcp_token_jwks.response_body
-      MCP_OAUTH_CALLBACK_URL         = local.mcp_oauth_callback_url
-      MCP_USER_CLIENT_ID             = aws_cognito_user_pool_client.mcp_chatgpt.id
-      MCP_SERVICE_CLIENT_ID          = aws_cognito_user_pool_client.mcp_service.id
-      MCP_RATE_LIMIT_PER_MINUTE      = "60"
-      SOURCE_RUNS_TABLE_NAME         = aws_dynamodb_table.source_runs.name
+      ADMIN_GROUP                       = aws_cognito_user_group.administrators.name
+      APP_ENV                           = var.environment
+      SERVICE_NAME                      = "${local.name_prefix}-mcp"
+      DB_SECRET_ARN                     = aws_secretsmanager_secret.database.arn
+      MCP_RESOURCE_URL                  = local.mcp_resource_url
+      MCP_OAUTH_ISSUER                  = aws_apigatewayv2_api.http.api_endpoint
+      MCP_OAUTH_AUTHORIZATION_SERVER    = "https://${aws_cognito_user_pool_domain.mcp.domain}.auth.${var.aws_region}.amazoncognito.com"
+      MCP_TOKEN_ISSUER                  = "https://${aws_cognito_user_pool.main.endpoint}"
+      MCP_TOKEN_JWKS                    = data.http.mcp_token_jwks.response_body
+      MCP_OAUTH_CALLBACK_URL            = local.mcp_oauth_callback_url
+      MCP_OAUTH_TRANSACTIONS_TABLE_NAME = aws_dynamodb_table.mcp_oauth_transactions.name
+      MCP_USER_CLIENT_ID                = aws_cognito_user_pool_client.mcp_chatgpt.id
+      MCP_SERVICE_CLIENT_ID             = aws_cognito_user_pool_client.mcp_service.id
+      MCP_RATE_LIMIT_PER_MINUTE         = "60"
+      SOURCE_RUNS_TABLE_NAME            = aws_dynamodb_table.source_runs.name
     }
   }
   depends_on = [aws_cloudwatch_log_group.mcp, aws_vpc_endpoint.secretsmanager]
@@ -228,6 +239,7 @@ resource "aws_lambda_function" "mcp_oauth" {
     variables = {
       ADMIN_GROUP                       = aws_cognito_user_group.administrators.name
       APP_ENV                           = var.environment
+      COGNITO_USER_POOL_ID              = aws_cognito_user_pool.main.id
       SERVICE_NAME                      = "${local.name_prefix}-mcp-oauth"
       MCP_RESOURCE_URL                  = local.mcp_resource_url
       MCP_OAUTH_ISSUER                  = aws_apigatewayv2_api.http.api_endpoint
