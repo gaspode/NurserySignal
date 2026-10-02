@@ -1792,3 +1792,15 @@ Paid-pilot activation check (2026-09-28):
   it correctly refused to apply. `nursery-planning-loss-v2` now requires nursery/pre-school to be the explicit
   source use before C3/dwelling/flat/HMO, excludes procedural follow-ups and requires at least ten comparable
   human decisions with zero approvals before a bounded batch can run. Deployment and production preview pending.
+- `nursery-planning-loss-v2` is deployed as a deliberately narrow Nursery Planning review automation. It only
+  rejects a primary application where nursery/pre-school is explicitly the converted-from use and the target is
+  residential C3/dwelling/flat/HMO (or equivalent); mixed-use, school, horticultural, lawfulness, incidental,
+  procedural and all unvalidated rule/AI-disagreement patterns remain manual. The initial v1 preview made zero
+  writes and exposed two false structural matches (residential-to-nursery applications with later flat-roof
+  wording); v2 excludes those. The v2 production preview found 20 candidates, validated against 10 comparable
+  human decisions (10 rejected / 0 approved), and safely applied 17 AUTO_REJECT decisions with three stable
+  ten-percent QA holdouts. The immediate repeat wrote zero records. Pending fell from 426 to 409 overall
+  (Nursery 410 to 393; CareProspect remains 16); rejected signals rose from 534 to 551. No provider calls,
+  opportunity/lifecycle/publication/watcher/matching changes or queue work occurred. CI `37038266490` and
+  `37039077768`, and deployments `37038396695` and `37039218436`, passed. Active ingestion, enrichment and
+  planning queues/DLQs are empty; the collector-manual DLQ retains its known six baseline messages.
