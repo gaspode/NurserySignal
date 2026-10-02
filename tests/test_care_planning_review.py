@@ -478,6 +478,17 @@ def test_lawfulness_terminology_variants_follow_proposed_existing_direction() ->
     assert existing["extracted_facts"]["planning_subtype"] == "LAWFULNESS_EXISTING"
     assert existing["extracted_facts"]["opportunity_creation_decision"] == ("SUPPORT_EXISTING_ONLY")
 
+    amp_thill = enrich_care_signal(
+        raw_planning(
+            "Application for a Certificate of Existing Lawful Development to use the "
+            "premise as a Residential Children's Home (C2)"
+        )
+    )
+    assert amp_thill["extracted_facts"]["planning_subtype"] == "LAWFULNESS_EXISTING"
+    assert amp_thill["extracted_facts"]["opportunity_creation_decision"] == (
+        "SUPPORT_EXISTING_ONLY"
+    )
+
 
 def test_follow_ups_do_not_create_duplicate_openings_and_retain_reference() -> None:
     cases = {

@@ -109,6 +109,7 @@ _EXISTING = re.compile(
 )
 _LAWFULNESS = re.compile(
     r"\b(?:certificate\s+of\s+lawful(?:ness|\s+use|\s+development)|"
+    r"certificate\s+of\s+existing\s+lawful\s+development|"
     r"lawful\s+development\s+certificate|application\s+for\s+(?:a\s+)?lawful\s+development\s+certificate|"
     r"certificate\s+of\s+lawfulness|application\s+under\s+section\s*192)\b",
     re.IGNORECASE,
@@ -118,7 +119,8 @@ _LAWFULNESS_PROPOSED = re.compile(
 )
 _LAWFULNESS_EXISTING = re.compile(
     r"\bexisting\s+use\b|\bcontinued\s+use\b|\blawful\s+use\s+existing\b|"
-    r"\bexisting\s+lawful\s+development\s+certificate\b",
+    r"\bexisting\s+lawful\s+development\s+certificate\b|"
+    r"\bcertificate\s+of\s+existing\s+lawful\s+development\b",
     re.IGNORECASE,
 )
 _CONDITION_VARIATION = re.compile(

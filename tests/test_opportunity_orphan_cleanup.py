@@ -43,6 +43,31 @@ def test_terminal_negative_or_rejected_orphans_are_auto_resolvable() -> None:
         assert evaluate_orphan_cleanup(orphan(cause))["outcome"] == AUTO_RESOLVE
 
 
+def test_review_approved_terminal_planning_evidence_does_not_preserve_stopped_shell() -> None:
+    for cause in ("PLANNING_REFUSED", "PLANNING_WITHDRAWN"):
+        result = evaluate_orphan_cleanup(
+            orphan(
+                cause,
+                customer_lifecycle_stage="STOPPED",
+                active_approved_signal_count=1,
+            )
+        )
+        assert result["outcome"] == AUTO_RESOLVE
+
+
+def test_review_approved_terminal_evidence_with_watch_is_preserved() -> None:
+    result = evaluate_orphan_cleanup(
+        orphan(
+            "PLANNING_REFUSED",
+            customer_lifecycle_stage="STOPPED",
+            active_approved_signal_count=1,
+            enabled_planning_watches=1,
+        )
+    )
+    assert result["outcome"] == PRESERVE
+    assert "active_planning_watch" in result["reasons"]
+
+
 def test_taxonomy_and_old_rule_support_only_shells_are_auto_resolvable() -> None:
     for cause in ("TAXONOMY_RECLASSIFIED", "OLD_CREATION_RULE"):
         result = evaluate_orphan_cleanup(

@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import Counter
 from typing import Any
 
-POLICY_VERSION = "care-opportunity-orphan-cleanup-v1"
+POLICY_VERSION = "care-opportunity-orphan-cleanup-v2"
 AUTO_RESOLVE = "AUTO_RESOLVE"
 PRESERVE = "PRESERVE"
 ALREADY_RESOLVED = "ALREADY_RESOLVED"
@@ -55,7 +55,16 @@ def evaluate_orphan_cleanup(item: dict[str, Any]) -> dict[str, Any]:
     supporting = int(item.get("supporting_followup_count") or 0)
     # An approved signal is only safe here when the hygiene classifier has
     # deterministically established that every active item is support-only.
-    if approved and root not in {"TAXONOMY_RECLASSIFIED", "OLD_CREATION_RULE"}:
+    safe_terminal_outcome = (
+        root in {"PLANNING_REFUSED", "PLANNING_WITHDRAWN"}
+        and lifecycle == "STOPPED"
+        and not int(item.get("enabled_planning_watches") or 0)
+    )
+    if (
+        approved
+        and root not in {"TAXONOMY_RECLASSIFIED", "OLD_CREATION_RULE"}
+        and not safe_terminal_outcome
+    ):
         reasons.append("approved_active_evidence")
     if supporting and root not in {"TAXONOMY_RECLASSIFIED", "OLD_CREATION_RULE"}:
         reasons.append("supporting_evidence")

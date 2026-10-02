@@ -1742,3 +1742,18 @@ Paid-pilot activation check (2026-09-28):
   API/database health is green, active queues/DLQs are empty, and the six known collector-DLQ
   baseline messages remain unchanged. The remaining 17 require human review; no broader automation
   policy changed.
+- CareProspect remaining-attention refinement introduces versioned
+  `care-opportunity-orphan-cleanup-v2` semantics and structured attention explanations. The complete
+  21-record production diagnosis separates fourteen unpublished STOPPED opportunities with canonical
+  refused/withdrawn outcomes from three legitimate watched appeals and four pending signal-review
+  cases. A historical APPROVED signal review now correctly means the evidence was relevant, not that
+  the council decision was positive: terminal refused/withdrawn shells with no watch or other safety
+  blocker can therefore be resolved by the existing bounded, audited operation. Active
+  `REFUSED_UNDER_APPEAL` watches are preserved and labelled `MONITOR_AUTOMATICALLY`, but no longer
+  inflate the actionable Needs Attention queue. Audit rows now expose preservation reason,
+  recommended action, automation eligibility, blocking evidence and lifecycle/watch/publication
+  context; the admin UI renders these fields. The four genuine investigations remain manual pending
+  review. A live wording defect found in the Ampthill record is fixed so “Certificate of Existing
+  Lawful Development” deterministically maps to `LAWFULNESS_EXISTING` / support-only rather than a
+  new opening. Deployment, bounded v2 preview/apply, production counts and queue health remain the
+  current completion gate; no publication, withdrawal, watcher or collector policy is changed.

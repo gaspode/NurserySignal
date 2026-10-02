@@ -42,6 +42,7 @@ NEGATIVE_OUTCOMES = {
     PlanningOutcome.WITHDRAWN,
     PlanningOutcome.APPEAL_DISMISSED,
 }
+TERMINAL_ORPHAN_ROOT_CAUSES = {"PLANNING_REFUSED", "PLANNING_WITHDRAWN"}
 
 
 def _normalise(value: Any) -> str:
@@ -150,11 +151,100 @@ def _relation_state(relation: dict[str, Any]) -> str:
             "PENDING"
             if relation.get("status") == "ACTIVE" and relation.get("review_status") == "PENDING"
             else "REJECTED"
-            if relation.get("status") == "ACTIVE"
-            and relation.get("review_status") == "REJECTED"
+            if relation.get("status") == "ACTIVE" and relation.get("review_status") == "REJECTED"
             else "INACTIVE"
         ),
     }[state]
+
+
+def _attention_context(
+    opportunity: dict[str, Any],
+    relationships: list[dict[str, Any]],
+    *,
+    category: str,
+    root_cause: str | None,
+    warning: str | None,
+) -> dict[str, Any]:
+    """Explain whether an audit finding requires a person or safe automation."""
+    active = [relation for relation in relationships if relation.get("status") == "ACTIVE"]
+    planning_outcomes = sorted(
+        {
+            canonical_planning_outcome(relation.get("metadata")).outcome.value
+            for relation in active
+            if str(relation.get("source_type") or "").lower() == "planning"
+        }
+    )
+    pending_signal_ids = [
+        str(relation.get("signal_id"))
+        for relation in active
+        if relation.get("review_status") == "PENDING"
+    ]
+    enabled_watches = int(opportunity.get("enabled_planning_watches") or 0)
+    lifecycle = str(opportunity.get("customer_lifecycle_stage") or "")
+    active_appeal_watch = (
+        enabled_watches > 0 and PlanningOutcome.REFUSED_UNDER_APPEAL.value in planning_outcomes
+    )
+
+    preservation_reason = None
+    recommended_action = None
+    automation_eligible = False
+    action_required = category in {
+        "NEEDS_INVESTIGATION",
+        "UNSUPPORTED_ORPHAN_CANDIDATE",
+        "DUPLICATE_CANDIDATE",
+        "SUPERSEDED_CANDIDATE",
+    }
+    blocking_state: list[str] = []
+
+    if active_appeal_watch:
+        preservation_reason = "ACTIVE_APPEAL_WATCH"
+        recommended_action = "MONITOR_AUTOMATICALLY"
+        action_required = False
+        blocking_state = ["appeal_pending", "planning_watch_enabled"]
+    elif (
+        category == "UNSUPPORTED_ORPHAN_CANDIDATE"
+        and root_cause in TERMINAL_ORPHAN_ROOT_CAUSES
+        and lifecycle == "STOPPED"
+        and enabled_watches == 0
+    ):
+        preservation_reason = "HISTORICAL_REVIEW_APPROVAL_TERMINAL_OUTCOME"
+        recommended_action = "AUTO_RESOLVE_TERMINAL_ORPHAN"
+        automation_eligible = True
+        blocking_state = [str(root_cause).lower(), "lifecycle_stopped"]
+    elif category == "NEEDS_INVESTIGATION" and pending_signal_ids:
+        preservation_reason = "PENDING_SIGNAL_REVIEW"
+        recommended_action = "REVIEW_SIGNAL"
+        blocking_state = ["pending_review"]
+    elif category == "UNSUPPORTED_ORPHAN_CANDIDATE" and enabled_watches:
+        preservation_reason = "ACTIVE_PLANNING_WATCH"
+        recommended_action = "VERIFY_WATCH_RELEVANCE"
+        blocking_state = ["planning_watch_enabled"]
+    elif category == "MANUAL_OR_ADMIN_TOUCHED_PRESERVE":
+        preservation_reason = "MANUAL_OR_ADMIN_HISTORY"
+        recommended_action = "MANUAL_REVIEW_ONLY"
+        blocking_state = list(opportunity.get("admin_touch_types") or [])
+    elif action_required:
+        preservation_reason = root_cause or category
+        recommended_action = "MANUAL_REVIEW"
+        blocking_state = [str(warning or root_cause or category)]
+
+    return {
+        "preservation_reason": preservation_reason,
+        "recommended_action": recommended_action,
+        "automation_eligible": automation_eligible,
+        "action_required": action_required,
+        "blocking_state": blocking_state,
+        "blocking_evidence": {
+            "pending_signal_ids": pending_signal_ids,
+            "planning_outcomes": planning_outcomes,
+        },
+        "operational_context": {
+            "customer_lifecycle_stage": lifecycle or None,
+            "enabled_planning_watches": enabled_watches,
+            "publication_status": opportunity.get("publication_status"),
+            "customer_saved_count": int(opportunity.get("customer_saved_count") or 0),
+        },
+    }
 
 
 def _duplicate_counterparts(
@@ -203,9 +293,12 @@ def _duplicate_counterparts(
             if candidate_id not in counterparts:
                 counterparts[candidate_id] = {
                     "canonical_opportunity_id": str(canonical["id"]),
-                    "reason": "shared active signal" if key[0] == "SIGNAL" else (
-                        "same canonical site" if key[0] == "SITE" else
-                        "same exact operator, postcode and change type"
+                    "reason": "shared active signal"
+                    if key[0] == "SIGNAL"
+                    else (
+                        "same canonical site"
+                        if key[0] == "SITE"
+                        else "same exact operator, postcode and change type"
                     ),
                     "shared_signal_ids": [key[1]] if key[0] == "SIGNAL" else [],
                 }
@@ -292,9 +385,7 @@ def audit_opportunities(
                 root_cause = (
                     "TAXONOMY_RECLASSIFIED"
                     if any(
-                        (relation.get("extracted_facts") or {}).get(
-                            "planning_taxonomy_version"
-                        )
+                        (relation.get("extracted_facts") or {}).get("planning_taxonomy_version")
                         == "care-planning-taxonomy-v2"
                         for relation in relationships
                     )
@@ -316,9 +407,7 @@ def audit_opportunities(
         category_by_publication[category][
             str(opportunity.get("publication_status") or "UNKNOWN")
         ] += 1
-        category_by_change_type[category][
-            str(opportunity.get("change_type") or "UNKNOWN")
-        ] += 1
+        category_by_change_type[category][str(opportunity.get("change_type") or "UNKNOWN")] += 1
         category_by_source_mix[category][source_mix] += 1
         hygiene_reason = {
             "VALID_SUPPORTED": "Current foundational evidence supports this opportunity.",
@@ -334,69 +423,73 @@ def audit_opportunities(
             ),
             "NEEDS_INVESTIGATION": warning,
         }[category]
-        items.append(
-            {
-                "opportunity_id": opportunity_id,
-                "name": opportunity.get("name"),
-                "review_status": opportunity.get("review_status"),
-                "publication_status": opportunity.get("publication_status"),
-                "lifecycle_stage": opportunity.get("lifecycle_stage"),
-                "change_type": opportunity.get("change_type"),
-                "confidence": opportunity.get("confidence"),
-                "operator_name": opportunity.get("operator_name"),
-                "postcode": opportunity.get("postcode"),
-                "town": opportunity.get("town"),
-                "creation_reason": opportunity.get("creation_reason"),
-                "stage_reason": opportunity.get("stage_reason"),
-                "category": category,
-                "root_cause": root_cause,
-                "hygiene_reason": hygiene_reason,
-                "supporting_signal_count": foundational,
-                "foundational_signal_count": foundational,
-                "supporting_followup_count": supporting_followups,
-                "other_lifecycle_signal_count": other_lifecycle,
-                "active_approved_signal_count": active_approved,
-                "source_types": sources,
-                "source_mix": source_mix,
-                "active_relationships": sum(
-                    relation.get("status") == "ACTIVE" for relation in relationships
-                ),
-                "rejected_relationships": sum(
-                    relation.get("status") == "REJECTED" for relation in relationships
-                ),
-                "admin_touch_types": touches,
-                "duplicate": duplicate,
-                "merged_into_opportunity_id": (
-                    str(opportunity["merged_into_opportunity_id"])
-                    if opportunity.get("merged_into_opportunity_id")
-                    else None
-                ),
-                "warning": warning,
-                "customer_title": opportunity.get("customer_title"),
-                "customer_summary": opportunity.get("customer_summary"),
-                "customer_published_at": opportunity.get("customer_published_at"),
-                "customer_withdrawn_at": opportunity.get("customer_withdrawn_at"),
-                "customer_lifecycle_stage": opportunity.get("customer_lifecycle_stage"),
-                "publication_automation_blocked": bool(
-                    opportunity.get("publication_automation_blocked")
-                ),
-                "publication_automation_provenance": opportunity.get(
-                    "publication_automation_provenance"
-                )
-                or {},
-                "customer_saved_count": int(opportunity.get("customer_saved_count") or 0),
-                "enabled_planning_watches": int(
-                    opportunity.get("enabled_planning_watches") or 0
-                ),
-                "pending_match_reviews": int(
-                    opportunity.get("pending_match_reviews") or 0
-                ),
-                "system_cleanup_resolved": any(
-                    str(action).lower() == "opportunity_unsupported_orphan_resolved"
-                    for action in opportunity.get("audit_actions") or []
-                ),
-            }
+        item = {
+            "opportunity_id": opportunity_id,
+            "name": opportunity.get("name"),
+            "review_status": opportunity.get("review_status"),
+            "publication_status": opportunity.get("publication_status"),
+            "lifecycle_stage": opportunity.get("lifecycle_stage"),
+            "change_type": opportunity.get("change_type"),
+            "confidence": opportunity.get("confidence"),
+            "operator_name": opportunity.get("operator_name"),
+            "postcode": opportunity.get("postcode"),
+            "town": opportunity.get("town"),
+            "creation_reason": opportunity.get("creation_reason"),
+            "stage_reason": opportunity.get("stage_reason"),
+            "category": category,
+            "root_cause": root_cause,
+            "hygiene_reason": hygiene_reason,
+            "supporting_signal_count": foundational,
+            "foundational_signal_count": foundational,
+            "supporting_followup_count": supporting_followups,
+            "other_lifecycle_signal_count": other_lifecycle,
+            "active_approved_signal_count": active_approved,
+            "source_types": sources,
+            "source_mix": source_mix,
+            "active_relationships": sum(
+                relation.get("status") == "ACTIVE" for relation in relationships
+            ),
+            "rejected_relationships": sum(
+                relation.get("status") == "REJECTED" for relation in relationships
+            ),
+            "admin_touch_types": touches,
+            "duplicate": duplicate,
+            "merged_into_opportunity_id": (
+                str(opportunity["merged_into_opportunity_id"])
+                if opportunity.get("merged_into_opportunity_id")
+                else None
+            ),
+            "warning": warning,
+            "customer_title": opportunity.get("customer_title"),
+            "customer_summary": opportunity.get("customer_summary"),
+            "customer_published_at": opportunity.get("customer_published_at"),
+            "customer_withdrawn_at": opportunity.get("customer_withdrawn_at"),
+            "customer_lifecycle_stage": opportunity.get("customer_lifecycle_stage"),
+            "publication_automation_blocked": bool(
+                opportunity.get("publication_automation_blocked")
+            ),
+            "publication_automation_provenance": opportunity.get(
+                "publication_automation_provenance"
+            )
+            or {},
+            "customer_saved_count": int(opportunity.get("customer_saved_count") or 0),
+            "enabled_planning_watches": int(opportunity.get("enabled_planning_watches") or 0),
+            "pending_match_reviews": int(opportunity.get("pending_match_reviews") or 0),
+            "system_cleanup_resolved": any(
+                str(action).lower() == "opportunity_unsupported_orphan_resolved"
+                for action in opportunity.get("audit_actions") or []
+            ),
+        }
+        item.update(
+            _attention_context(
+                {**opportunity, "admin_touch_types": touches},
+                relationships,
+                category=category,
+                root_cause=root_cause,
+                warning=warning,
+            )
         )
+        items.append(item)
 
     published = [item for item in items if item["publication_status"] == "PUBLISHED"]
     all_customer_candidates = [
@@ -408,13 +501,9 @@ def audit_opportunities(
         and item["change_type"] in {"OPENING", "EXPANSION"}
         and not item["warning"]
     ]
-    customer_candidate_ids = {
-        item["opportunity_id"] for item in all_customer_candidates
-    }
+    customer_candidate_ids = {item["opportunity_id"] for item in all_customer_candidates}
     for item in items:
-        item["customer_readiness_candidate"] = (
-            item["opportunity_id"] in customer_candidate_ids
-        )
+        item["customer_readiness_candidate"] = item["opportunity_id"] in customer_candidate_ids
         item["customer_readiness_reason"] = (
             "Supported unpublished opening/change evidence with usable geography and no "
             "hygiene warning."
@@ -431,6 +520,7 @@ def audit_opportunities(
             + category_counts["NEEDS_INVESTIGATION"]
         ),
     }
+    actionable_items = [item for item in items if item.get("action_required")]
     return {
         "total": len(items),
         "category_counts": {key: category_counts[key] for key in HYGIENE_CATEGORIES},
@@ -450,6 +540,27 @@ def audit_opportunities(
             for category, values in sorted(category_by_source_mix.items())
         },
         "orphan_root_causes": dict(sorted(root_causes.items())),
+        "actionable_category_counts": dict(
+            sorted(Counter(item["category"] for item in actionable_items).items())
+        ),
+        "preservation_reason_counts": dict(
+            sorted(
+                Counter(
+                    str(item["preservation_reason"])
+                    for item in items
+                    if item.get("preservation_reason")
+                ).items()
+            )
+        ),
+        "recommended_action_counts": dict(
+            sorted(
+                Counter(
+                    str(item["recommended_action"])
+                    for item in items
+                    if item.get("recommended_action")
+                ).items()
+            )
+        ),
         "admin_touch_counts": dict(sorted(touch_counts.items())),
         "published": published,
         "published_warnings": [item for item in published if item["warning"]],
@@ -498,20 +609,15 @@ def filter_hygiene_items(
             view != "needs_attention"
             or (
                 item.get("review_status") != "REJECTED"
+                and item.get("action_required", True)
                 and item["category"] in attention_categories
             )
-            or (
-                item.get("publication_status") == "PUBLISHED"
-                and bool(item.get("warning"))
-            )
+            or (item.get("publication_status") == "PUBLISHED" and bool(item.get("warning")))
         )
         and (category is None or item["category"] == category)
         and (root_cause is None or item["root_cause"] == root_cause)
         and (change_type is None or item["change_type"] == change_type)
-        and (
-            publication_status is None
-            or item["publication_status"] == publication_status
-        )
+        and (publication_status is None or item["publication_status"] == publication_status)
         and (
             not q
             or q

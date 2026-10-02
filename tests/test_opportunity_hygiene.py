@@ -45,6 +45,9 @@ def opportunity(**overrides) -> dict:
         "relationships": [relation()],
         "history_actions": [],
         "audit_actions": [],
+        "customer_lifecycle_stage": "PLANNING_APPROVED",
+        "enabled_planning_watches": 0,
+        "customer_saved_count": 0,
         "created_at": "2026-01-01T00:00:00Z",
     }
     values.update(overrides)
@@ -61,9 +64,7 @@ def test_hygiene_categories_are_mutually_exclusive_and_conservative() -> None:
     followup = opportunity(
         operator_name="Followup Care Ltd",
         postcode="F1 1AA",
-        relationships=[
-            relation(subtype="CONDITION_DISCHARGE", decision="SUPPORT_EXISTING_ONLY")
-        ],
+        relationships=[relation(subtype="CONDITION_DISCHARGE", decision="SUPPORT_EXISTING_ONLY")],
     )
     pending = opportunity(
         operator_name="Pending Care Ltd",
@@ -131,6 +132,47 @@ def test_system_orphan_resolution_audit_is_not_a_manual_touch_and_leaves_attenti
     assert filter_hygiene_items(items, view="needs_attention") == []
 
 
+def test_watched_appeal_is_explained_and_not_actionable_attention() -> None:
+    appeal_relation = relation(review_status="REJECTED", planning_status="Appeal started")
+    appeal_relation["metadata"]["decision"] = "Refused"
+    appeal = opportunity(
+        customer_lifecycle_stage="APPEAL_PENDING",
+        enabled_planning_watches=1,
+        relationships=[appeal_relation],
+    )
+    report = audit_opportunities([appeal])
+    item = report["items"][0]
+    assert item["category"] == "UNSUPPORTED_ORPHAN_CANDIDATE"
+    assert item["preservation_reason"] == "ACTIVE_APPEAL_WATCH"
+    assert item["recommended_action"] == "MONITOR_AUTOMATICALLY"
+    assert item["automation_eligible"] is False
+    assert item["action_required"] is False
+    assert item["blocking_evidence"]["planning_outcomes"] == ["REFUSED_UNDER_APPEAL"]
+    assert report["actionable_category_counts"] == {}
+    assert report["preservation_reason_counts"] == {"ACTIVE_APPEAL_WATCH": 1}
+    assert filter_hygiene_items([item], view="needs_attention") == []
+
+
+def test_terminal_planning_orphan_exposes_safe_resolution_context() -> None:
+    refused = opportunity(
+        customer_lifecycle_stage="STOPPED",
+        relationships=[relation(planning_status="Planning Permission - Refused")],
+    )
+    item = audit_opportunities([refused])["items"][0]
+    assert item["preservation_reason"] == "HISTORICAL_REVIEW_APPROVAL_TERMINAL_OUTCOME"
+    assert item["recommended_action"] == "AUTO_RESOLVE_TERMINAL_ORPHAN"
+    assert item["automation_eligible"] is True
+    assert item["action_required"] is True
+
+
+def test_pending_signal_investigation_exposes_blocking_signal() -> None:
+    pending = opportunity(relationships=[relation(review_status="PENDING")])
+    item = audit_opportunities([pending])["items"][0]
+    assert item["preservation_reason"] == "PENDING_SIGNAL_REVIEW"
+    assert item["recommended_action"] == "REVIEW_SIGNAL"
+    assert item["blocking_evidence"]["pending_signal_ids"]
+
+
 def test_hygiene_filters_and_publication_candidate_view_are_read_only() -> None:
     supported = opportunity(
         name="New children's home — Bristol BS1",
@@ -160,8 +202,6 @@ def test_hygiene_filters_and_publication_candidate_view_are_read_only() -> None:
         "publication_status": "PUBLISHED",
         "warning": "Published opportunity needs evidence review.",
     }
-    assert filter_hygiene_items([published_warning], view="needs_attention") == [
-        published_warning
-    ]
+    assert filter_hygiene_items([published_warning], view="needs_attention") == [published_warning]
     assert filter_hygiene_items(items, q="approved change") == [items[0]]
     assert all(item["publication_status"] == "DRAFT" for item in items)

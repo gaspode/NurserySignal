@@ -64,6 +64,10 @@ const hygieneItem = {
   source_mix: "PLANNING",
   category: "NEEDS_INVESTIGATION",
   hygiene_reason: "Active evidence lacks decisive event semantics.",
+  preservation_reason: "PENDING_SIGNAL_REVIEW",
+  recommended_action: "REVIEW_SIGNAL",
+  automation_eligible: false,
+  operational_context: { customer_lifecycle_stage: "NEEDS_REVIEW", enabled_planning_watches: 0 },
   warning: "Active evidence lacks decisive event semantics.",
   publication_status: "PUBLISHED",
   admin_touch_types: ["manual_publication"],
@@ -80,6 +84,12 @@ function hygieneResult(overrides = {}) {
       UNSUPPORTED_ORPHAN_CANDIDATE: 345,
       NEEDS_INVESTIGATION: 30,
       MANUAL_OR_ADMIN_TOUCHED_PRESERVE: 14,
+      DUPLICATE_CANDIDATE: 0,
+      SUPERSEDED_CANDIDATE: 0,
+    },
+    actionable_category_counts: {
+      UNSUPPORTED_ORPHAN_CANDIDATE: 345,
+      NEEDS_INVESTIGATION: 30,
       DUPLICATE_CANDIDATE: 0,
       SUPERSEDED_CANDIDATE: 0,
     },
@@ -1071,6 +1081,8 @@ describe("admin frontend", () => {
     expect(screen.getByRole("button", { name: /Unsupported \/ orphan/i })).toHaveTextContent("345");
     expect(screen.getByRole("button", { name: /Needs investigation/i })).toHaveTextContent("30");
     expect(screen.getByText("Published warning")).toBeInTheDocument();
+    expect(screen.getByText("Preserved: Pending Signal Review")).toBeInTheDocument();
+    expect(screen.getByText("Next: Review Signal")).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: /Needs investigation/i }));
     await waitFor(() => expect(apiClient).toHaveBeenLastCalledWith(expect.stringContaining("category=NEEDS_INVESTIGATION")));

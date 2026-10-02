@@ -307,9 +307,7 @@ def operations_summary(settings: Settings) -> dict[str, Any]:
             "withdrawn": int(withdrawn or 0),
             "skipped": int(skipped or 0),
             "failed": int(failures or 0),
-            "success_rate": _rate(
-                int(withdrawn or 0), int(withdrawn or 0) + int(failures or 0)
-            ),
+            "success_rate": _rate(int(withdrawn or 0), int(withdrawn or 0) + int(failures or 0)),
         }
         for label, withdrawn, skipped, failures in withdrawal_window_rows
     }
@@ -372,6 +370,7 @@ def operations_summary(settings: Settings) -> dict[str, Any]:
             "SUPERSEDED_CANDIDATE",
         }
         and item["opportunity"].get("review_status") != "REJECTED"
+        and item["hygiene"].get("action_required", True)
         for item in decisions
     )
 
@@ -577,14 +576,10 @@ def operations_summary(settings: Settings) -> dict[str, Any]:
             "enabled": bool(withdrawal_state and withdrawal_state[0]),
             "recurring_enabled": bool(withdrawal_state and withdrawal_state[1]),
             "policy_version": (
-                withdrawal_state[2]
-                if withdrawal_state
-                else CARE_WITHDRAWAL_POLICY_VERSION
+                withdrawal_state[2] if withdrawal_state else CARE_WITHDRAWAL_POLICY_VERSION
             ),
             "emergency_reason": withdrawal_state[3] if withdrawal_state else None,
-            "max_withdrawals_per_execution": (
-                int(withdrawal_state[4]) if withdrawal_state else 10
-            ),
+            "max_withdrawals_per_execution": (int(withdrawal_state[4]) if withdrawal_state else 10),
             "total_automatic_withdrawals": (
                 int(withdrawal_state[10] or 0) if withdrawal_state else 0
             ),
