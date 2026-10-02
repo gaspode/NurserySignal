@@ -64,7 +64,26 @@ class ReadOnlyConnection:
         if "COALESCE(sum(provider_requests)" in sql:
             return Result(one=(1, 2, 2, 1, 1, 0))
         if "FROM planning_lifecycle_watch_runs ORDER BY" in sql:
-            return Result(rows=[])
+            return Result(
+                rows=[
+                    (
+                        "run-failed",
+                        "FAILED",
+                        1,
+                        "provider_context_mismatch",
+                        "2026-10-02T00:00:00Z",
+                        "2026-10-02T00:00:01Z",
+                        "care-planning-watcher-v2",
+                        "AMBIGUOUS",
+                        {
+                            "lookup_method": "exact_reference",
+                            "selection_reason": "no_context_match",
+                            "records_returned": 3,
+                            "private_payload": "must-not-leak",
+                        },
+                    )
+                ]
+            )
         if "FROM care_publication_automation_state" in sql:
             return Result(
                 one=(
@@ -157,6 +176,14 @@ def test_operations_summary_is_versioned_bounded_and_read_only(monkeypatch) -> N
     assert summary["signals"]["by_review_status"] == {"APPROVED": 8, "PENDING": 2}
     assert summary["lifecycle"]["current"] == {"PLANNING_APPROVED": 1}
     assert summary["planning_watcher"]["polls"]["change_rate"]["rate_percent"] == 50.0
+    watcher_failure = summary["planning_watcher"]["recent_failures"][0]
+    assert watcher_failure["error_category"] == "provider_context_mismatch"
+    assert watcher_failure["provider_result"] == "AMBIGUOUS"
+    assert watcher_failure["diagnostic"] == {
+        "lookup_method": "exact_reference",
+        "selection_reason": "no_context_match",
+        "records_returned": 3,
+    }
     assert summary["publication"]["windows"]["24h"]["success_rate"]["rate_percent"] == 100.0
     assert summary["queues"]["available"] is False
     assert summary["recent_executions"]["collectors"]["available"] is False

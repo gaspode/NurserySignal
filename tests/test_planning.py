@@ -4,7 +4,7 @@ import json
 from dataclasses import replace
 from datetime import date
 from pathlib import Path
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 
 import pytest
 from app.collector import (
@@ -15,10 +15,13 @@ from app.collector import (
 from app.collector import handler as planning_handler
 from app.config import Settings
 from app.planning import (
+    PlanningAuthenticationError,
+    PlanningMalformedResponseError,
     PlanningQuery,
     PlanningRateLimitError,
     PlanningRecord,
     PlanningReferenceSearchResult,
+    PlanningTimeoutError,
     PlotaProvider,
     candidate_decision,
     normalize_plota_record,
@@ -409,8 +412,71 @@ def test_plota_provider_reference_lookup_is_single_bounded_exact_query() -> None
     assert search.provider_query == "24 / 03385 / ful"
     assert search.truncated is False
     assert len(requests) == 1
-    assert "q=24+%2F+03385+%2F+ful" in requests[0]
+    assert "reference=24+%2F+03385+%2F+ful" in requests[0]
+    assert "q=" not in requests[0]
     assert "council=" not in requests[0]
+
+
+def test_plota_provider_retrieves_known_application_by_stable_id() -> None:
+    requests = []
+
+    def opener(request, timeout):
+        requests.append(request.full_url)
+        return FakeResponse(
+            {
+                "data": {
+                    "id": "stable-123",
+                    "reference": "24/03385/FUL",
+                    "description": "children's home",
+                    "authority": {"name": "Croydon"},
+                }
+            }
+        )
+
+    provider = PlotaProvider("secret", opener=opener)
+    result = provider.application_by_id("stable-123")
+
+    assert result.application_id == "stable-123"
+    assert result.council == "Croydon"
+    assert requests == [
+        "https://api.plota.co.uk/v1/applications/stable-123?include_contact=false"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected_type", "expected_category"),
+    [
+        (
+            HTTPError("https://api.plota.co.uk", 401, "unauthorized", {}, None),
+            PlanningAuthenticationError,
+            "provider_authentication_error",
+        ),
+        (
+            URLError(TimeoutError("timed out")),
+            PlanningTimeoutError,
+            "provider_timeout",
+        ),
+    ],
+)
+def test_plota_provider_categorises_transport_failures(
+    failure, expected_type, expected_category
+) -> None:
+    def opener(request, timeout):
+        raise failure
+
+    provider = PlotaProvider("secret", opener=opener, sleep=lambda seconds: None)
+    with pytest.raises(expected_type) as captured:
+        provider.application_by_id("stable-123")
+    assert captured.value.error_category == expected_category
+
+
+def test_plota_provider_categorises_malformed_application_response() -> None:
+    provider = PlotaProvider(
+        "secret", opener=lambda request, timeout: FakeResponse({"data": []})
+    )
+    with pytest.raises(PlanningMalformedResponseError) as captured:
+        provider.application_by_id("stable-123")
+    assert captured.value.error_category == "malformed_provider_response"
 
 
 def test_plota_provider_associated_lookup_retains_only_exact_reference() -> None:
@@ -547,6 +613,79 @@ def test_planning_watch_material_change_uses_normal_ingestion(monkeypatch) -> No
     assert result == {"requests": 1, "changed": 1, "unchanged": 0, "failed": 0}
     assert results[0].status == "CHANGED"
     assert len(queued) == 1
+
+
+def test_planning_watch_prefers_stable_provider_id_over_reference_search(monkeypatch) -> None:
+    results = []
+
+    class DirectProvider:
+        requests_made = 1
+
+        def application_by_id(self, application_id):
+            assert application_id == "stable-123"
+            return replace(
+                record("Change of use to a children's home"),
+                application_id=application_id,
+                council="London Borough of Croydon",
+                raw={"id": application_id, "reference": "24/03385/FUL"},
+            )
+
+        def applications_by_reference(self, reference, *, limit):
+            raise AssertionError("stable-id watcher must not perform a broad search")
+
+    monkeypatch.setattr("app.collector.provider_api_key_from_secret", lambda arn: "secret")
+    monkeypatch.setattr("app.collector.PlotaProvider", lambda *args, **kwargs: DirectProvider())
+    monkeypatch.setattr("app.collector.planning_watch_snapshot", lambda metadata: {"same": True})
+    monkeypatch.setattr(
+        "app.collector.send_planning_lifecycle_watch_result",
+        lambda settings, message: results.append(message),
+    )
+    result = refresh_planning_lifecycle_watch(
+        Settings(planning_provider_secret_arn="arn:example"),
+        {
+            "run_id": "run-direct",
+            "watch_id": "watch-direct",
+            "planning_reference": "24/03385/FUL",
+            "planning_authority": "Croydon",
+            "provider_application_id": "stable-123",
+            "latest_snapshot": {"same": True},
+        },
+    )
+
+    assert result == {"requests": 1, "changed": 0, "unchanged": 1, "failed": 0}
+    assert results[0].details["lookup_method"] == "stable_provider_id"
+    assert results[0].details["provider_result"] == "FOUND"
+
+
+def test_planning_watch_persists_resolution_failure_category(monkeypatch) -> None:
+    results = []
+
+    class EmptyProvider:
+        requests_made = 1
+
+        def applications_by_reference(self, reference, *, limit):
+            return PlanningReferenceSearchResult(reference, (), 0, False)
+
+    monkeypatch.setattr("app.collector.provider_api_key_from_secret", lambda arn: "secret")
+    monkeypatch.setattr("app.collector.PlotaProvider", lambda *args, **kwargs: EmptyProvider())
+    monkeypatch.setattr(
+        "app.collector.send_planning_lifecycle_watch_result",
+        lambda settings, message: results.append(message),
+    )
+
+    result = refresh_planning_lifecycle_watch(
+        Settings(planning_provider_secret_arn="arn:example"),
+        {
+            "run_id": "run-missing",
+            "watch_id": "watch-missing",
+            "planning_reference": "24/03385/FUL",
+            "planning_authority": "Croydon",
+        },
+    )
+
+    assert result == {"requests": 1, "changed": 0, "unchanged": 0, "failed": 1}
+    assert results[0].details["provider_result"] == "NOT_FOUND"
+    assert results[0].details["error_category"] == "provider_no_reference_match"
 
 
 def test_planning_watch_unchanged_response_does_not_duplicate_evidence(monkeypatch) -> None:

@@ -8,6 +8,24 @@ Build a UK sales-intelligence service that surfaces timely, commercially useful 
 
 The MVP succeeds by being trustworthy and actionable, not by maximizing raw signal count.
 
+## CareProspect planning watcher reliability
+
+- Planning lifecycle refresh now prefers each signal's stable Plota application identifier and
+  validates the returned authority/reference before processing it through the existing ingestion
+  and lifecycle path. Records without a usable provider identifier fall back to Plota's documented
+  exact `reference` filter and the existing conservative local disambiguation.
+- Watcher failures persist bounded, non-sensitive categories for provider HTTP/authentication,
+  rate-limit, timeout/network and malformed-response failures; invalid references, candidate
+  ambiguity/context mismatch, queue dispatch and internal processing are distinguished separately.
+- Operations summary failure rows expose only the provider result and an allowlisted diagnostic
+  subset, so raw provider payloads and credentials remain private.
+- Cadence, the 15-poll execution bound and 50/day / 2,000/month quota guardrails are unchanged.
+
+Current gate:
+- Code and regression coverage are complete; production deployment and a maximum-three-poll
+  validation must confirm the formerly repeated failures now resolve by stable provider identity or
+  persist a meaningful category. No broad provider sweep is authorised.
+
 ## SignalHub MCP v1 — READ-ONLY ADMINISTRATION
 
 - A dedicated remote MCP service exposes ten bounded investigation tools for operations, signals,

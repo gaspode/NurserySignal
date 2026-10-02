@@ -8290,9 +8290,11 @@ def queue_due_care_planning_watches(settings: Settings, *, max_due: int = 15) ->
         rows = conn.execute(
             """SELECT w.id, w.opportunity_id, w.primary_signal_id,
                       w.planning_authority, w.planning_reference,
-                      w.latest_status_metadata, o.address, o.postcode
+                      w.latest_status_metadata, o.address, o.postcode,
+                      rs.external_id
                FROM planning_lifecycle_watches w
                JOIN opportunities o ON o.id = w.opportunity_id
+               JOIN raw_signals rs ON rs.id = w.primary_signal_id
                WHERE w.enabled AND w.next_eligible_refresh_at <= now()
                  AND NOT o.publication_automation_blocked
                  AND NOT EXISTS (
@@ -8310,20 +8312,24 @@ def queue_due_care_planning_watches(settings: Settings, *, max_due: int = 15) ->
                    VALUES (%s, 'QUEUED', %s) RETURNING id""",
                 (row[0], Jsonb({"policy_version": state[5]})),
             ).fetchone()[0]
-            queued.append(
-                {
-                    "invocation_source": "planning_lifecycle_watch",
-                    "run_id": str(run_id),
-                    "watch_id": str(row[0]),
-                    "opportunity_id": str(row[1]),
-                    "primary_signal_id": str(row[2]),
-                    "planning_authority": row[3],
-                    "planning_reference": row[4],
-                    "latest_snapshot": row[5] or {},
-                    "site_address": row[6],
-                    "site_postcode": row[7],
-                }
-            )
+            item = {
+                "invocation_source": "planning_lifecycle_watch",
+                "run_id": str(run_id),
+                "watch_id": str(row[0]),
+                "opportunity_id": str(row[1]),
+                "primary_signal_id": str(row[2]),
+                "planning_authority": row[3],
+                "planning_reference": row[4],
+                "latest_snapshot": row[5] or {},
+                "site_address": row[6],
+                "site_postcode": row[7],
+            }
+            external_id = str(row[8] or "")
+            if external_id.lower().startswith("plota:"):
+                provider_application_id = external_id.split(":", 1)[1].strip()
+                if provider_application_id:
+                    item["provider_application_id"] = provider_application_id
+            queued.append(item)
         conn.commit()
 
     sent = 0
@@ -8343,8 +8349,13 @@ def queue_due_care_planning_watches(settings: Settings, *, max_due: int = 15) ->
                 conn.execute(
                     """UPDATE planning_lifecycle_watch_runs
                        SET status = 'QUEUE_FAILED', error_category = %s,
+                           details = details || %s,
                            completed_at = now() WHERE id = %s AND status = 'QUEUED'""",
-                    (type(error).__name__, item["run_id"]),
+                    (
+                        "queue_dispatch_error",
+                        Jsonb({"exception_type": type(error).__name__}),
+                        item["run_id"],
+                    ),
                 )
                 conn.commit()
     return {
@@ -8425,7 +8436,7 @@ def update_care_planning_watch_result(
                 status,
                 requests,
                 details.get("provider_result"),
-                details.get("error_type"),
+                details.get("error_category") or details.get("error_type"),
                 Jsonb(details),
                 run_id,
             ),

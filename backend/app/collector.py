@@ -22,7 +22,8 @@ from app.planning import (
     planning_signal,
 )
 from app.planning_backfill import add_counts, bounds_from_chunk, chunk_payload
-from app.planning_origin import candidate_summary, resolve_origin_candidate
+from app.planning_families import normalize_planning_reference
+from app.planning_origin import authorities_match, candidate_summary, resolve_origin_candidate
 from app.queueing import (
     PlanningLifecycleWatchResultMessage,
     PlanningOriginRecoveryResultMessage,
@@ -56,29 +57,78 @@ def refresh_planning_lifecycle_watch(
     status = "FAILED"
     details: dict[str, Any] = {}
     try:
+        normalized_reference = normalize_planning_reference(reference)
+        if not normalized_reference:
+            details = {
+                "provider_requests": 0,
+                "provider_result": "INVALID_REFERENCE",
+                "error_category": "missing_or_invalid_planning_reference",
+            }
+            raise ValueError("invalid watcher planning reference")
         api_key = provider_api_key_from_secret(settings.planning_provider_secret_arn)
         provider = PlotaProvider(api_key, base_url=settings.planning_provider_base_url)
-        search = provider.applications_by_reference(reference, limit=10)
-        resolution = resolve_origin_candidate(
-            search.candidates,
-            authority=authority,
-            postcode=payload.get("site_postcode"),
-            address=payload.get("site_address"),
-            truncated=search.truncated,
-        )
-        details = {
-            "provider_requests": provider.requests_made,
-            "provider_query": search.provider_query,
-            "records_returned": search.returned_count,
-            "exact_reference_candidates": len(search.candidates),
-            "candidate_set_truncated": search.truncated,
-            "selection_reason": resolution.reason,
-        }
-        if resolution.status != "FOUND" or resolution.selected is None:
-            details["provider_result"] = resolution.status
+        provider_application_id = str(payload.get("provider_application_id") or "").strip()
+        if provider_application_id:
+            record = provider.application_by_id(provider_application_id)
+            candidate_reference = normalize_planning_reference(
+                record.raw.get("reference")
+                or record.raw.get("application_reference")
+                or record.application_id
+            )
+            identity_valid = candidate_reference == normalized_reference and authorities_match(
+                authority, record.council
+            )
+            details = {
+                "provider_requests": provider.requests_made,
+                "provider_query": f"application_id:{provider_application_id}",
+                "lookup_method": "stable_provider_id",
+                "records_returned": 1,
+                "exact_reference_candidates": int(candidate_reference == normalized_reference),
+                "candidate_set_truncated": False,
+                "selection_reason": "stable_provider_identity"
+                if identity_valid
+                else "stable_provider_identity_context_mismatch",
+            }
+            if not identity_valid:
+                details.update(
+                    {
+                        "provider_result": "NO_CONTEXT_MATCH",
+                        "error_category": "provider_identity_mismatch",
+                        "candidate_authority": record.council,
+                    }
+                )
+                record = None
+        else:
+            search = provider.applications_by_reference(reference, limit=10)
+            resolution = resolve_origin_candidate(
+                search.candidates,
+                authority=authority,
+                postcode=payload.get("site_postcode"),
+                address=payload.get("site_address"),
+                truncated=search.truncated,
+            )
+            details = {
+                "provider_requests": provider.requests_made,
+                "provider_query": search.provider_query,
+                "lookup_method": "exact_reference",
+                "records_returned": search.returned_count,
+                "exact_reference_candidates": len(search.candidates),
+                "candidate_set_truncated": search.truncated,
+                "selection_reason": resolution.reason,
+            }
+            record = resolution.selected
+            if resolution.status != "FOUND" or record is None:
+                details["provider_result"] = resolution.status
+                details["error_category"] = {
+                    "provider_returned_zero_exact_matches": "provider_no_reference_match",
+                    "provider_candidate_set_truncated": "provider_candidate_set_truncated",
+                    "no_context_match": "provider_context_mismatch",
+                    "multiple_context_matches": "provider_ambiguous_match",
+                }.get(resolution.reason, "provider_ambiguous_match")
+
+        if record is None:
             status = "FAILED"
         else:
-            record = resolution.selected
             decision = classify_care_planning(record)
             signal = care_planning_signal(record, decision, historical_source_date=False)
             snapshot = planning_watch_snapshot(signal["metadata"])
@@ -107,20 +157,33 @@ def refresh_planning_lifecycle_watch(
         status = "RATE_LIMITED"
         details = {
             "provider_requests": provider.requests_made if provider else 1,
-            "error_type": type(exc).__name__,
+            "error_category": exc.error_category,
+            "exception_type": type(exc).__name__,
+            "http_status": exc.http_status,
         }
     except PlanningProviderError as exc:
         status = "FAILED"
         details = {
             "provider_requests": provider.requests_made if provider else 1,
-            "error_type": type(exc).__name__,
+            "error_category": exc.error_category,
+            "exception_type": type(exc).__name__,
+            "http_status": exc.http_status,
         }
+    except ValueError as exc:
+        status = "FAILED"
+        details = details or {
+            "provider_requests": provider.requests_made if provider else 0,
+            "provider_result": "PROCESSING_ERROR",
+            "error_category": "internal_processing_or_database_error",
+        }
+        details["exception_type"] = type(exc).__name__
     except Exception as exc:
         logger.exception("planning_lifecycle_watch_failed watch_id=%s", watch_id)
         status = "FAILED"
         details = {
             "provider_requests": provider.requests_made if provider else 0,
-            "error_type": type(exc).__name__,
+            "error_category": "internal_processing_or_database_error",
+            "exception_type": type(exc).__name__,
         }
     send_planning_lifecycle_watch_result(
         settings,

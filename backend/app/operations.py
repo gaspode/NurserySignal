@@ -196,7 +196,8 @@ def operations_summary(settings: Settings) -> dict[str, Any]:
         ).fetchone()
         recent_watcher_runs = conn.execute(
             """SELECT id, status, provider_requests, error_category, created_at,
-                      completed_at, details->>'policy_version'
+                      completed_at, details->>'policy_version', provider_result,
+                      details
                FROM planning_lifecycle_watch_runs ORDER BY created_at DESC LIMIT 10"""
         ).fetchall()
         publication_state = conn.execute(
@@ -505,6 +506,20 @@ def operations_summary(settings: Settings) -> dict[str, Any]:
                     "error_category": row[3],
                     "created_at": row[4],
                     "completed_at": row[5],
+                    "provider_result": row[7],
+                    "diagnostic": {
+                        key: (row[8] or {}).get(key)
+                        for key in (
+                            "lookup_method",
+                            "selection_reason",
+                            "records_returned",
+                            "exact_reference_candidates",
+                            "candidate_set_truncated",
+                            "http_status",
+                            "exception_type",
+                        )
+                        if (row[8] or {}).get(key) is not None
+                    },
                 }
                 for row in recent_watcher_runs
                 if row[1] in {"FAILED", "RATE_LIMITED", "QUEUE_FAILED"}

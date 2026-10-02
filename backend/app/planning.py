@@ -85,9 +85,41 @@ SCHOOL_MATERIAL_PATTERNS = (
 class PlanningProviderError(RuntimeError):
     """The provider could not return a usable page."""
 
+    error_category = "provider_http_error"
+
+    def __init__(self, message: str, *, http_status: int | None = None) -> None:
+        super().__init__(message)
+        self.http_status = http_status
+
 
 class PlanningRateLimitError(PlanningProviderError):
     """The provider rate limited the collector after its retry budget."""
+
+    error_category = "provider_rate_limited"
+
+
+class PlanningAuthenticationError(PlanningProviderError):
+    """The configured provider credentials were rejected."""
+
+    error_category = "provider_authentication_error"
+
+
+class PlanningTimeoutError(PlanningProviderError):
+    """The provider request exceeded its timeout/retry budget."""
+
+    error_category = "provider_timeout"
+
+
+class PlanningNetworkError(PlanningProviderError):
+    """The provider could not be reached after bounded retries."""
+
+    error_category = "provider_network_error"
+
+
+class PlanningMalformedResponseError(PlanningProviderError):
+    """The provider response was not valid for the documented contract."""
+
+    error_category = "malformed_provider_response"
 
 
 @dataclass(frozen=True)
@@ -290,32 +322,65 @@ class PlotaProvider:
                 with self.opener(request, timeout=self.timeout) as response:
                     payload = json.loads(response.read())
                 if not isinstance(payload, dict):
-                    raise PlanningProviderError("Plota response has an invalid shape")
+                    raise PlanningMalformedResponseError(
+                        "Plota response has an invalid shape"
+                    )
                 return payload
             except HTTPError as exc:
                 if exc.code == 429:
                     if attempt == 2:
-                        raise PlanningRateLimitError("Plota rate limit exceeded") from exc
+                        raise PlanningRateLimitError(
+                            "Plota rate limit exceeded", http_status=429
+                        ) from exc
                     retry_after = int(exc.headers.get("Retry-After", "2"))
                     self.sleep(min(max(retry_after, 1), 30))
                     continue
                 if exc.code >= 500 and attempt < 2:
                     self.sleep(2**attempt)
                     continue
-                raise PlanningProviderError(f"Plota HTTP error {exc.code}") from exc
+                if exc.code in {401, 403}:
+                    raise PlanningAuthenticationError(
+                        "Plota authentication failed", http_status=exc.code
+                    ) from exc
+                raise PlanningProviderError(
+                    f"Plota HTTP error {exc.code}", http_status=exc.code
+                ) from exc
             except (URLError, TimeoutError, OSError) as exc:
                 if attempt == 2:
-                    raise PlanningProviderError("Plota request failed") from exc
+                    reason = getattr(exc, "reason", None)
+                    if isinstance(exc, TimeoutError) or isinstance(reason, TimeoutError):
+                        raise PlanningTimeoutError("Plota request timed out") from exc
+                    raise PlanningNetworkError("Plota request failed") from exc
                 self.sleep(2**attempt)
             except (json.JSONDecodeError, ValueError) as exc:
-                raise PlanningProviderError("Plota returned invalid JSON") from exc
+                raise PlanningMalformedResponseError(
+                    "Plota returned invalid JSON"
+                ) from exc
         raise PlanningProviderError("Plota request failed")
 
     def _page(self, params: dict[str, Any]) -> dict[str, Any]:
         payload = self._get("applications", params)
         if not isinstance(payload.get("data"), list):
-            raise PlanningProviderError("Plota response has an invalid shape")
+            raise PlanningMalformedResponseError("Plota response has an invalid shape")
         return payload
+
+    def application_by_id(self, application_id: str) -> PlanningRecord:
+        """Retrieve a known Plota application by its stable provider identifier."""
+        provider_id = str(application_id or "").strip()
+        if not provider_id or not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", provider_id):
+            raise ValueError("invalid Plota application id")
+        payload = self._get(f"applications/{provider_id}", {"include_contact": "false"})
+        data = payload.get("data")
+        if not isinstance(data, dict):
+            raise PlanningMalformedResponseError(
+                "Plota application response has an invalid shape"
+            )
+        try:
+            return normalize_plota_record(data, self.base_url)
+        except (TypeError, ValueError) as exc:
+            raise PlanningMalformedResponseError(
+                "Plota application response has an invalid record"
+            ) from exc
 
     def applications(self, query: PlanningQuery) -> Iterator[PlanningRecord]:
         cursor: str | None = None
@@ -358,7 +423,7 @@ class PlotaProvider:
         query_value = str(reference).strip()
         params: dict[str, Any] = {
             "nation": "england",
-            "q": query_value,
+            "reference": query_value,
             "limit": min(max(int(limit), 1), 10),
             "include_contact": "false",
         }
@@ -399,7 +464,9 @@ class PlotaProvider:
         )
         data = payload.get("data")
         if not isinstance(data, dict) or not isinstance(data.get("applications"), list):
-            raise PlanningProviderError("Plota associated response has an invalid shape")
+            raise PlanningMalformedResponseError(
+                "Plota associated response has an invalid shape"
+            )
         bounded_limit = min(max(int(limit), 1), 10)
         rows = data["applications"][:bounded_limit]
         matches: list[PlanningRecord] = []
