@@ -1849,3 +1849,13 @@ Paid-pilot activation check (2026-09-28):
   provider, CareProspect, watcher, publication or queue state changed. The next safe increment requires more
   reviewed examples or an independently verified, narrowly scoped semantic cohort rather than relaxing the
   precision threshold.
+- MCP v2 introduces a narrowly scoped, OAuth-gated admin-write tranche alongside the existing read tools.
+  `signalhub-mcp/admin` is separate from `signalhub-mcp/read`; read-only credentials neither see nor execute
+  the five write tools. The initial operations are single-target `review_signal`, `resolve_match_review`,
+  `resolve_needs_attention` (bounded existing evidence recalculation only), `recalculate_opportunity`, and
+  `retry_planning_watch` (one existing failed watch run only). Each requires an explicit reason, validates
+  current state, uses the existing repository/service path, records both MCP request and admin audit records,
+  and returns concise before/after state. Publication, withdrawal, arbitrary linking, bulk operations, provider
+  search and automation switches remain absent. The planning-watch retry only queues a bounded existing exact
+  identity through the ordinary worker and retains existing quota controls. Production rollout remains gated on
+  a fresh OAuth authorization granting the new admin scope and harmless tools/list verification.

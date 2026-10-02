@@ -1,6 +1,7 @@
 locals {
   mcp_resource_url       = "${aws_apigatewayv2_api.http.api_endpoint}/mcp"
   mcp_read_scope         = "signalhub-mcp/read"
+  mcp_admin_scope        = "signalhub-mcp/admin"
   mcp_oauth_domain       = "${local.name_prefix}-mcp-${data.aws_caller_identity.current.account_id}"
   mcp_oauth_callback_url = "${aws_apigatewayv2_api.http.api_endpoint}/oauth/callback"
 }
@@ -17,6 +18,10 @@ resource "aws_cognito_resource_server" "mcp" {
   scope {
     scope_name        = "read"
     scope_description = "Read-only SignalHub administration and operations"
+  }
+  scope {
+    scope_name        = "admin"
+    scope_description = "Narrow, audited SignalHub MCP administration actions"
   }
 }
 
@@ -42,7 +47,7 @@ resource "aws_cognito_user_pool_client" "mcp_chatgpt" {
   supported_identity_providers         = ["COGNITO"]
   allowed_oauth_flows_user_pool_client = true
   allowed_oauth_flows                  = ["code"]
-  allowed_oauth_scopes                 = ["openid", "email", local.mcp_read_scope]
+  allowed_oauth_scopes                 = ["openid", "email", local.mcp_read_scope, local.mcp_admin_scope]
   callback_urls                        = distinct(concat(var.mcp_oauth_callback_urls, [local.mcp_oauth_callback_url]))
   access_token_validity                = 60
   id_token_validity                    = 60
@@ -132,8 +137,8 @@ resource "aws_iam_role_policy_attachment" "mcp_vpc" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole"
 }
 
-resource "aws_iam_role_policy" "mcp_readonly" {
-  name = "${local.name_prefix}-mcp-readonly"
+resource "aws_iam_role_policy" "mcp_scoped" {
+  name = "${local.name_prefix}-mcp-scoped"
   role = aws_iam_role.mcp.id
   policy = jsonencode({
     Version = "2012-10-17"
@@ -150,6 +155,12 @@ resource "aws_iam_role_policy" "mcp_readonly" {
           aws_dynamodb_table.source_runs.arn,
           aws_dynamodb_table.mcp_oauth_transactions.arn,
         ]
+      }
+      ,
+      {
+        Effect   = "Allow"
+        Action   = ["sqs:SendMessage"]
+        Resource = [aws_sqs_queue.planning_manual_runs.arn]
       }
     ]
   })
@@ -219,6 +230,7 @@ resource "aws_lambda_function" "mcp" {
       MCP_USER_CLIENT_ID                = aws_cognito_user_pool_client.mcp_chatgpt.id
       MCP_SERVICE_CLIENT_ID             = aws_cognito_user_pool_client.mcp_service.id
       MCP_RATE_LIMIT_PER_MINUTE         = "60"
+      PLANNING_MANUAL_RUN_QUEUE_URL     = aws_sqs_queue.planning_manual_runs.url
       SOURCE_RUNS_TABLE_NAME            = aws_dynamodb_table.source_runs.name
     }
   }

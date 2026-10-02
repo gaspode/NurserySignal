@@ -1486,13 +1486,23 @@ def reprocess_recruitment_signals(
     return {"operation_id": str(operation_id), **details}
 
 
-def review_signal(settings: Settings, signal_id: str, status: str, reviewer: str | None) -> bool:
+def review_signal(
+    settings: Settings,
+    signal_id: str,
+    status: str,
+    reviewer: str | None,
+    *,
+    pending_only: bool = False,
+) -> bool:
+    if status not in {"APPROVED", "REJECTED"}:
+        raise ValueError("invalid_review_status")
     with connection(settings) as conn:
+        pending_guard = " AND review_status = 'PENDING'" if pending_only else ""
         row = conn.execute(
-            """
+            f"""
             UPDATE signal_enrichments
             SET review_status = %s, reviewed_by = %s, reviewed_at = now(), updated_at = now()
-            WHERE raw_signal_id = %s
+            WHERE raw_signal_id = %s {pending_guard}
             RETURNING id
             """,
             (status, reviewer, signal_id),

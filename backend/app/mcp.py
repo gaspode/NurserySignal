@@ -32,6 +32,10 @@ from app.repository import (
     list_opportunities,
     list_signals,
     opportunity_detail,
+    queue_due_care_planning_watches,
+    recalculate_opportunity_creation,
+    resolve_match_review,
+    review_signal,
     signal_detail,
 )
 from app.source_runs import list_runs
@@ -41,6 +45,7 @@ logger = logging.getLogger(__name__)
 SERVER_VERSION = "signalhub-mcp-v1"
 SCHEMA_VERSION = "signalhub-mcp-tools-v1"
 READ_SCOPE = "signalhub-mcp/read"
+ADMIN_SCOPE = "signalhub-mcp/admin"
 PROTOCOL_VERSION = "2025-06-18"
 DEFAULT_LIMIT = 20
 MAX_LIMIT = 100
@@ -252,6 +257,79 @@ for _tool in TOOLS:
     }
     _tool["securitySchemes"] = [{"type": "oauth2", "scopes": [READ_SCOPE]}]
     _tool["_meta"] = {"securitySchemes": [{"type": "oauth2", "scopes": [READ_SCOPE]}]}
+
+WRITE_TOOLS: list[dict[str, Any]] = [
+    {
+        "name": "review_signal",
+        "description": "Approve or reject exactly one PENDING signal after inspecting it. This is an audited human-equivalent review decision and may affect downstream matching; never use it for a non-pending signal.",
+        "inputSchema": _schema(
+            {
+                "signal_id": {"type": "string", "format": "uuid"},
+                "decision": {"type": "string", "enum": ["APPROVE", "REJECT"]},
+                "reason": {"type": "string", "minLength": 3, "maxLength": 1000},
+                "admin_note": {"type": "string", "maxLength": 2000},
+            },
+            ["signal_id", "decision", "reason"],
+        ),
+    },
+    {
+        "name": "resolve_match_review",
+        "description": "Resolve exactly one current match-review suggestion as LINK or REJECT. Read the signal and opportunity first; it cannot create arbitrary relationships.",
+        "inputSchema": _schema(
+            {
+                "match_review_id": {"type": "string", "format": "uuid"},
+                "action": {"type": "string", "enum": ["LINK", "REJECT"]},
+                "reason": {"type": "string", "minLength": 3, "maxLength": 1000},
+            },
+            ["match_review_id", "action", "reason"],
+        ),
+    },
+    {
+        "name": "recalculate_opportunity",
+        "description": "Run the existing bounded recalculation for exactly one opportunity after inspecting its evidence. It refuses manually protected opportunities and never performs a bulk recalculation.",
+        "inputSchema": _schema(
+            {
+                "opportunity_id": {"type": "string", "format": "uuid"},
+                "reason": {"type": "string", "minLength": 3, "maxLength": 1000},
+            },
+            ["opportunity_id", "reason"],
+        ),
+    },
+    {
+        "name": "resolve_needs_attention",
+        "description": "Apply the named existing evidence recalculation resolution to exactly one NEEDS_ATTENTION opportunity. Query get_needs_attention and get_opportunity first; protected, published, watched, or manually touched records are refused.",
+        "inputSchema": _schema(
+            {
+                "opportunity_id": {"type": "string", "format": "uuid"},
+                "expected_category": {"type": "string"},
+                "action": {"type": "string", "enum": ["RECALCULATE_EVIDENCE"]},
+                "reason": {"type": "string", "minLength": 3, "maxLength": 1000},
+            },
+            ["opportunity_id", "expected_category", "action", "reason"],
+        ),
+    },
+    {
+        "name": "retry_planning_watch",
+        "description": "Queue one failed Planning watcher run for its existing exact application identity. Read the watch first. It respects enabled state and existing quota limits; it does not perform arbitrary provider searches.",
+        "inputSchema": _schema(
+            {
+                "watch_id": {"type": "string", "format": "uuid"},
+                "reason": {"type": "string", "minLength": 3, "maxLength": 1000},
+            },
+            ["watch_id", "reason"],
+        ),
+    },
+]
+for _tool in WRITE_TOOLS:
+    _tool["outputSchema"] = {"type": "object", "additionalProperties": True}
+    _tool["annotations"] = {
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    }
+    _tool["securitySchemes"] = [{"type": "oauth2", "scopes": [READ_SCOPE, ADMIN_SCOPE]}]
+    _tool["_meta"] = {"securitySchemes": [{"type": "oauth2", "scopes": [READ_SCOPE, ADMIN_SCOPE]}]}
 
 
 def _json_default(value: Any) -> str | float:
@@ -824,6 +902,217 @@ def _tool_recent(settings: Settings, args: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _write_actor(args: dict[str, Any]) -> str:
+    return f"mcp:{str(args.get('_mcp_actor') or 'unknown')[:180]}"
+
+
+def _write_audit(
+    settings: Settings, action: str, args: dict[str, Any], details: dict[str, Any]
+) -> str:
+    with connection(settings) as conn:
+        row = conn.execute(
+            """INSERT INTO admin_audit_events (action, actor, target_type, target_count, details)
+               VALUES (%s, %s, %s, 1, %s) RETURNING id""",
+            (
+                action,
+                _write_actor(args),
+                "mcp_admin_action",
+                Jsonb(
+                    {"reason": args.get("reason"), "admin_note": args.get("admin_note"), **details}
+                ),
+            ),
+        ).fetchone()
+        conn.commit()
+    return str(row[0])
+
+
+def _tool_review_signal(settings: Settings, args: dict[str, Any]) -> dict[str, Any]:
+    signal_id = _uuid(args.get("signal_id"), "signal_id")
+    desired = {"APPROVE": "APPROVED", "REJECT": "REJECTED"}.get(str(args.get("decision")))
+    if not desired:
+        raise MCPError("invalid_argument", "decision must be APPROVE or REJECT")
+    with connection(settings) as conn:
+        row = conn.execute(
+            "SELECT review_status FROM signal_enrichments WHERE raw_signal_id = %s FOR UPDATE",
+            (signal_id,),
+        ).fetchone()
+        if not row:
+            raise MCPError("not_found", "Signal enrichment not found", rpc_code=-32004)
+        if row[0] != "PENDING":
+            if row[0] == desired:
+                return {
+                    "signal_id": signal_id,
+                    "prior_review_state": row[0],
+                    "resulting_review_state": row[0],
+                    "idempotent": True,
+                    "downstream_effects": {"recalculation": "not_required"},
+                }
+            raise MCPError("conflict", "Signal is no longer pending", rpc_code=-32009)
+        conn.rollback()
+    if not review_signal(settings, signal_id, desired, _write_actor(args), pending_only=True):
+        raise MCPError("conflict", "Signal review state changed before update", rpc_code=-32009)
+    audit_id = _write_audit(
+        settings, "mcp_review_signal", args, {"signal_id": signal_id, "decision": desired}
+    )
+    return {
+        "signal_id": signal_id,
+        "prior_review_state": "PENDING",
+        "resulting_review_state": desired,
+        "idempotent": False,
+        "downstream_effects": {
+            "review_path": "existing_admin_review",
+            "opportunity_recalculation": "not_automatic",
+        },
+        "audit_event_id": audit_id,
+    }
+
+
+def _tool_match_review(settings: Settings, args: dict[str, Any]) -> dict[str, Any]:
+    review_id = _uuid(args.get("match_review_id"), "match_review_id")
+    action = str(args.get("action") or "").lower()
+    if action not in {"link", "reject"}:
+        raise MCPError("invalid_argument", "action must be LINK or REJECT")
+    try:
+        result = resolve_match_review(settings, review_id, action, _write_actor(args))
+    except ValueError as exc:
+        if str(exc) == "match_review_not_found":
+            raise MCPError("not_found", "Match review not found", rpc_code=-32004) from exc
+        raise MCPError("conflict", str(exc), rpc_code=-32009) from exc
+    if result.get("status") not in {"LINKED", "REJECTED"}:
+        raise MCPError("conflict", "Match review is not current", rpc_code=-32009)
+    if "signal_id" not in result:
+        expected = "LINKED" if action == "link" else "REJECTED"
+        if result["status"] == expected:
+            return {
+                "match_review_id": review_id,
+                "action": action.upper(),
+                "after_relationship_state": expected,
+                "idempotent": True,
+            }
+        raise MCPError("conflict", "Match review was resolved differently", rpc_code=-32009)
+    audit_id = _write_audit(
+        settings, "mcp_resolve_match_review", args, {"match_review_id": review_id, "action": action}
+    )
+    return {
+        "match_review_id": review_id,
+        "action": action.upper(),
+        "before_relationship_state": "PENDING_REVIEW",
+        "after_relationship_state": result.get("status"),
+        "signal_id": result.get("signal_id"),
+        "opportunity_id": result.get("opportunity_id"),
+        "audit_event_id": audit_id,
+    }
+
+
+def _single_opportunity_recalculation(
+    settings: Settings, args: dict[str, Any], *, expected_category: str | None = None
+) -> dict[str, Any]:
+    opportunity_id = _uuid(args.get("opportunity_id"), "opportunity_id")
+    detail = opportunity_detail(settings, opportunity_id)
+    if not detail:
+        raise MCPError("not_found", "Opportunity not found", rpc_code=-32004)
+    if detail.get("publication_status") != "DRAFT" or detail.get("publication_automation_blocked"):
+        raise MCPError(
+            "conflict",
+            "Published or automation-blocked opportunity cannot be recalculated by MCP",
+            rpc_code=-32009,
+        )
+    if expected_category:
+        policy = _policy_map(settings).get(opportunity_id, {})
+        if policy.get("hygiene_category") != expected_category:
+            raise MCPError(
+                "conflict",
+                "Opportunity is no longer in the expected Needs Attention category",
+                rpc_code=-32009,
+            )
+    signal_ids = [
+        str(item.get("id"))
+        for item in detail.get("signals", [])
+        if item.get("id") and item.get("relationship_status") == "ACTIVE"
+    ]
+    if not signal_ids or len(signal_ids) > 25:
+        raise MCPError(
+            "conflict",
+            "Opportunity does not have a safe bounded active-evidence set",
+            rpc_code=-32009,
+        )
+    result = recalculate_opportunity_creation(
+        settings,
+        actor=_write_actor(args),
+        limit=len(signal_ids),
+        signal_ids=signal_ids,
+        vertical=str(detail.get("vertical") or "ALL"),
+    )
+    audit_id = _write_audit(
+        settings,
+        "mcp_recalculate_opportunity",
+        args,
+        {"opportunity_id": opportunity_id, "selected_signal_count": len(signal_ids)},
+    )
+    return {
+        "opportunity_id": opportunity_id,
+        "prior_state": {
+            "publication_state": detail.get("publication_status"),
+            "lifecycle": detail.get("customer_lifecycle_stage"),
+            "signal_count": len(signal_ids),
+        },
+        "recalculation_outcome": result,
+        "resulting_state": {"recalculated": True},
+        "audit_event_id": audit_id,
+    }
+
+
+def _tool_recalculate_opportunity(settings: Settings, args: dict[str, Any]) -> dict[str, Any]:
+    return _single_opportunity_recalculation(settings, args)
+
+
+def _tool_resolve_needs_attention(settings: Settings, args: dict[str, Any]) -> dict[str, Any]:
+    if args.get("action") != "RECALCULATE_EVIDENCE":
+        raise MCPError("invalid_argument", "Unsupported Needs Attention action")
+    result = _single_opportunity_recalculation(
+        settings, args, expected_category=str(args.get("expected_category"))
+    )
+    result.update(
+        {
+            "action_applied": "RECALCULATE_EVIDENCE",
+            "prior_category": args.get("expected_category"),
+            "resulting_category": "recomputed",
+        }
+    )
+    return result
+
+
+def _tool_retry_planning_watch(settings: Settings, args: dict[str, Any]) -> dict[str, Any]:
+    watch_id = _uuid(args.get("watch_id"), "watch_id")
+    with connection(settings) as conn:
+        row = conn.execute(
+            """SELECT id FROM planning_lifecycle_watch_runs WHERE watch_id=%s AND status IN ('FAILED','RATE_LIMITED','QUEUE_FAILED') ORDER BY created_at DESC LIMIT 1""",
+            (watch_id,),
+        ).fetchone()
+    if not row:
+        raise MCPError("conflict", "Watch has no retryable failed run", rpc_code=-32009)
+    result = queue_due_care_planning_watches(settings, max_due=1, retry_run_ids=[str(row[0])])
+    if int(result.get("selected") or 0) > 1:
+        raise MCPError(
+            "internal_error", "Watcher retry selection exceeded single-watch bound", rpc_code=-32603
+        )
+    audit_id = _write_audit(
+        settings,
+        "mcp_retry_planning_watch",
+        args,
+        {"watch_id": watch_id, "queued": result.get("queued")},
+    )
+    return {
+        "watch_id": watch_id,
+        "previous_watcher_state": "FAILED",
+        "resulting_watcher_state": "QUEUED" if result.get("queued") else "NOT_QUEUED",
+        "provider_request_count": 0,
+        "lifecycle_change": None,
+        "queue_result": result,
+        "audit_event_id": audit_id,
+    }
+
+
 HANDLERS: dict[str, Callable[[Settings, dict[str, Any]], dict[str, Any]]] = {
     "get_operations_summary": _tool_operations,
     "search_signals": _tool_search_signals,
@@ -835,6 +1124,11 @@ HANDLERS: dict[str, Callable[[Settings, dict[str, Any]], dict[str, Any]]] = {
     "get_source_status": _tool_source_status,
     "get_automation_status": _tool_automation,
     "get_recent_changes": _tool_recent,
+    "review_signal": _tool_review_signal,
+    "resolve_match_review": _tool_match_review,
+    "resolve_needs_attention": _tool_resolve_needs_attention,
+    "recalculate_opportunity": _tool_recalculate_opportunity,
+    "retry_planning_watch": _tool_retry_planning_watch,
 }
 
 
@@ -867,13 +1161,9 @@ def _decode_access_token(token: str, settings: Settings) -> dict[str, Any]:
                 # dedicated app client is additionally constrained by the MCP
                 # scope and administrator group in `_authenticate`.
                 if not is_user_client:
-                    raise MCPError(
-                        "unauthorized", "MCP token audience is invalid", rpc_code=-32001
-                    )
+                    raise MCPError("unauthorized", "MCP token audience is invalid", rpc_code=-32001)
             elif audience != settings.mcp_resource_url:
-                raise MCPError(
-                    "unauthorized", "MCP token audience is invalid", rpc_code=-32001
-                )
+                raise MCPError("unauthorized", "MCP token audience is invalid", rpc_code=-32001)
         issuer = settings.mcp_token_issuer.rstrip("/")
         if settings.mcp_token_jwks:
             try:
@@ -900,9 +1190,7 @@ def _decode_access_token(token: str, settings: Settings) -> dict[str, Any]:
             algorithms=["RS256"],
             issuer=issuer,
             audience=(
-                settings.mcp_resource_url
-                if not is_service and audience is not None
-                else None
+                settings.mcp_resource_url if not is_service and audience is not None else None
             ),
             options=options,
         )
@@ -945,6 +1233,11 @@ def _authenticate(event: dict[str, Any], settings: Settings) -> dict[str, Any]:
     }
 
 
+def _tool_catalog(scopes: set[str]) -> list[dict[str, Any]]:
+    """Hide write tools completely from read-only MCP credentials."""
+    return TOOLS + (WRITE_TOOLS if ADMIN_SCOPE in scopes else [])
+
+
 def _claim_groups(claims: dict[str, Any]) -> set[str]:
     values = claims.get("cognito:groups") or ""
     if isinstance(values, str):
@@ -956,9 +1249,7 @@ def _oauth_grant_key(token: str) -> str:
     return f"token#{hashlib.sha256(token.encode()).hexdigest()}"
 
 
-def _store_oauth_admin_grant(
-    token: str, claims: dict[str, Any], settings: Settings
-) -> None:
+def _store_oauth_admin_grant(token: str, claims: dict[str, Any], settings: Settings) -> None:
     if not settings.mcp_oauth_transactions_table_name:
         raise MCPError("unavailable", "OAuth grant store is not configured", rpc_code=-32003)
     expires_at = min(int(claims.get("exp") or 0), int(time.time()) + 3_600)
@@ -979,9 +1270,7 @@ def _store_oauth_admin_grant(
     )
 
 
-def _has_oauth_admin_grant(
-    token: str, claims: dict[str, Any], settings: Settings
-) -> bool:
+def _has_oauth_admin_grant(token: str, claims: dict[str, Any], settings: Settings) -> bool:
     if not settings.mcp_oauth_transactions_table_name:
         return False
     try:
@@ -1005,9 +1294,7 @@ def _has_oauth_admin_grant(
     )
 
 
-def _authoritative_user_groups(
-    claims: dict[str, Any], settings: Settings
-) -> set[str]:
+def _authoritative_user_groups(claims: dict[str, Any], settings: Settings) -> set[str]:
     if not settings.cognito_user_pool_id:
         raise MCPError("unavailable", "Cognito user pool is not configured", rpc_code=-32003)
     username = str(claims.get("username") or claims.get("sub") or "")
@@ -1047,7 +1334,7 @@ def protected_resource_metadata(settings: Settings) -> dict[str, Any]:
     return {
         "resource": settings.mcp_resource_url,
         "authorization_servers": [settings.mcp_oauth_issuer],
-        "scopes_supported": [READ_SCOPE],
+        "scopes_supported": [READ_SCOPE, ADMIN_SCOPE],
         "bearer_methods_supported": ["header"],
         "resource_documentation": f"{settings.mcp_resource_url}/capabilities",
     }
@@ -1066,7 +1353,7 @@ def authorization_server_metadata(settings: Settings) -> dict[str, Any]:
         "code_challenge_methods_supported": ["S256"],
         "token_endpoint_auth_methods_supported": ["none", "private_key_jwt"],
         "token_endpoint_auth_signing_alg_values_supported": ["RS256"],
-        "scopes_supported": [READ_SCOPE],
+        "scopes_supported": [READ_SCOPE, ADMIN_SCOPE],
         "client_id_metadata_document_supported": True,
         "authorization_response_iss_parameter_supported": True,
     }
@@ -1103,7 +1390,7 @@ def _start_audit(
             """INSERT INTO mcp_request_audit
                  (client_id, scope, tool_name, argument_metadata)
                VALUES (%s, %s, %s, %s) RETURNING id""",
-            (client["client_id"], READ_SCOPE, tool, Jsonb(metadata)),
+            (client["client_id"], " ".join(sorted(client["scopes"])), tool, Jsonb(metadata)),
         ).fetchone()
         conn.commit()
     return str(row[0])
@@ -1131,14 +1418,15 @@ def capabilities(settings: Settings) -> dict[str, Any]:
         "server_version": SERVER_VERSION,
         "schema_version": SCHEMA_VERSION,
         "environment": settings.environment,
-        "read_only": True,
+        "read_only": False,
         "required_scope": READ_SCOPE,
+        "write_scope": ADMIN_SCOPE,
         "authentication": "OAuth 2.1 CIMD authorization code + PKCE or scoped service token",
         "authorization_server": settings.mcp_oauth_issuer,
         "client_identification": "CIMD",
         "chatgpt_client_id": CHATGPT_CIMD_URL,
         "redirect_uri": CHATGPT_REDIRECT_URI,
-        "tools": [tool["name"] for tool in TOOLS],
+        "tools": [tool["name"] for tool in TOOLS + WRITE_TOOLS],
     }
 
 
@@ -1221,9 +1509,7 @@ def _fetch_chatgpt_cimd(client_id: str = CHATGPT_CIMD_URL) -> dict[str, Any]:
     return metadata
 
 
-def _validate_chatgpt_client(
-    client_id: str, redirect_uri: str | None = None
-) -> dict[str, Any]:
+def _validate_chatgpt_client(client_id: str, redirect_uri: str | None = None) -> dict[str, Any]:
     metadata = _fetch_chatgpt_cimd(client_id)
     if redirect_uri is not None:
         parsed = urllib.parse.urlparse(redirect_uri)
@@ -1329,9 +1615,11 @@ def _validate_private_key_jwt(
     except PyJWTError:
         pass
     try:
-        key = _jwk_clients.setdefault(
-            jwks_uri, PyJWKClient(jwks_uri, cache_keys=True, timeout=5)
-        ).get_signing_key_from_jwt(assertion).key
+        key = (
+            _jwk_clients.setdefault(jwks_uri, PyJWKClient(jwks_uri, cache_keys=True, timeout=5))
+            .get_signing_key_from_jwt(assertion)
+            .key
+        )
         claims = jwt.decode(
             assertion,
             key,
@@ -1343,8 +1631,7 @@ def _validate_private_key_jwt(
     except (PyJWKClientError, PyJWTError) as exc:
         diagnostic_audience = diagnostic_claims.get("aud")
         audience_matches = diagnostic_audience == token_endpoint or (
-            isinstance(diagnostic_audience, list)
-            and token_endpoint in diagnostic_audience
+            isinstance(diagnostic_audience, list) and token_endpoint in diagnostic_audience
         )
         logger.warning(
             "mcp_oauth_client_assertion_rejected client_id=%s alg=%s claim_keys=%s "
@@ -1384,23 +1671,17 @@ def _validate_token_client(args: dict[str, str], settings: Settings) -> str:
     advertised_methods = metadata.get("token_endpoint_auth_methods_supported")
     if isinstance(advertised_methods, list):
         auth_methods = {
-            str(method)
-            for method in advertised_methods
-            if method in {"none", "private_key_jwt"}
+            str(method) for method in advertised_methods if method in {"none", "private_key_jwt"}
         }
     else:
         legacy_method = str(metadata.get("token_endpoint_auth_method") or "none")
-        auth_methods = (
-            {legacy_method} if legacy_method in {"none", "private_key_jwt"} else set()
-        )
+        auth_methods = {legacy_method} if legacy_method in {"none", "private_key_jwt"} else set()
     if assertion:
         if (
             "private_key_jwt" not in auth_methods
             or args.get("client_assertion_type") != CLIENT_ASSERTION_TYPE
         ):
-            raise MCPError(
-                "unauthorized", "OAuth client authentication mismatch", rpc_code=-32001
-            )
+            raise MCPError("unauthorized", "OAuth client authentication mismatch", rpc_code=-32001)
         _validate_private_key_jwt(
             assertion,
             client_id=client_id,
@@ -1408,9 +1689,7 @@ def _validate_token_client(args: dict[str, str], settings: Settings) -> str:
             settings=settings,
         )
     elif "none" not in auth_methods or args.get("client_assertion_type"):
-        raise MCPError(
-            "unauthorized", "Unsupported OAuth client authentication", rpc_code=-32001
-        )
+        raise MCPError("unauthorized", "Unsupported OAuth client authentication", rpc_code=-32001)
     return client_id
 
 
@@ -1529,7 +1808,7 @@ def _oauth_authorize(event: dict[str, Any], settings: Settings) -> dict[str, Any
             "Code with PKCE S256 required",
         )
     scopes = set(args["scope"].split())
-    if READ_SCOPE not in scopes or scopes - {READ_SCOPE}:
+    if READ_SCOPE not in scopes or scopes - {READ_SCOPE, ADMIN_SCOPE}:
         return _oauth_error_redirect(
             settings,
             args["redirect_uri"],
@@ -1560,7 +1839,7 @@ def _oauth_authorize(event: dict[str, Any], settings: Settings) -> dict[str, Any
         "response_type": "code",
         "client_id": settings.mcp_user_client_id,
         "redirect_uri": settings.mcp_oauth_callback_url,
-        "scope": f"openid email {READ_SCOPE}",
+        "scope": " ".join(["openid", "email", *sorted(scopes)]),
         "state": transaction_state,
         "code_challenge": args["code_challenge"],
         "code_challenge_method": "S256",
@@ -1713,8 +1992,7 @@ def _oauth_token(event: dict[str, Any], settings: Settings) -> dict[str, Any]:
             "scope_present=%s error_code=%s error=%s",
             sorted(str(key) for key in diagnostic_claims),
             bool(diagnostic_header.get("kid")),
-            diagnostic_claims.get("iss")
-            == str(settings.mcp_token_issuer or "").rstrip("/"),
+            diagnostic_claims.get("iss") == str(settings.mcp_token_issuer or "").rstrip("/"),
             diagnostic_claims.get("aud") == settings.mcp_resource_url,
             diagnostic_claims.get("client_id") == settings.mcp_user_client_id,
             diagnostic_claims.get("token_use"),
@@ -1735,7 +2013,13 @@ def _oauth_token(event: dict[str, Any], settings: Settings) -> dict[str, Any]:
     # login. Expose only the scope that the MCP client requested and avoid
     # returning the provider ID token to the client.
     payload.pop("id_token", None)
-    payload["scope"] = READ_SCOPE
+    provider_scopes = set(str(claims.get("scope") or "").split())
+    granted_scopes = provider_scopes & {READ_SCOPE, ADMIN_SCOPE}
+    if READ_SCOPE not in granted_scopes:
+        raise MCPError(
+            "unauthorized", "MCP read scope missing from provider token", rpc_code=-32001
+        )
+    payload["scope"] = " ".join(sorted(granted_scopes))
     return _response(200, payload)
 
 
@@ -1814,17 +2098,16 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
                         "protocolVersion": PROTOCOL_VERSION,
                         "capabilities": {"tools": {"listChanged": False}},
                         "serverInfo": {"name": "SignalHub MCP", "version": SERVER_VERSION},
-                        "instructions": (
-                            "Read-only SignalHub administration. No tool can mutate "
-                            "business state or call providers."
-                        ),
+                        "instructions": "SignalHub administration. Write tools require signalhub-mcp/admin and are bounded, audited, and single-target.",
                     },
                 ),
             )
         if rpc_method == "notifications/initialized":
             return {"statusCode": 202, "headers": {"cache-control": "no-store"}, "body": ""}
         if rpc_method == "tools/list":
-            return _response(200, _rpc_result(request_id, {"tools": TOOLS}))
+            return _response(
+                200, _rpc_result(request_id, {"tools": _tool_catalog(client["scopes"])})
+            )
         if rpc_method != "tools/call":
             raise MCPError("invalid_argument", "Method not found", rpc_code=-32601)
         params = request.get("params") or {}
@@ -1832,12 +2115,16 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         args = params.get("arguments") or {}
         if tool not in HANDLERS:
             raise MCPError("invalid_argument", "Unknown tool", rpc_code=-32601)
+        if tool in {item["name"] for item in WRITE_TOOLS} and ADMIN_SCOPE not in client["scopes"]:
+            raise MCPError("unauthorized", "MCP admin scope required", rpc_code=-32001)
         if not isinstance(args, dict):
             raise MCPError("invalid_argument", "Tool arguments must be an object")
         started = time.monotonic()
+        args = {**args, "_mcp_actor": client["client_id"]}
         audit_id = _start_audit(settings, client, tool, args)
         try:
             value = HANDLERS[tool](settings, args)
+            value["mcp_audit_id"] = audit_id
             _finish_audit(
                 settings,
                 audit_id,

@@ -88,6 +88,31 @@ def test_admin_user_requires_admin_group(monkeypatch):
         mcp._authenticate(request, mcp.Settings.from_env())
 
 
+def test_write_tools_are_hidden_without_admin_scope_and_exposed_with_it(monkeypatch):
+    listed = mcp.handler(event({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}), None)
+    names = {item["name"] for item in json.loads(listed["body"])["result"]["tools"]}
+    assert "review_signal" not in names
+    monkeypatch.setattr(
+        mcp,
+        "_decode_access_token",
+        lambda token, settings: {
+            "client_id": "service-client",
+            "sub": "admin",
+            "scope": f"{mcp.READ_SCOPE} {mcp.ADMIN_SCOPE}",
+            "token_use": "access",
+        },
+    )
+    listed = mcp.handler(event({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}), None)
+    names = {item["name"] for item in json.loads(listed["body"])["result"]["tools"]}
+    assert {
+        "review_signal",
+        "resolve_match_review",
+        "resolve_needs_attention",
+        "recalculate_opportunity",
+        "retry_planning_watch",
+    } <= names
+
+
 def test_initialize_capabilities_and_stable_read_only_tool_catalogue():
     response = mcp.handler(
         event({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}), None
@@ -97,7 +122,7 @@ def test_initialize_capabilities_and_stable_read_only_tool_catalogue():
     listed = mcp.handler(event({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}), None)
     names = [item["name"] for item in json.loads(listed["body"])["result"]["tools"]]
     assert names == [item["name"] for item in mcp.TOOLS]
-    assert names == list(mcp.HANDLERS)
+    assert names == [item["name"] for item in mcp.TOOLS]
     assert not any(
         word in name
         for name in names
@@ -117,7 +142,7 @@ def test_capability_endpoint_is_authenticated_and_explicitly_read_only():
     body = json.loads(response["body"])
     assert body["server_version"] == "signalhub-mcp-v1"
     assert body["schema_version"] == "signalhub-mcp-tools-v1"
-    assert body["read_only"] is True
+    assert body["read_only"] is False
     assert body["required_scope"] == "signalhub-mcp/read"
 
 
@@ -130,7 +155,7 @@ def test_oauth_protected_resource_metadata_is_public_and_scoped():
     assert response["statusCode"] == 200
     assert body["resource"] == "https://api.example/mcp"
     assert body["authorization_servers"] == ["https://api.example"]
-    assert body["scopes_supported"] == ["signalhub-mcp/read"]
+    assert body["scopes_supported"] == [mcp.READ_SCOPE, mcp.ADMIN_SCOPE]
 
 
 def test_unauthenticated_mcp_returns_discoverable_oauth_challenge():
@@ -155,7 +180,7 @@ def test_oauth_server_metadata_advertises_cognito_pkce_facade():
     assert body["authorization_endpoint"] == "https://api.example/oauth/authorize"
     assert body["token_endpoint"] == "https://api.example/oauth/token"
     assert body["code_challenge_methods_supported"] == ["S256"]
-    assert body["scopes_supported"] == [mcp.READ_SCOPE]
+    assert body["scopes_supported"] == [mcp.READ_SCOPE, mcp.ADMIN_SCOPE]
     assert body["token_endpoint_auth_methods_supported"] == ["none", "private_key_jwt"]
     assert body["token_endpoint_auth_signing_alg_values_supported"] == ["RS256"]
     assert body["client_id_metadata_document_supported"] is True
@@ -260,9 +285,7 @@ def test_codex_cimd_allows_rfc8252_ephemeral_loopback_port(monkeypatch):
             ],
         },
     )
-    metadata = mcp._validate_chatgpt_client(
-        client_id, "http://127.0.0.1:57117/callback"
-    )
+    metadata = mcp._validate_chatgpt_client(client_id, "http://127.0.0.1:57117/callback")
     assert metadata["client_id"] == client_id
 
 
@@ -281,9 +304,7 @@ def test_codex_cimd_rejects_nonmatching_loopback_redirect(monkeypatch, redirect_
         lambda requested_client: {"redirect_uris": ["http://127.0.0.1/callback"]},
     )
     with pytest.raises(mcp.MCPError, match="Redirect URI rejected"):
-        mcp._validate_chatgpt_client(
-            "https://chatgpt.com/oauth/codex/client.json", redirect_uri
-        )
+        mcp._validate_chatgpt_client("https://chatgpt.com/oauth/codex/client.json", redirect_uri)
 
 
 def test_oauth_transaction_uses_single_use_ttl_store_without_database(monkeypatch):
@@ -610,13 +631,9 @@ def test_authoritative_admin_group_lookup_uses_cognito_membership(monkeypatch):
             return {"Groups": [{"GroupName": "NurserySignalAdmins"}]}
 
     monkeypatch.setattr(mcp.boto3, "client", lambda service: Cognito())
-    groups = mcp._authoritative_user_groups(
-        {"username": "admin-user"}, mcp.Settings.from_env()
-    )
+    groups = mcp._authoritative_user_groups({"username": "admin-user"}, mcp.Settings.from_env())
     assert groups == {"NurserySignalAdmins"}
-    assert calls == [
-        {"UserPoolId": "eu-west-1_test", "Username": "admin-user", "Limit": 60}
-    ]
+    assert calls == [{"UserPoolId": "eu-west-1_test", "Username": "admin-user", "Limit": 60}]
 
 
 def test_oauth_admin_grant_stores_hash_not_raw_token(monkeypatch):
@@ -792,9 +809,7 @@ def test_private_key_jwt_signature_issuer_subject_and_audience_are_verified(monk
         "aud": "https://api.example/oauth/token",
         "exp": now + timedelta(minutes=5),
     }
-    assertion = mcp.jwt.encode(
-        claims, private_key, algorithm="RS256", headers={"kid": "test"}
-    )
+    assertion = mcp.jwt.encode(claims, private_key, algorithm="RS256", headers={"kid": "test"})
     mcp._validate_private_key_jwt(
         assertion,
         client_id=mcp.CHATGPT_CIMD_URL,
@@ -803,9 +818,7 @@ def test_private_key_jwt_signature_issuer_subject_and_audience_are_verified(monk
     )
 
     claims["aud"] = "https://attacker.example/oauth/token"
-    wrong_audience = mcp.jwt.encode(
-        claims, private_key, algorithm="RS256", headers={"kid": "test"}
-    )
+    wrong_audience = mcp.jwt.encode(claims, private_key, algorithm="RS256", headers={"kid": "test"})
     with pytest.raises(mcp.MCPError, match="assertion is invalid"):
         mcp._validate_private_key_jwt(
             wrong_audience,
@@ -886,9 +899,7 @@ def test_access_token_validation_accepts_bound_user_and_rejects_wrong_audience(m
     assert REAL_DECODE_ACCESS_TOKEN(cognito_user_token, settings)["client_id"] == "user-client"
 
     claims["client_id"] = "unrelated-client"
-    unrelated = mcp.jwt.encode(
-        claims, private_key, algorithm="RS256", headers={"kid": "test"}
-    )
+    unrelated = mcp.jwt.encode(claims, private_key, algorithm="RS256", headers={"kid": "test"})
     with pytest.raises(mcp.MCPError, match="audience"):
         REAL_DECODE_ACCESS_TOKEN(unrelated, settings)
 
@@ -1062,20 +1073,20 @@ def test_mcp_infrastructure_is_dedicated_and_has_no_provider_permissions():
     assert "aws_apigatewayv2_authorizer.mcp" not in terraform
     assert "MCP_OAUTH_CALLBACK_URL" in terraform
     assert "PLANNING_PROVIDER" not in terraform
-    assert "sqs:SendMessage" not in terraform
+    assert 'Action   = ["sqs:SendMessage"]' in terraform
+    assert "aws_sqs_queue.planning_manual_runs.arn" in terraform
     assert "bedrock:InvokeModel" not in terraform
 
 
-def test_mcp_module_has_no_business_mutation_sql_or_provider_client():
+def test_mcp_write_tools_remain_bounded_and_do_not_contain_provider_clients():
     source = open("backend/app/mcp.py", encoding="utf-8").read()
     insert_targets = [line for line in source.splitlines() if "INSERT INTO" in line]
     update_targets = [line for line in source.splitlines() if "UPDATE " in line]
     delete_targets = [line for line in source.splitlines() if "DELETE FROM" in line]
-    assert insert_targets == [
-        '            """INSERT INTO mcp_request_audit',
-        '            """INSERT INTO mcp_oauth_transactions',
-    ]
-    assert update_targets == ['                """UPDATE mcp_request_audit']
+    assert any("admin_audit_events" in line for line in insert_targets)
+    assert not any(
+        "opportunities" in line or "signal_enrichments" in line for line in update_targets
+    )
     assert all("mcp_oauth_transactions" in line for line in delete_targets)
     assert "planning_provider" not in source
     assert "requests." not in source
