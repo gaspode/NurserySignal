@@ -80,7 +80,11 @@ Current gate:
   token exchange and stores only a short-lived SHA-256-token-keyed grant. The MCP resource server
   accepts the claim-less token only when that grant matches its subject, dedicated app client,
   exact MCP resource, read scope, admin group and expiry. The original `/oauth2/authorize` PKCE flow
-  remains in place; customer-group tokens remain denied and no raw token is persisted.
+  remains in place; customer-group tokens remain denied and no raw token is persisted. Commit
+  `b703213` passed 616 backend tests, Ruff, Terraform validation/plan and CI run `36977031826`, then
+  deployed successfully in run `36977116730`; authenticated MCP initialize/tool discovery passed
+  production smoke run `36977430521`. The remaining gate is one fresh ChatGPT web account-link to
+  exercise the interactive administrator exchange end to end.
 - MCP v1 is deployed at the production `/mcp` endpoint with RFC 9728 protected-resource discovery,
   an application-owned 401 Bearer challenge and an OAuth 2.1 authorization-code/PKCE facade. The
   canonical resource is the exact `/mcp` URL and RFC 8707 resource binding is preserved through
