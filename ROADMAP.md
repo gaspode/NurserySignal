@@ -1715,3 +1715,14 @@ Paid-pilot activation check (2026-09-28):
   `36884914021`; activation commit `54fc36b` passed CI run `36885748508` and deployed in run `36885920050`.
   Backend (571), frontend (95), Ruff, frontend build and Terraform fmt/validate/plan/apply checks pass. Phase D2 is
   complete; no MCP/agent work was started.
+- CareProspect unsupported-orphan cleanup introduces the deterministic
+  `care-opportunity-orphan-cleanup-v1` policy and a bounded admin-only preview/apply operation.
+  It terminally rejects, rather than deletes, only unpublished system-owned shells with no
+  foundational evidence, customer save/publication state, automation block, active Planning
+  watch, pending match review or admin history. Rejected/terminal Planning evidence and
+  deterministically support-only old-taxonomy shells are eligible; ambiguous or newly supported
+  records remain for human review. Original signal relationships and creation provenance remain
+  attached, and the active relationship prevents recalculation from recreating the same invalid
+  shell. Each applied resolution records an audit event and is idempotent; terminal records leave
+  the actionable Needs Attention view while remaining inspectable in inventory/history. Production
+  preview/apply counts and deployment identifiers are pending the disabled-first rollout.

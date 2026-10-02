@@ -69,6 +69,7 @@ from app.repository import (
     bootstrap_care_opportunity_lifecycles,
     care_opportunity_hygiene_audit,
     care_opportunity_lifecycle_preview,
+    care_opportunity_orphan_cleanup,
     care_opportunity_semantic_drift_cleanup,
     care_planning_ai_approval_backlog,
     care_planning_fastpath_backlog,
@@ -388,6 +389,8 @@ def _admin_path(path: str) -> tuple[str, str | None]:
         return "opportunity-recalculate", None
     if path == "/admin/opportunities/hygiene-audit":
         return "opportunity-hygiene-audit", None
+    if path == "/admin/opportunities/orphan-cleanup":
+        return "opportunity-orphan-cleanup", None
     if path == "/admin/opportunities/lifecycle-preview":
         return "opportunity-lifecycle-preview", None
     if path == "/admin/opportunities/lifecycle-bootstrap":
@@ -553,6 +556,15 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             apply=bool(event.get("apply")),
             actor=str(event.get("actor") or "iam-care-opportunity-semantic-drift")[:200],
             limit=min(max(int(event.get("limit") or 25), 1), 25),
+        )
+    if event.get("operation") == "care_opportunity_orphan_cleanup" and not event.get(
+        "requestContext"
+    ):
+        return care_opportunity_orphan_cleanup(
+            settings,
+            apply=bool(event.get("apply")),
+            actor=str(event.get("actor") or "iam-care-opportunity-orphan-cleanup")[:200],
+            limit=min(max(int(event.get("limit") or 25), 1), 50),
         )
     if event.get("operation") == "public_authority_backfill" and not event.get("requestContext"):
         return public_authority_backfill(
@@ -1763,6 +1775,23 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                         publication_status=_query(event, "publication_status"),
                         q=_query(event, "q"),
                         view=_query(event, "view") or "inventory",
+                    ),
+                )
+            if action == "opportunity-orphan-cleanup" and method in {"GET", "POST"}:
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                payload = parse_json_payload(_raw_body(event)) if method == "POST" else {}
+                apply = method == "POST" and bool(payload.get("apply", False))
+                limit_value = payload.get("limit") if method == "POST" else _query(event, "limit")
+                actor = str(claims.get("sub") or claims.get("username") or "unknown")
+                return _response(
+                    200,
+                    care_opportunity_orphan_cleanup(
+                        settings,
+                        apply=apply,
+                        actor=actor,
+                        limit=min(max(int(limit_value or 25), 1), 50),
                     ),
                 )
             if action == "operations-summary" and method == "GET":

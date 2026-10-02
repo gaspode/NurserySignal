@@ -364,13 +364,15 @@ def operations_summary(settings: Settings) -> dict[str, Any]:
             "QA_HOLDOUT",
         }
     attention_count = sum(
-        hygiene_counts[name]
-        for name in (
+        item["hygiene"]["category"]
+        in {
             "NEEDS_INVESTIGATION",
             "UNSUPPORTED_ORPHAN_CANDIDATE",
             "DUPLICATE_CANDIDATE",
             "SUPERSEDED_CANDIDATE",
-        )
+        }
+        and item["opportunity"].get("review_status") != "REJECTED"
+        for item in decisions
     )
 
     queue_unavailable = _unavailable(

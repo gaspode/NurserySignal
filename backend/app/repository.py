@@ -91,6 +91,14 @@ from app.opportunity_hygiene import (
     filter_hygiene_items,
     opportunity_admin_touch_types,
 )
+from app.opportunity_orphan_cleanup import (
+    ALREADY_RESOLVED,
+    AUTO_RESOLVE,
+    summarize_orphan_cleanup,
+)
+from app.opportunity_orphan_cleanup import (
+    POLICY_VERSION as OPPORTUNITY_ORPHAN_CLEANUP_POLICY_VERSION,
+)
 from app.opportunity_semantic_drift import (
     POLICY_VERSION as OPPORTUNITY_SEMANTIC_DRIFT_POLICY_VERSION,
 )
@@ -8803,10 +8811,15 @@ def care_opportunity_hygiene_audit(
                    o.merged_into_opportunity_id, o.change_type, o.confidence_breakdown,
                    o.stage_reason, o.creation_reason, o.customer_title,
                    o.customer_summary, o.customer_published_by, o.customer_published_at,
+                   o.customer_withdrawn_at, o.customer_lifecycle_stage,
+                   o.publication_automation_blocked,
+                   o.publication_automation_provenance,
                    COALESCE(rel.relationships, '[]'::jsonb),
                    COALESCE(hist.actions, ARRAY[]::text[]),
                    COALESCE(audit.actions, ARRAY[]::text[]),
-                   COALESCE(matches.pending_count, 0)
+                   COALESCE(matches.pending_count, 0),
+                   COALESCE(saved.saved_count, 0),
+                   COALESCE(watches.enabled_count, 0)
             FROM opportunities o
             LEFT JOIN LATERAL (
                 SELECT jsonb_agg(jsonb_build_object(
@@ -8858,6 +8871,14 @@ def care_opportunity_hygiene_audit(
                 SELECT count(*) AS pending_count FROM opportunity_match_reviews mr
                 WHERE mr.opportunity_id = o.id AND mr.status = 'PENDING'
             ) matches ON TRUE
+            LEFT JOIN LATERAL (
+                SELECT count(*) AS saved_count FROM customer_saved_opportunities saved
+                WHERE saved.opportunity_id = o.id
+            ) saved ON TRUE
+            LEFT JOIN LATERAL (
+                SELECT count(*) AS enabled_count FROM planning_lifecycle_watches watch
+                WHERE watch.opportunity_id = o.id AND watch.enabled
+            ) watches ON TRUE
             WHERE o.vertical = 'CHILDRENS_HOME'
             ORDER BY o.created_at, o.id
             LIMIT 5000
@@ -8893,10 +8914,16 @@ def care_opportunity_hygiene_audit(
         "customer_summary",
         "customer_published_by",
         "customer_published_at",
+        "customer_withdrawn_at",
+        "customer_lifecycle_stage",
+        "publication_automation_blocked",
+        "publication_automation_provenance",
         "relationships",
         "history_actions",
         "audit_actions",
         "pending_match_reviews",
+        "customer_saved_count",
+        "enabled_planning_watches",
     )
     opportunities = [dict(zip(fields, row)) for row in rows]
     legacy_report = audit_opportunities(opportunities, legacy_support_semantics=True)
@@ -9137,6 +9164,177 @@ def care_opportunity_hygiene_audit(
         }
     )
     return report
+
+
+def care_opportunity_orphan_cleanup(
+    settings: Settings,
+    *,
+    apply: bool = False,
+    actor: str = "iam-care-opportunity-orphan-cleanup",
+    limit: int = 25,
+) -> dict[str, Any]:
+    """Preview or terminally resolve a bounded set of safe unsupported shells."""
+    bounded_limit = min(max(int(limit), 1), 50)
+    before = care_opportunity_hygiene_audit(
+        settings,
+        limit=250,
+        category="UNSUPPORTED_ORPHAN_CANDIDATE",
+        view="inventory",
+    )
+    attention_before = care_opportunity_hygiene_audit(
+        settings, limit=1, view="needs_attention"
+    )
+    # The authoritative audit can exceed one page; its orphan_candidates list is complete.
+    cohort = before["orphan_candidates"]
+    summary = summarize_orphan_cleanup(cohort)
+    eligible = [
+        decision for decision in summary["decisions"] if decision["outcome"] == AUTO_RESOLVE
+    ]
+    selected = eligible[:bounded_limit]
+    resolved = 0
+    skipped = 0
+    failures: list[dict[str, str]] = []
+    applied_ids: list[str] = []
+
+    if apply:
+        for decision in selected:
+            opportunity_id = str(UUID(decision["opportunity_id"]))
+            try:
+                with connection(settings) as conn:
+                    row = conn.execute(
+                        """SELECT review_status, publication_status, customer_published_at,
+                                  customer_withdrawn_at, customer_title, customer_summary,
+                                  publication_automation_blocked,
+                                  publication_automation_provenance, stage_reason
+                           FROM opportunities
+                           WHERE id = %s AND vertical = 'CHILDRENS_HOME'
+                           FOR UPDATE""",
+                        (opportunity_id,),
+                    ).fetchone()
+                    unsafe = (
+                        row is None
+                        or row[0] in {"REJECTED", "MERGED"}
+                        or row[1] != "DRAFT"
+                        or any(row[index] for index in (2, 3, 4, 5, 6, 7))
+                        or conn.execute(
+                            """SELECT EXISTS (
+                                   SELECT 1 FROM customer_saved_opportunities
+                                   WHERE opportunity_id = %s
+                               ) OR EXISTS (
+                                   SELECT 1 FROM planning_lifecycle_watches
+                                   WHERE opportunity_id = %s AND enabled
+                               ) OR EXISTS (
+                                   SELECT 1 FROM opportunity_match_reviews
+                                   WHERE opportunity_id = %s AND status = 'PENDING'
+                               ) OR EXISTS (
+                                   SELECT 1 FROM opportunity_signal_history
+                                   WHERE opportunity_id = %s AND action LIKE 'ADMIN%%'
+                               ) OR EXISTS (
+                                   SELECT 1 FROM opportunity_signals
+                                   WHERE opportunity_id = %s
+                                     AND (created_by <> 'SYSTEM' OR admin_override_by IS NOT NULL)
+                               )""",
+                            (
+                                opportunity_id,
+                                opportunity_id,
+                                opportunity_id,
+                                opportunity_id,
+                                opportunity_id,
+                            ),
+                        ).fetchone()[0]
+                    )
+                    if unsafe:
+                        skipped += 1
+                        conn.rollback()
+                        continue
+                    old_stage_reason = row[8]
+                    stage_reason = (
+                        "Automatically resolved unsupported opportunity shell; "
+                        f"{decision['root_cause']}."
+                    )
+                    updated = conn.execute(
+                        """UPDATE opportunities
+                           SET review_status = 'REJECTED', stage_reason = %s, updated_at = now()
+                           WHERE id = %s AND review_status NOT IN ('REJECTED', 'MERGED')
+                           RETURNING id""",
+                        (stage_reason, opportunity_id),
+                    ).fetchone()
+                    if not updated:
+                        skipped += 1
+                        conn.rollback()
+                        continue
+                    conn.execute(
+                        """INSERT INTO admin_audit_events
+                           (action, actor, target_type, target_count, details)
+                           VALUES ('opportunity_unsupported_orphan_resolved', %s,
+                                   'opportunity', 1, %s)""",
+                        (
+                            actor,
+                            Jsonb(
+                                {
+                                    "opportunity_id": opportunity_id,
+                                    "policy_version": OPPORTUNITY_ORPHAN_CLEANUP_POLICY_VERSION,
+                                    "root_cause": decision["root_cause"],
+                                    "old_review_status": row[0],
+                                    "new_review_status": "REJECTED",
+                                    "old_stage_reason": old_stage_reason,
+                                    "new_stage_reason": stage_reason,
+                                    "foundational_signal_count": decision[
+                                        "foundational_signal_count"
+                                    ],
+                                    "supporting_followup_count": decision[
+                                        "supporting_followup_count"
+                                    ],
+                                    "active_relationships_preserved": decision[
+                                        "active_relationships"
+                                    ],
+                                }
+                            ),
+                        ),
+                    )
+                    conn.commit()
+                    resolved += 1
+                    applied_ids.append(opportunity_id)
+            except Exception as exc:
+                failures.append(
+                    {
+                        "opportunity_id": opportunity_id,
+                        "error": type(exc).__name__,
+                    }
+                )
+
+    after = care_opportunity_hygiene_audit(
+        settings, limit=1, view="needs_attention"
+    ) if apply else None
+    return {
+        "policy_version": OPPORTUNITY_ORPHAN_CLEANUP_POLICY_VERSION,
+        "apply": apply,
+        "batch_limit": bounded_limit,
+        "candidate_count": summary["candidate_count"],
+        "root_cause_counts": summary["root_cause_counts"],
+        "auto_resolvable_count": len(eligible),
+        "preserved_manual_review_count": summary["outcome_counts"].get("PRESERVE", 0),
+        "already_resolved_count": summary["outcome_counts"].get(ALREADY_RESOLVED, 0),
+        "preservation_reason_counts": summary["preservation_reason_counts"],
+        "selected": len(selected),
+        "resolved": resolved,
+        "skipped": skipped,
+        "failed": len(failures),
+        "failures": failures,
+        "applied_opportunity_ids": applied_ids,
+        "sample_auto_resolvable": eligible[:10],
+        "sample_preserved": [
+            decision
+            for decision in summary["decisions"]
+            if decision["outcome"] == "PRESERVE"
+        ][:10],
+        "needs_attention_before": attention_before.get("filtered_total"),
+        "needs_attention_after": after.get("filtered_total") if after else None,
+        "publication_changes": 0,
+        "withdrawal_changes": 0,
+        "relationship_changes": 0,
+        "provider_requests": 0,
+    }
 
 
 def _care_semantic_drift_inventory(conn: Any) -> list[dict[str, Any]]:

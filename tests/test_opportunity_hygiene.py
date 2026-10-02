@@ -120,6 +120,17 @@ def test_system_semantic_drift_audit_is_not_a_manual_touch() -> None:
     assert report["items"][0]["admin_touch_types"] == []
 
 
+def test_system_orphan_resolution_audit_is_not_a_manual_touch_and_leaves_attention() -> None:
+    resolved = opportunity(
+        review_status="REJECTED",
+        relationships=[relation(review_status="REJECTED")],
+        audit_actions=["opportunity_unsupported_orphan_resolved"],
+    )
+    items = audit_opportunities([resolved])["items"]
+    assert items[0]["admin_touch_types"] == []
+    assert filter_hygiene_items(items, view="needs_attention") == []
+
+
 def test_hygiene_filters_and_publication_candidate_view_are_read_only() -> None:
     supported = opportunity(
         name="New children's home — Bristol BS1",

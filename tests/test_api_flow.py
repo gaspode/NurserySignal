@@ -1177,6 +1177,43 @@ def test_care_opportunity_hygiene_audit_is_admin_only_bounded_and_read_only(
     }
 
 
+def test_care_opportunity_orphan_cleanup_is_admin_only_bounded(monkeypatch) -> None:
+    captured = {}
+    monkeypatch.setattr(
+        "app.handler.care_opportunity_orphan_cleanup",
+        lambda settings, **kwargs: captured.update(kwargs) or {"resolved": 0},
+    )
+    denied = handler(
+        event(
+            "/admin/opportunities/orphan-cleanup",
+            "POST",
+            body=json.dumps({"apply": True}),
+            claims={"sub": "staff", "cognito:groups": ["Other"]},
+        ),
+        None,
+    )
+    assert denied["statusCode"] == 403
+    response = handler(
+        event(
+            "/admin/opportunities/orphan-cleanup",
+            "POST",
+            body=json.dumps({"apply": True, "limit": 999}),
+        ),
+        None,
+    )
+    assert response["statusCode"] == 200
+    assert captured["apply"] is True
+    assert captured["limit"] == 50
+
+    captured.clear()
+    response = handler(
+        event("/admin/opportunities/orphan-cleanup", query={"limit": "3"}), None
+    )
+    assert response["statusCode"] == 200
+    assert captured["apply"] is False
+    assert captured["limit"] == 3
+
+
 def test_care_opportunity_lifecycle_preview_is_admin_only_and_read_only(
     monkeypatch,
 ) -> None:

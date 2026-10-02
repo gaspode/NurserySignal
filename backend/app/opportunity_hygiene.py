@@ -73,7 +73,10 @@ def _touch_types(opportunity: dict[str, Any]) -> list[str]:
             touches.add("manual_link")
     for action in opportunity.get("audit_actions") or []:
         action = str(action).lower()
-        if action == "opportunity_semantic_drift_corrected":
+        if action in {
+            "opportunity_semantic_drift_corrected",
+            "opportunity_unsupported_orphan_resolved",
+        }:
             # This bounded system correction is provenance, not evidence that a
             # human deliberately curated or overrode the opportunity.
             continue
@@ -368,6 +371,25 @@ def audit_opportunities(
                     else None
                 ),
                 "warning": warning,
+                "customer_title": opportunity.get("customer_title"),
+                "customer_summary": opportunity.get("customer_summary"),
+                "customer_published_at": opportunity.get("customer_published_at"),
+                "customer_withdrawn_at": opportunity.get("customer_withdrawn_at"),
+                "customer_lifecycle_stage": opportunity.get("customer_lifecycle_stage"),
+                "publication_automation_blocked": bool(
+                    opportunity.get("publication_automation_blocked")
+                ),
+                "publication_automation_provenance": opportunity.get(
+                    "publication_automation_provenance"
+                )
+                or {},
+                "customer_saved_count": int(opportunity.get("customer_saved_count") or 0),
+                "enabled_planning_watches": int(
+                    opportunity.get("enabled_planning_watches") or 0
+                ),
+                "pending_match_reviews": int(
+                    opportunity.get("pending_match_reviews") or 0
+                ),
             }
         )
 
@@ -469,7 +491,10 @@ def filter_hygiene_items(
         if (view != "publication_candidates" or item["customer_readiness_candidate"])
         and (
             view != "needs_attention"
-            or item["category"] in attention_categories
+            or (
+                item.get("review_status") != "REJECTED"
+                and item["category"] in attention_categories
+            )
             or (
                 item.get("publication_status") == "PUBLISHED"
                 and bool(item.get("warning"))
