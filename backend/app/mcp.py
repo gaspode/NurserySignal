@@ -261,7 +261,10 @@ for _tool in TOOLS:
 WRITE_TOOLS: list[dict[str, Any]] = [
     {
         "name": "review_signal",
-        "description": "Approve or reject exactly one PENDING signal after inspecting it. This is an audited human-equivalent review decision and may affect downstream matching; never use it for a non-pending signal.",
+        "description": (
+            "Approve or reject exactly one PENDING signal after inspecting it. This is an "
+            "audited human-equivalent review decision; never use it for a non-pending signal."
+        ),
         "inputSchema": _schema(
             {
                 "signal_id": {"type": "string", "format": "uuid"},
@@ -274,7 +277,10 @@ WRITE_TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "resolve_match_review",
-        "description": "Resolve exactly one current match-review suggestion as LINK or REJECT. Read the signal and opportunity first; it cannot create arbitrary relationships.",
+        "description": (
+            "Resolve exactly one current match-review suggestion as LINK or REJECT. Read the "
+            "signal and opportunity first; it cannot create arbitrary relationships."
+        ),
         "inputSchema": _schema(
             {
                 "match_review_id": {"type": "string", "format": "uuid"},
@@ -286,7 +292,10 @@ WRITE_TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "recalculate_opportunity",
-        "description": "Run the existing bounded recalculation for exactly one opportunity after inspecting its evidence. It refuses manually protected opportunities and never performs a bulk recalculation.",
+        "description": (
+            "Run existing bounded recalculation for one opportunity after inspecting its evidence. "
+            "It refuses manually protected opportunities and never performs bulk recalculation."
+        ),
         "inputSchema": _schema(
             {
                 "opportunity_id": {"type": "string", "format": "uuid"},
@@ -297,7 +306,10 @@ WRITE_TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "resolve_needs_attention",
-        "description": "Apply the named existing evidence recalculation resolution to exactly one NEEDS_ATTENTION opportunity. Query get_needs_attention and get_opportunity first; protected, published, watched, or manually touched records are refused.",
+        "description": (
+            "Apply existing evidence recalculation to one NEEDS_ATTENTION opportunity. Query "
+            "details first; protected, published, watched, or manually touched records are refused."
+        ),
         "inputSchema": _schema(
             {
                 "opportunity_id": {"type": "string", "format": "uuid"},
@@ -310,7 +322,10 @@ WRITE_TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "retry_planning_watch",
-        "description": "Queue one failed Planning watcher run for its existing exact application identity. Read the watch first. It respects enabled state and existing quota limits; it does not perform arbitrary provider searches.",
+        "description": (
+            "Queue one failed Planning watcher run for its existing exact application identity. "
+            "It respects enabled state and quota limits; it does not search providers."
+        ),
         "inputSchema": _schema(
             {
                 "watch_id": {"type": "string", "format": "uuid"},
@@ -1086,7 +1101,9 @@ def _tool_retry_planning_watch(settings: Settings, args: dict[str, Any]) -> dict
     watch_id = _uuid(args.get("watch_id"), "watch_id")
     with connection(settings) as conn:
         row = conn.execute(
-            """SELECT id FROM planning_lifecycle_watch_runs WHERE watch_id=%s AND status IN ('FAILED','RATE_LIMITED','QUEUE_FAILED') ORDER BY created_at DESC LIMIT 1""",
+            """SELECT id FROM planning_lifecycle_watch_runs
+               WHERE watch_id = %s AND status IN ('FAILED', 'RATE_LIMITED', 'QUEUE_FAILED')
+               ORDER BY created_at DESC LIMIT 1""",
             (watch_id,),
         ).fetchone()
     if not row:
@@ -2098,7 +2115,10 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
                         "protocolVersion": PROTOCOL_VERSION,
                         "capabilities": {"tools": {"listChanged": False}},
                         "serverInfo": {"name": "SignalHub MCP", "version": SERVER_VERSION},
-                        "instructions": "SignalHub administration. Write tools require signalhub-mcp/admin and are bounded, audited, and single-target.",
+                        "instructions": (
+                            "SignalHub administration. Write tools require signalhub-mcp/admin "
+                            "and are bounded, audited, and single-target."
+                        ),
                     },
                 ),
             )
