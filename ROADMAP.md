@@ -1753,7 +1753,12 @@ Paid-pilot activation check (2026-09-28):
   inflate the actionable Needs Attention queue. Audit rows now expose preservation reason,
   recommended action, automation eligibility, blocking evidence and lifecycle/watch/publication
   context; the admin UI renders these fields. The four genuine investigations remain manual pending
-  review. A live wording defect found in the Ampthill record is fixed so “Certificate of Existing
+  review. The production v2 preview selected exactly fourteen safe STOPPED drafts (nine refused and
+  five withdrawn), preserved all three watched appeals, and used zero provider requests. Bounded
+  execution resolved all fourteen with zero skips/failures and no publication, withdrawal,
+  relationship or provider changes; the immediate repeat selected zero and wrote nothing. Actionable
+  Needs Attention is now four, comprising only the pending signal decisions. A live wording defect
+  found in the Ampthill record is fixed so “Certificate of Existing
   Lawful Development” deterministically maps to `LAWFULNESS_EXISTING` / support-only rather than a
   new opening. Deployment, bounded v2 preview/apply, production counts and queue health remain the
   current completion gate; no publication, withdrawal, watcher or collector policy is changed.

@@ -196,7 +196,12 @@ def _attention_context(
     }
     blocking_state: list[str] = []
 
-    if active_appeal_watch:
+    if opportunity.get("review_status") == "REJECTED":
+        preservation_reason = "SYSTEM_RESOLVED_HISTORY"
+        recommended_action = "NO_ACTION"
+        action_required = False
+        blocking_state = ["opportunity_terminally_resolved"]
+    elif active_appeal_watch:
         preservation_reason = "ACTIVE_APPEAL_WATCH"
         recommended_action = "MONITOR_AUTOMATICALLY"
         action_required = False

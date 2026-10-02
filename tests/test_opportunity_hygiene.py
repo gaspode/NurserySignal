@@ -129,6 +129,9 @@ def test_system_orphan_resolution_audit_is_not_a_manual_touch_and_leaves_attenti
     )
     items = audit_opportunities([resolved])["items"]
     assert items[0]["admin_touch_types"] == []
+    assert items[0]["preservation_reason"] == "SYSTEM_RESOLVED_HISTORY"
+    assert items[0]["recommended_action"] == "NO_ACTION"
+    assert items[0]["action_required"] is False
     assert filter_hygiene_items(items, view="needs_attention") == []
 
 
