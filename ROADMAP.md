@@ -1828,3 +1828,11 @@ Paid-pilot activation check (2026-09-28):
   cohorts retain human exceptions or ambiguous semantics and remain manual. Deployment and production preview
   pending. The first v1 preview was read-only and exposed a previously approved, not-yet-developed nursery
   boundary case; v2 excludes it and demolition-led wording. CareProspect remains unchanged.
+- `nursery-planning-extension-v2` is deployed and applied. The final preview found 18 exact candidates and
+  validated 11 comparable human approvals / 0 rejections; it approved 14 records and retained four stable
+  QA holdouts, with zero errors and a zero-write idempotency rerun. Nursery Planning pending fell from 380 to
+  367; manual-only fell from 306 to 295 and rule/AI disagreement from 74 to 72. Broad manual-only opening,
+  conversion, school, lawfulness, mixed-use, ancillary and procedural cohorts remain manual because their
+  historical labels include errors or their semantics are not safely homogeneous. CI `37045221518` and
+  `37045905259`, deployments `37045373570` and `37046044053`, passed. No provider, CareProspect,
+  lifecycle/publication/watcher/matching changes occurred.
