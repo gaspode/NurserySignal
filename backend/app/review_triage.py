@@ -22,6 +22,8 @@ NURSERY_PLANNING_LOSS_POLICY_VERSION = "nursery-planning-loss-v2"
 NURSERY_PLANNING_LOSS_QA_MODULUS = 10
 NURSERY_PLANNING_ARBORICULTURE_POLICY_VERSION = "nursery-planning-arboriculture-v1"
 NURSERY_PLANNING_ARBORICULTURE_QA_MODULUS = 10
+NURSERY_PLANNING_EXTENSION_POLICY_VERSION = "nursery-planning-extension-v1"
+NURSERY_PLANNING_EXTENSION_QA_MODULUS = 10
 
 _EXPLICIT_NURSERY_LOSS_RE = re.compile(
     # The source use must itself be the nursery. In particular, do not let a
@@ -48,6 +50,17 @@ _NURSERY_ARBORICULTURE_EXCLUSION_RE = re.compile(
     r"\b(?:condition|variation|pursuant|details|non[- ]material|amendment|"
     r"change\s+of\s+use|conversion|demolition|erection|extension|"
     r"new\s+(?:nursery|building))\b",
+    re.IGNORECASE,
+)
+_NURSERY_EXTENSION_RE = re.compile(
+    r"\b(?:extension|extend|enlargement)\b.{0,120}\b(?:to|of|for)\b.{0,80}"
+    r"\b(?:existing\s+)?(?:day\s+)?(?:children['’]s\s+)?(?:pre[ -]?school|nursery)\b",
+    re.IGNORECASE,
+)
+_NURSERY_EXTENSION_EXCLUSION_RE = re.compile(
+    r"\b(?:condition|variation|pursuant|details|non[- ]material|amendment|"
+    r"change\s+of\s+use|conversion|school|academy|college|classroom|"
+    r"children['’]s\s+home|care\s+home|mixed|flat)\b",
     re.IGNORECASE,
 )
 TRIAGE_BUCKETS = frozenset(
@@ -391,3 +404,35 @@ def nursery_arboriculture_disagreement_policy_outcome(
     return (
         "QA_HOLDOUT" if nursery_arboriculture_disagreement_qa_holdout(signal_id) else "AUTO_REJECT"
     )
+
+
+def nursery_extension_candidate(
+    *, vertical: str, source_type: str, review_status: str, title: str | None
+) -> bool:
+    """Recognise a standalone, explicit extension to an existing nursery.
+
+    This does not cover a new nursery, a conversion, a school scheme, or a
+    procedural record. Those remain for reviewer judgement.
+    """
+    text = str(title or "")
+    return (
+        vertical == "NURSERY"
+        and source_type == "planning"
+        and review_status == "PENDING"
+        and bool(_NURSERY_EXTENSION_RE.search(text))
+        and not _NURSERY_EXTENSION_EXCLUSION_RE.search(text)
+    )
+
+
+def nursery_extension_qa_holdout(signal_id: str) -> bool:
+    return UUID(str(signal_id)).int % NURSERY_PLANNING_EXTENSION_QA_MODULUS == 0
+
+
+def nursery_extension_policy_outcome(
+    *, signal_id: str, vertical: str, source_type: str, review_status: str, title: str | None
+) -> str:
+    if not nursery_extension_candidate(
+        vertical=vertical, source_type=source_type, review_status=review_status, title=title
+    ):
+        return "INELIGIBLE"
+    return "QA_HOLDOUT" if nursery_extension_qa_holdout(signal_id) else "AUTO_APPROVE"

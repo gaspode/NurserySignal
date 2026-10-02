@@ -16,6 +16,7 @@ from app.review_triage import (
     explicit_nursery_loss_candidate,
     normalize_planning_decision,
     nursery_arboriculture_disagreement_candidate,
+    nursery_extension_candidate,
     planning_refusal_assessment,
     review_triage_bucket,
     routine_recruitment_candidate,
@@ -403,6 +404,27 @@ def test_nursery_arboriculture_disagreement_requires_standalone_tree_work() -> N
         ai_status="SUCCEEDED",
         ai_recommendation="REJECT",
         ai_confidence=0.8,
+    )
+
+
+def test_nursery_extension_requires_existing_nursery_and_excludes_ambiguous_work() -> None:
+    assert nursery_extension_candidate(
+        vertical="NURSERY",
+        source_type="planning",
+        review_status="PENDING",
+        title="Erection of a single-storey extension to existing children's nursery.",
+    )
+    assert not nursery_extension_candidate(
+        vertical="NURSERY",
+        source_type="planning",
+        review_status="PENDING",
+        title="Change of use from dwelling to day nursery with rear extension and flat.",
+    )
+    assert not nursery_extension_candidate(
+        vertical="NURSERY",
+        source_type="planning",
+        review_status="PENDING",
+        title="Details pursuant to condition for an extension to nursery.",
     )
 
 

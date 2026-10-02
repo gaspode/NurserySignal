@@ -1821,3 +1821,9 @@ Paid-pilot activation check (2026-09-28):
   `37042684172`, deployments `37042012582` and `37042825087`, passed. No provider, CareProspect, opportunity,
   lifecycle, publication, watcher or matching actions occurred. Active queues are empty; the collector-manual
   DLQ retains its six known baseline messages.
+- Manual-only Nursery Planning analysis identifies a narrow follow-up: `nursery-planning-extension-v1` for an
+  explicit extension/enlargement to an existing nursery, excluding change-of-use, conversion, school,
+  mixed-use, flat/care-home and procedural wording. It has 19 current candidates and 15 exact comparable human
+  approvals / 0 rejections. Broad opening, conversion, school, lawfulness, mixed-use, ancillary and follow-up
+  cohorts retain human exceptions or ambiguous semantics and remain manual. Deployment and production preview
+  pending; CareProspect remains unchanged.

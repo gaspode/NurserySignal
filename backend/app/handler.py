@@ -95,6 +95,7 @@ from app.repository import (
     list_signals,
     merge_opportunities,
     nursery_planning_arboriculture_backlog,
+    nursery_planning_extension_backlog,
     nursery_planning_loss_backlog,
     nursery_routine_recruitment_backlog,
     opportunity_detail,
@@ -390,6 +391,8 @@ def _admin_path(path: str) -> tuple[str, str | None]:
         return "review-triage-nursery-planning-loss", None
     if path == "/admin/review-triage/nursery-planning-arboriculture":
         return "review-triage-nursery-planning-arboriculture", None
+    if path == "/admin/review-triage/nursery-planning-extension":
+        return "review-triage-nursery-planning-extension", None
     if path == "/admin/verticals/CHILDRENS_HOME/backfill":
         return "care-backfill", None
     if path == "/admin/opportunities":
@@ -2022,6 +2025,21 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 return _response(
                     200,
                     nursery_planning_arboriculture_backlog(
+                        settings,
+                        actor=actor,
+                        preview=bool(payload.get("preview", True)),
+                        limit=min(max(int(payload.get("limit", 100)), 1), 100),
+                    ),
+                )
+            if action == "review-triage-nursery-planning-extension" and method == "POST":
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                payload = parse_json_payload(_raw_body(event))
+                actor = str(claims.get("sub") or claims.get("username") or "unknown")
+                return _response(
+                    200,
+                    nursery_planning_extension_backlog(
                         settings,
                         actor=actor,
                         preview=bool(payload.get("preview", True)),
