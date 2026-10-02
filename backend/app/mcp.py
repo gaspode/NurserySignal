@@ -1250,9 +1250,15 @@ def _authenticate(event: dict[str, Any], settings: Settings) -> dict[str, Any]:
     }
 
 
-def _tool_catalog(scopes: set[str]) -> list[dict[str, Any]]:
-    """Hide write tools completely from read-only MCP credentials."""
-    return TOOLS + (WRITE_TOOLS if ADMIN_SCOPE in scopes else [])
+def _tool_catalog(_scopes: set[str]) -> list[dict[str, Any]]:
+    """Advertise capability requirements; authorization remains enforced on calls.
+
+    ChatGPT discovers incremental OAuth requirements from the per-tool security
+    metadata. Hiding write tools behind the scope they require creates a
+    discovery deadlock: a read token can never learn that admin authorization
+    is available. A read token can list these tools but cannot execute them.
+    """
+    return TOOLS + WRITE_TOOLS
 
 
 def _claim_groups(claims: dict[str, Any]) -> set[str]:

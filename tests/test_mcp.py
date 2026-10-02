@@ -88,10 +88,18 @@ def test_admin_user_requires_admin_group(monkeypatch):
         mcp._authenticate(request, mcp.Settings.from_env())
 
 
-def test_write_tools_are_hidden_without_admin_scope_and_exposed_with_it(monkeypatch):
+def test_write_tools_are_advertised_for_incremental_auth_but_require_admin_scope(monkeypatch):
     listed = mcp.handler(event({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}), None)
     names = {item["name"] for item in json.loads(listed["body"])["result"]["tools"]}
-    assert "review_signal" not in names
+    assert "review_signal" in names
+    write = next(
+        item
+        for item in json.loads(listed["body"])["result"]["tools"]
+        if item["name"] == "review_signal"
+    )
+    assert write["securitySchemes"] == [
+        {"type": "oauth2", "scopes": [mcp.READ_SCOPE, mcp.ADMIN_SCOPE]}
+    ]
     monkeypatch.setattr(
         mcp,
         "_decode_access_token",
@@ -113,6 +121,29 @@ def test_write_tools_are_hidden_without_admin_scope_and_exposed_with_it(monkeypa
     } <= names
 
 
+def test_read_scope_cannot_execute_advertised_write_tool():
+    response = mcp.handler(
+        event(
+            {
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "tools/call",
+                "params": {
+                    "name": "review_signal",
+                    "arguments": {
+                        "signal_id": "00000000-0000-0000-0000-000000000001",
+                        "decision": "APPROVE",
+                        "reason": "test",
+                    },
+                },
+            }
+        ),
+        None,
+    )
+    body = json.loads(response["body"])
+    assert body["error"]["data"]["error"] == "unauthorized"
+
+
 def test_initialize_capabilities_and_stable_read_only_tool_catalogue():
     response = mcp.handler(
         event({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}), None
@@ -121,8 +152,7 @@ def test_initialize_capabilities_and_stable_read_only_tool_catalogue():
     assert result["protocolVersion"] == mcp.PROTOCOL_VERSION
     listed = mcp.handler(event({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}), None)
     names = [item["name"] for item in json.loads(listed["body"])["result"]["tools"]]
-    assert names == [item["name"] for item in mcp.TOOLS]
-    assert names == [item["name"] for item in mcp.TOOLS]
+    assert names == [item["name"] for item in mcp.TOOLS + mcp.WRITE_TOOLS]
     assert not any(
         word in name
         for name in names
