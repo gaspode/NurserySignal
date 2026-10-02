@@ -5,6 +5,7 @@ from app.config import Settings
 from app.repository import (
     apply_safe_approval_policy,
     auto_reject_refused_planning,
+    nursery_routine_recruitment_backlog,
     pending_review_triage_ids,
 )
 from app.review_triage import (
@@ -373,6 +374,92 @@ def test_routine_recruitment_policy_keeps_ambiguous_and_care_records_manual() ->
         review_status="PENDING",
         extracted_facts=facts,
     )
+
+
+def test_routine_recruitment_backlog_is_audited_and_idempotent(monkeypatch) -> None:
+    signal_id = str(uuid4())
+    while routine_recruitment_qa_holdout(signal_id):
+        signal_id = str(uuid4())
+    facts = {
+        "classification": "recruitment-routine",
+        "recruitment_relevance": "RELEVANT_ROUTINE",
+        "recruitment_candidate_matched": True,
+        "commercial_change_evidence": "NONE",
+        "opportunity_creation_decision": "SUPPORT_EXISTING_ONLY",
+        "recruitment_ambiguity_flags": [],
+        "recruitment_exclusions": [],
+    }
+    pending = {
+        "id": signal_id,
+        "vertical": "NURSERY",
+        "source_type": "recruitment",
+        "review_status": "PENDING",
+        "extracted_facts": facts,
+        "reviewed_by": None,
+        "reviewed_at": None,
+    }
+    historical = {
+        **pending,
+        "id": str(uuid4()),
+        "review_status": "APPROVED",
+        "reviewed_by": "admin",
+    }
+
+    class FakeConnection:
+        pending = True
+        audit_count = 0
+
+        def execute(self, sql, params=None):
+            self.sql = sql
+            if "SET review_status = 'APPROVED'" in sql and self.pending:
+                self.pending = False
+                self.result = [(signal_id,)]
+            elif "INSERT INTO admin_audit_events" in sql:
+                self.audit_count += 1
+                self.result = []
+            else:
+                self.result = []
+            return self
+
+        def fetchone(self):
+            return self.result[0] if self.result else None
+
+        def commit(self):
+            return None
+
+    fake = FakeConnection()
+
+    @contextmanager
+    def fake_connection(settings):
+        yield fake
+
+    def rows(_conn, status):
+        if status == "PENDING":
+            return [pending] if fake.pending else []
+        return [historical] if status == "APPROVED" else []
+
+    monkeypatch.setattr("app.repository.connection", fake_connection)
+    monkeypatch.setattr("app.repository._routine_recruitment_review_rows", rows)
+
+    preview = nursery_routine_recruitment_backlog(Settings(), actor="admin", preview=True)
+    assert preview["execution_allowed"] is False  # Guard prevents thin historical cohorts.
+
+    # A production-sized historical cohort unlocks the exact same deterministic rule.
+    historical_rows = [{**historical, "id": str(uuid4())} for _ in range(20)]
+
+    def rows_with_validation(_conn, status):
+        if status == "PENDING":
+            return [pending] if fake.pending else []
+        return historical_rows if status == "APPROVED" else []
+
+    monkeypatch.setattr("app.repository._routine_recruitment_review_rows", rows_with_validation)
+    applied = nursery_routine_recruitment_backlog(Settings(), actor="admin", preview=False)
+    assert applied["auto_approved"] == 1
+    assert applied["errors"] == 0
+    assert fake.audit_count == 1
+    repeat = nursery_routine_recruitment_backlog(Settings(), actor="admin", preview=False)
+    assert repeat["updated"] == 0
+    assert fake.audit_count == 1
 
 
 class RefusalConnection:

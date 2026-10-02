@@ -1782,4 +1782,6 @@ Paid-pilot activation check (2026-09-28):
   relationships, lifecycle, publication, withdrawal, watcher, matching or collector settings changed.
   The remaining 426 are intentionally manual: 409 Nursery Planning records (105 rule/AI disagreements
   and 304 manual-only), the one QA holdout, and all 16 CareProspect records. Backend (640) and frontend
-  (71 focused) tests, Ruff, frontend build and Terraform fmt/validate pass.
+  (71 focused) tests, Ruff, frontend build and Terraform fmt/validate pass. The follow-up regression
+  test explicitly verifies the policy's validation guard, audit row, bounded approval and zero-write
+  idempotent rerun.
