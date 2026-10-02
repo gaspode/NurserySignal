@@ -426,6 +426,12 @@ def test_nursery_extension_requires_existing_nursery_and_excludes_ambiguous_work
         review_status="PENDING",
         title="Details pursuant to condition for an extension to nursery.",
     )
+    assert not nursery_extension_candidate(
+        vertical="NURSERY",
+        source_type="planning",
+        review_status="PENDING",
+        title="Extension to a previously approved nursery not developed as yet.",
+    )
 
 
 def test_nursery_arboriculture_backlog_is_audited_and_idempotent(monkeypatch) -> None:

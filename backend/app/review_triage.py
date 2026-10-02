@@ -22,7 +22,7 @@ NURSERY_PLANNING_LOSS_POLICY_VERSION = "nursery-planning-loss-v2"
 NURSERY_PLANNING_LOSS_QA_MODULUS = 10
 NURSERY_PLANNING_ARBORICULTURE_POLICY_VERSION = "nursery-planning-arboriculture-v1"
 NURSERY_PLANNING_ARBORICULTURE_QA_MODULUS = 10
-NURSERY_PLANNING_EXTENSION_POLICY_VERSION = "nursery-planning-extension-v1"
+NURSERY_PLANNING_EXTENSION_POLICY_VERSION = "nursery-planning-extension-v2"
 NURSERY_PLANNING_EXTENSION_QA_MODULUS = 10
 
 _EXPLICIT_NURSERY_LOSS_RE = re.compile(
@@ -60,7 +60,8 @@ _NURSERY_EXTENSION_RE = re.compile(
 _NURSERY_EXTENSION_EXCLUSION_RE = re.compile(
     r"\b(?:condition|variation|pursuant|details|non[- ]material|amendment|"
     r"change\s+of\s+use|conversion|school|academy|college|classroom|"
-    r"children['’]s\s+home|care\s+home|mixed|flat)\b",
+    r"children['’]s\s+home|care\s+home|mixed|flat|demolition|"
+    r"not\s+developed|previously\s+approved)\b",
     re.IGNORECASE,
 )
 TRIAGE_BUCKETS = frozenset(
