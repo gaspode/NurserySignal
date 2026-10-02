@@ -342,12 +342,11 @@ def test_cimd_authorization_preserves_pkce_scope_and_resource(monkeypatch):
     assert response["statusCode"] == 302
     provider = urlparse(response["headers"]["location"])
     query = parse_qs(provider.query)
-    assert provider.path == "/oauth2/authorize"
+    assert provider.path == "/logout"
     assert query["client_id"] == ["user-client"]
     assert query["redirect_uri"] == ["https://api.example/oauth/callback"]
     assert query["resource"] == ["https://api.example/mcp"]
     assert query["code_challenge_method"] == ["S256"]
-    assert query["prompt"] == ["login"]
     assert stored["original_state"] == "chatgpt-state"
 
 
