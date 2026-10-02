@@ -6297,7 +6297,8 @@ def _care_policy_opportunities(
                    COALESCE(rel.relationships, '[]'::jsonb),
                    COALESCE(hist.actions, ARRAY[]::text[]),
                    COALESCE(audit.actions, ARRAY[]::text[]),
-                   COALESCE(matches.pending_count, 0)
+                   COALESCE(matches.pending_count, 0),
+                   COALESCE(watches.enabled_count, 0)
             FROM opportunities o
             LEFT JOIN LATERAL (
               SELECT jsonb_agg(jsonb_build_object(
@@ -6337,6 +6338,10 @@ def _care_policy_opportunities(
               SELECT count(*) AS pending_count FROM opportunity_match_reviews mr
               WHERE mr.opportunity_id = o.id AND mr.status = 'PENDING'
             ) matches ON TRUE
+            LEFT JOIN LATERAL (
+              SELECT count(*) AS enabled_count FROM planning_lifecycle_watches watch
+              WHERE watch.opportunity_id = o.id AND watch.enabled
+            ) watches ON TRUE
             {where}
             ORDER BY o.id LIMIT 5000
             """,
@@ -6373,6 +6378,7 @@ def _care_policy_opportunities(
         "history_actions",
         "audit_actions",
         "pending_match_reviews",
+        "enabled_planning_watches",
     )
     return [dict(zip(fields, row)) for row in rows]
 
