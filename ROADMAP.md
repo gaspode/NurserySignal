@@ -1787,7 +1787,8 @@ Paid-pilot activation check (2026-09-28):
   idempotent rerun.
 - Nursery Planning backlog analysis found no safe broad approval cohort: the 409 records include mixed-use,
   school, horticultural, lawfulness, incidental and contradictory evidence, while the deterministic/AI
-  disagreement cohort contains known historical exceptions. A proposed `nursery-planning-loss-v1` policy is
-  restricted to primary applications structurally converting nursery/pre-school use into residential C3,
-  dwelling, flat or HMO use; it excludes procedural follow-ups and requires at least ten comparable human
-  decisions with zero approvals before a bounded batch can run. Deployment and production preview are pending.
+  disagreement cohort contains known historical exceptions. Preview-only `nursery-planning-loss-v1` caught two
+  positive "residential-to-nursery" applications because a later flat-roof phrase resembled the target use, so
+  it correctly refused to apply. `nursery-planning-loss-v2` now requires nursery/pre-school to be the explicit
+  source use before C3/dwelling/flat/HMO, excludes procedural follow-ups and requires at least ten comparable
+  human decisions with zero approvals before a bounded batch can run. Deployment and production preview pending.

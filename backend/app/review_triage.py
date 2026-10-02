@@ -18,12 +18,17 @@ SAFE_APPROVAL_VERTICALS = frozenset({"NURSERY"})
 SAFE_APPROVAL_QA_MODULUS = 10
 ROUTINE_RECRUITMENT_POLICY_VERSION = "nursery-routine-recruitment-v1"
 ROUTINE_RECRUITMENT_QA_MODULUS = 10
-NURSERY_PLANNING_LOSS_POLICY_VERSION = "nursery-planning-loss-v1"
+NURSERY_PLANNING_LOSS_POLICY_VERSION = "nursery-planning-loss-v2"
 NURSERY_PLANNING_LOSS_QA_MODULUS = 10
 
 _EXPLICIT_NURSERY_LOSS_RE = re.compile(
-    r"\b(?:change\s+of\s+use|conversion)\s+(?:from|of)\b[^.]{0,100}?"
-    r"\b(?:day\s+)?(?:pre[ -]?school|nursery)\b[^.]{0,90}?\b(?:to|into)\b[^.]{0,90}?"
+    # The source use must itself be the nursery. In particular, do not let a
+    # later "flat roof" make "residential property to nursery" look like a
+    # nursery-to-residential conversion.
+    r"\b(?:change\s+of\s+use|conversion)\s+(?:"
+    r"from\s+[^.]{0,90}?\b(?:day\s+)?(?:pre[ -]?school|nursery)\b"
+    r"|of\s+(?:(?!\bto\b)[^.]){0,90}?\b(?:day\s+)?(?:pre[ -]?school|nursery)\b"
+    r")\s*[^.]{0,90}?\b(?:to|into)\b[^.]{0,90}?"
     r"\b(?:residential|dwelling(?:house)?|flat(?:s)?|hmo|class\s*c3)\b",
     re.IGNORECASE,
 )

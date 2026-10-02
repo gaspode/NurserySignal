@@ -396,6 +396,15 @@ def test_explicit_nursery_loss_requires_primary_conversion_to_residential_use() 
         review_status="PENDING",
         title="Details pursuant to condition for earlier nursery-to-residential permission.",
     )
+    assert not explicit_nursery_loss_candidate(
+        vertical="NURSERY",
+        source_type="planning",
+        review_status="PENDING",
+        title=(
+            "Change of use of residential property to childrens day nursery "
+            "including a first floor terrace and flat roof porch."
+        ),
+    )
 
 
 def test_routine_recruitment_backlog_is_audited_and_idempotent(monkeypatch) -> None:
