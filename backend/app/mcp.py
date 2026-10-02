@@ -1381,7 +1381,8 @@ def _auth_challenge(settings: Settings) -> str:
     origin = resource.removesuffix("/mcp")
     metadata_url = f"{origin}/.well-known/oauth-protected-resource"
     return (
-        f'Bearer resource_metadata="{metadata_url}", scope="{READ_SCOPE}", '
+        f'Bearer resource_metadata="{metadata_url}", '
+        f'scope="{READ_SCOPE} {ADMIN_SCOPE}", '
         'error="invalid_token", error_description="OAuth authorization is required"'
     )
 

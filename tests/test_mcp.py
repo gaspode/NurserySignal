@@ -166,7 +166,7 @@ def test_unauthenticated_mcp_returns_discoverable_oauth_challenge():
     assert (
         'resource_metadata="https://api.example/.well-known/oauth-protected-resource"' in challenge
     )
-    assert 'scope="signalhub-mcp/read"' in challenge
+    assert f'scope="{mcp.READ_SCOPE} {mcp.ADMIN_SCOPE}"' in challenge
     assert 'error="invalid_token"' in challenge
 
 
