@@ -482,7 +482,16 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         enrolment = enrol_care_planning_watches(
             settings, actor="SYSTEM_WATCHER_COORDINATOR", preview=False
         )
-        queued = queue_due_care_planning_watches(settings, max_due=max_due)
+        retry_run_ids = event.get("retry_run_ids")
+        if retry_run_ids is not None and not isinstance(retry_run_ids, list):
+            raise ValueError("retry_run_ids must be a list")
+        queued = queue_due_care_planning_watches(
+            settings,
+            max_due=max_due,
+            retry_run_ids=[str(value) for value in retry_run_ids]
+            if retry_run_ids
+            else None,
+        )
         queued["enrolment"] = {
             key: enrolment[key]
             for key in ("created", "updated", "disabled", "enabled", "provider_requests")

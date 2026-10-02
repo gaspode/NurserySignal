@@ -68,8 +68,16 @@ def refresh_planning_lifecycle_watch(
         api_key = provider_api_key_from_secret(settings.planning_provider_secret_arn)
         provider = PlotaProvider(api_key, base_url=settings.planning_provider_base_url)
         provider_application_id = str(payload.get("provider_application_id") or "").strip()
+        direct_lookup_not_found = False
         if provider_application_id:
-            record = provider.application_by_id(provider_application_id)
+            try:
+                record = provider.application_by_id(provider_application_id)
+            except PlanningProviderError as exc:
+                if exc.http_status != 404:
+                    raise
+                direct_lookup_not_found = True
+                record = None
+        if provider_application_id and not direct_lookup_not_found:
             candidate_reference = normalize_planning_reference(
                 record.raw.get("reference")
                 or record.raw.get("application_reference")
@@ -110,7 +118,10 @@ def refresh_planning_lifecycle_watch(
             details = {
                 "provider_requests": provider.requests_made,
                 "provider_query": search.provider_query,
-                "lookup_method": "exact_reference",
+                "lookup_method": "stable_provider_id_then_exact_reference"
+                if direct_lookup_not_found
+                else "exact_reference",
+                "direct_lookup_http_status": 404 if direct_lookup_not_found else None,
                 "records_returned": search.returned_count,
                 "exact_reference_candidates": len(search.candidates),
                 "candidate_set_truncated": search.truncated,

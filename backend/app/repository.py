@@ -8232,10 +8232,18 @@ def set_care_planning_watcher_execution(
     }
 
 
-def queue_due_care_planning_watches(settings: Settings, *, max_due: int = 15) -> dict[str, Any]:
+def queue_due_care_planning_watches(
+    settings: Settings,
+    *,
+    max_due: int = 15,
+    retry_run_ids: list[str] | None = None,
+) -> dict[str, Any]:
     """Reserve and queue due watches within daily/monthly request guardrails."""
     if not settings.planning_manual_run_queue_url:
         raise RuntimeError("PLANNING_MANUAL_RUN_QUEUE_URL is not configured")
+    retry_ids = tuple(UUID(value) for value in (retry_run_ids or []))
+    if len(retry_ids) > 10:
+        raise ValueError("retry_run_ids is limited to 10 failed runs")
     requested_limit = min(max(int(max_due), 1), 100)
     with connection(settings) as conn:
         state = conn.execute(
@@ -8287,15 +8295,26 @@ def queue_due_care_planning_watches(settings: Settings, *, max_due: int = 15) ->
                 "reserved": reserved,
                 "provider_requests_queued": 0,
             }
+        retry_clause = (
+            """EXISTS (
+                   SELECT 1 FROM planning_lifecycle_watch_runs failed_run
+                   WHERE failed_run.id = ANY(%s)
+                     AND failed_run.watch_id = w.id
+                     AND failed_run.status IN ('FAILED', 'RATE_LIMITED', 'QUEUE_FAILED')
+                 )"""
+            if retry_ids
+            else "w.next_eligible_refresh_at <= now()"
+        )
+        query_params: tuple[Any, ...] = (list(retry_ids), limit) if retry_ids else (limit,)
         rows = conn.execute(
-            """SELECT w.id, w.opportunity_id, w.primary_signal_id,
+            f"""SELECT w.id, w.opportunity_id, w.primary_signal_id,
                       w.planning_authority, w.planning_reference,
                       w.latest_status_metadata, o.address, o.postcode,
                       rs.external_id
                FROM planning_lifecycle_watches w
                JOIN opportunities o ON o.id = w.opportunity_id
                JOIN raw_signals rs ON rs.id = w.primary_signal_id
-               WHERE w.enabled AND w.next_eligible_refresh_at <= now()
+               WHERE w.enabled AND {retry_clause}
                  AND NOT o.publication_automation_blocked
                  AND NOT EXISTS (
                    SELECT 1 FROM planning_lifecycle_watch_runs run
@@ -8303,14 +8322,22 @@ def queue_due_care_planning_watches(settings: Settings, *, max_due: int = 15) ->
                  )
                ORDER BY w.next_eligible_refresh_at, w.id
                FOR UPDATE OF w SKIP LOCKED LIMIT %s""",
-            (limit,),
+            query_params,
         ).fetchall()
         queued: list[dict[str, Any]] = []
         for row in rows:
             run_id = conn.execute(
                 """INSERT INTO planning_lifecycle_watch_runs (watch_id, status, details)
                    VALUES (%s, 'QUEUED', %s) RETURNING id""",
-                (row[0], Jsonb({"policy_version": state[5]})),
+                (
+                    row[0],
+                    Jsonb(
+                        {
+                            "policy_version": state[5],
+                            "retry_of_failed_run": bool(retry_ids),
+                        }
+                    ),
+                ),
             ).fetchone()[0]
             item = {
                 "invocation_source": "planning_lifecycle_watch",

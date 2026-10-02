@@ -1221,7 +1221,11 @@ def test_care_lifecycle_coordinator_previews_or_queues_bounded_due_watches(monke
     }
     monkeypatch.setattr(
         "app.handler.queue_due_care_planning_watches",
-        lambda settings, max_due: {"queued": 3, "max_due": max_due},
+        lambda settings, max_due, retry_run_ids=None: {
+            "queued": 3,
+            "max_due": max_due,
+            "retry_run_ids": retry_run_ids,
+        },
     )
     monkeypatch.setattr(
         "app.handler.enrol_care_planning_watches",
@@ -1239,6 +1243,7 @@ def test_care_lifecycle_coordinator_previews_or_queues_bounded_due_watches(monke
     )
     assert result["queued"] == 3
     assert result["max_due"] == 3
+    assert result["retry_run_ids"] is None
     assert result["enrolment"]["provider_requests"] == 0
 
 

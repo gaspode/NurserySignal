@@ -22,9 +22,13 @@ The MVP succeeds by being trustworthy and actionable, not by maximizing raw sign
 - Cadence, the 15-poll execution bound and 50/day / 2,000/month quota guardrails are unchanged.
 
 Current gate:
-- Code and regression coverage are complete; production deployment and a maximum-three-poll
-  validation must confirm the formerly repeated failures now resolve by stable provider identity or
-  persist a meaningful category. No broad provider sweep is authorised.
+- Initial production validation proved five of seven due watches now refresh cleanly. Two older
+  records use historical Plota-flavoured identifiers that the direct application endpoint returns
+  as HTTP 404; the watcher now falls back only for that case to the exact-reference query while all
+  other provider HTTP failures remain errors. A bounded, IAM-only retry-by-failed-run path supports
+  final verification without changing cadence or opening an unbounded sweep.
+- Final gate: deploy the 404 fallback, retry only the two categorised failed runs, and confirm queue,
+  DLQ and quota health. No broad provider sweep is authorised.
 
 ## SignalHub MCP v1 — READ-ONLY ADMINISTRATION
 

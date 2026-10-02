@@ -17,6 +17,7 @@ from app.config import Settings
 from app.planning import (
     PlanningAuthenticationError,
     PlanningMalformedResponseError,
+    PlanningProviderError,
     PlanningQuery,
     PlanningRateLimitError,
     PlanningRecord,
@@ -686,6 +687,51 @@ def test_planning_watch_persists_resolution_failure_category(monkeypatch) -> Non
     assert result == {"requests": 1, "changed": 0, "unchanged": 0, "failed": 1}
     assert results[0].details["provider_result"] == "NOT_FOUND"
     assert results[0].details["error_category"] == "provider_no_reference_match"
+
+
+def test_planning_watch_falls_back_to_exact_reference_when_historical_id_is_unknown(
+    monkeypatch,
+) -> None:
+    results = []
+
+    class HistoricalProvider:
+        requests_made = 0
+
+        def application_by_id(self, application_id):
+            self.requests_made += 1
+            raise PlanningProviderError("not found", http_status=404)
+
+        def applications_by_reference(self, reference, *, limit):
+            self.requests_made += 1
+            return PlanningReferenceSearchResult(reference, (record("Same"),), 1, False)
+
+    monkeypatch.setattr("app.collector.provider_api_key_from_secret", lambda arn: "secret")
+    monkeypatch.setattr(
+        "app.collector.PlotaProvider", lambda *args, **kwargs: HistoricalProvider()
+    )
+    monkeypatch.setattr("app.collector.planning_watch_snapshot", lambda metadata: {"same": True})
+    monkeypatch.setattr(
+        "app.collector.send_planning_lifecycle_watch_result",
+        lambda settings, message: results.append(message),
+    )
+
+    result = refresh_planning_lifecycle_watch(
+        Settings(planning_provider_secret_arn="arn:example"),
+        {
+            "run_id": "run-historical-id",
+            "watch_id": "watch-historical-id",
+            "planning_reference": "24/03385/FUL",
+            "planning_authority": "Bristol",
+            "provider_application_id": "historical-reference-shaped-id",
+            "latest_snapshot": {"same": True},
+        },
+    )
+
+    assert result == {"requests": 2, "changed": 0, "unchanged": 1, "failed": 0}
+    assert results[0].details["lookup_method"] == (
+        "stable_provider_id_then_exact_reference"
+    )
+    assert results[0].details["direct_lookup_http_status"] == 404
 
 
 def test_planning_watch_unchanged_response_does_not_duplicate_evidence(monkeypatch) -> None:

@@ -515,6 +515,7 @@ def operations_summary(settings: Settings) -> dict[str, Any]:
                             "records_returned",
                             "exact_reference_candidates",
                             "candidate_set_truncated",
+                            "direct_lookup_http_status",
                             "http_status",
                             "exception_type",
                         )

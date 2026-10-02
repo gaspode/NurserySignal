@@ -1,6 +1,8 @@
 from contextlib import contextmanager
 from datetime import UTC, datetime
+from uuid import UUID
 
+import pytest
 from app.config import Settings
 from app.repository import (
     queue_due_care_planning_watches,
@@ -203,3 +205,12 @@ def test_watch_result_persists_stable_error_category(monkeypatch) -> None:
 
     assert result["status"] == "FAILED"
     assert captured[0][3] == "provider_no_reference_match"
+
+
+def test_failed_watch_retry_is_bounded(monkeypatch) -> None:
+    with pytest.raises(ValueError, match="limited to 10"):
+        queue_due_care_planning_watches(
+            Settings(planning_manual_run_queue_url="https://sqs.example/planning"),
+            max_due=100,
+            retry_run_ids=[str(UUID(int=value + 1)) for value in range(11)],
+        )
