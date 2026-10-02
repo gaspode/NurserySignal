@@ -24,6 +24,7 @@ def orphan(root: str, **overrides):
         "customer_summary": None,
         "publication_automation_provenance": {},
         "publication_automation_blocked": False,
+        "customer_lifecycle_stage": "NEEDS_REVIEW",
         "customer_saved_count": 0,
         "enabled_planning_watches": 0,
         "pending_match_reviews": 0,
@@ -59,6 +60,7 @@ def test_manual_published_customer_and_valid_evidence_are_preserved() -> None:
         orphan("SIGNAL_REJECTED", active_approved_signal_count=1),
         orphan("SIGNAL_REJECTED", publication_automation_blocked=True),
         orphan("SIGNAL_REJECTED", enabled_planning_watches=1),
+        orphan("SIGNAL_REJECTED", customer_lifecycle_stage="APPEAL_PENDING"),
     )
     assert all(evaluate_orphan_cleanup(item)["outcome"] == PRESERVE for item in cases)
 

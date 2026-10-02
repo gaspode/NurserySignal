@@ -22,7 +22,10 @@ SUPPORTED_ROOT_CAUSES = {
 def evaluate_orphan_cleanup(item: dict[str, Any]) -> dict[str, Any]:
     """Return a conservative, deterministic resolution decision for one audit item."""
     reasons: list[str] = []
-    if item.get("review_status") == "REJECTED":
+    lifecycle = str(item.get("customer_lifecycle_stage") or "")
+    if lifecycle not in {"STOPPED", "NEEDS_REVIEW"}:
+        reasons.append("lifecycle_not_terminal_or_review")
+    if item.get("review_status") == "REJECTED" and not reasons:
         return _decision(ALREADY_RESOLVED, "already_terminal", item)
     if item.get("category") != "UNSUPPORTED_ORPHAN_CANDIDATE":
         reasons.append("not_unsupported_orphan")

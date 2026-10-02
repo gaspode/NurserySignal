@@ -76,6 +76,7 @@ def _touch_types(opportunity: dict[str, Any]) -> list[str]:
         if action in {
             "opportunity_semantic_drift_corrected",
             "opportunity_unsupported_orphan_resolved",
+            "opportunity_unsupported_orphan_resolution_reverted",
         }:
             # This bounded system correction is provenance, not evidence that a
             # human deliberately curated or overrode the opportunity.
@@ -389,6 +390,10 @@ def audit_opportunities(
                 ),
                 "pending_match_reviews": int(
                     opportunity.get("pending_match_reviews") or 0
+                ),
+                "system_cleanup_resolved": any(
+                    str(action).lower() == "opportunity_unsupported_orphan_resolved"
+                    for action in opportunity.get("audit_actions") or []
                 ),
             }
         )

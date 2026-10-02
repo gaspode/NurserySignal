@@ -9190,13 +9190,83 @@ def care_opportunity_orphan_cleanup(
     eligible = [
         decision for decision in summary["decisions"] if decision["outcome"] == AUTO_RESOLVE
     ]
-    selected = eligible[:bounded_limit]
+    restore_candidates = [
+        item
+        for item in cohort
+        if item.get("review_status") == "REJECTED"
+        and item.get("system_cleanup_resolved")
+        and str(item.get("customer_lifecycle_stage") or "")
+        not in {"STOPPED", "NEEDS_REVIEW"}
+    ][:bounded_limit]
+    selected = eligible[: max(bounded_limit - len(restore_candidates), 0)]
     resolved = 0
+    restored_for_safety = 0
     skipped = 0
     failures: list[dict[str, str]] = []
     applied_ids: list[str] = []
 
     if apply:
+        for item in restore_candidates:
+            opportunity_id = str(UUID(item["opportunity_id"]))
+            try:
+                with connection(settings) as conn:
+                    row = conn.execute(
+                        """SELECT o.review_status, o.stage_reason,
+                                  o.customer_lifecycle_stage, audit.details
+                           FROM opportunities o
+                           JOIN LATERAL (
+                               SELECT details FROM admin_audit_events
+                               WHERE action = 'opportunity_unsupported_orphan_resolved'
+                                 AND details->>'opportunity_id' = o.id::text
+                               ORDER BY created_at DESC LIMIT 1
+                           ) audit ON TRUE
+                           WHERE o.id = %s AND o.vertical = 'CHILDRENS_HOME'
+                           FOR UPDATE OF o""",
+                        (opportunity_id,),
+                    ).fetchone()
+                    if (
+                        row is None
+                        or row[0] != "REJECTED"
+                        or str(row[2] or "") in {"STOPPED", "NEEDS_REVIEW"}
+                    ):
+                        skipped += 1
+                        conn.rollback()
+                        continue
+                    details = row[3] or {}
+                    old_status = str(details.get("old_review_status") or "UNREVIEWED")
+                    if old_status not in {"UNREVIEWED", "IN_REVIEW", "APPROVED"}:
+                        old_status = "UNREVIEWED"
+                    old_stage_reason = details.get("old_stage_reason")
+                    conn.execute(
+                        """UPDATE opportunities SET review_status = %s, stage_reason = %s,
+                                  updated_at = now()
+                           WHERE id = %s AND review_status = 'REJECTED'""",
+                        (old_status, old_stage_reason, opportunity_id),
+                    )
+                    conn.execute(
+                        """INSERT INTO admin_audit_events
+                           (action, actor, target_type, target_count, details)
+                           VALUES ('opportunity_unsupported_orphan_resolution_reverted', %s,
+                                   'opportunity', 1, %s)""",
+                        (
+                            actor,
+                            Jsonb(
+                                {
+                                    "opportunity_id": opportunity_id,
+                                    "policy_version": OPPORTUNITY_ORPHAN_CLEANUP_POLICY_VERSION,
+                                    "reason": "non_terminal_customer_lifecycle",
+                                    "customer_lifecycle_stage": row[2],
+                                    "restored_review_status": old_status,
+                                }
+                            ),
+                        ),
+                    )
+                    conn.commit()
+                    restored_for_safety += 1
+            except Exception as exc:
+                failures.append(
+                    {"opportunity_id": opportunity_id, "error": type(exc).__name__}
+                )
         for decision in selected:
             opportunity_id = str(UUID(decision["opportunity_id"]))
             try:
@@ -9318,6 +9388,8 @@ def care_opportunity_orphan_cleanup(
         "preservation_reason_counts": summary["preservation_reason_counts"],
         "selected": len(selected),
         "resolved": resolved,
+        "safety_restore_candidates": len(restore_candidates),
+        "restored_for_safety": restored_for_safety,
         "skipped": skipped,
         "failed": len(failures),
         "failures": failures,
