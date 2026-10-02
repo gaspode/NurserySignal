@@ -11,6 +11,7 @@ from app.repository import (
 from app.review_triage import (
     REFUSAL_POLICY_VERSION,
     deterministic_review_recommendation,
+    explicit_nursery_loss_candidate,
     normalize_planning_decision,
     planning_refusal_assessment,
     review_triage_bucket,
@@ -373,6 +374,27 @@ def test_routine_recruitment_policy_keeps_ambiguous_and_care_records_manual() ->
         source_type="recruitment",
         review_status="PENDING",
         extracted_facts=facts,
+    )
+
+
+def test_explicit_nursery_loss_requires_primary_conversion_to_residential_use() -> None:
+    assert explicit_nursery_loss_candidate(
+        vertical="NURSERY",
+        source_type="planning",
+        review_status="PENDING",
+        title="Change of use from day nursery (Class E) to dwellinghouse (Class C3).",
+    )
+    assert not explicit_nursery_loss_candidate(
+        vertical="NURSERY",
+        source_type="planning",
+        review_status="PENDING",
+        title="Conversion of classrooms to nursery with new flat roof toilets.",
+    )
+    assert not explicit_nursery_loss_candidate(
+        vertical="NURSERY",
+        source_type="planning",
+        review_status="PENDING",
+        title="Details pursuant to condition for earlier nursery-to-residential permission.",
     )
 
 

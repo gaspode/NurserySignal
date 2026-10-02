@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
@@ -17,6 +18,19 @@ SAFE_APPROVAL_VERTICALS = frozenset({"NURSERY"})
 SAFE_APPROVAL_QA_MODULUS = 10
 ROUTINE_RECRUITMENT_POLICY_VERSION = "nursery-routine-recruitment-v1"
 ROUTINE_RECRUITMENT_QA_MODULUS = 10
+NURSERY_PLANNING_LOSS_POLICY_VERSION = "nursery-planning-loss-v1"
+NURSERY_PLANNING_LOSS_QA_MODULUS = 10
+
+_EXPLICIT_NURSERY_LOSS_RE = re.compile(
+    r"\b(?:change\s+of\s+use|conversion)\s+(?:from|of)\b[^.]{0,100}?"
+    r"\b(?:day\s+)?(?:pre[ -]?school|nursery)\b[^.]{0,90}?\b(?:to|into)\b[^.]{0,90}?"
+    r"\b(?:residential|dwelling(?:house)?|flat(?:s)?|hmo|class\s*c3)\b",
+    re.IGNORECASE,
+)
+
+_NURSERY_LOSS_FOLLOW_UP_RE = re.compile(
+    r"\b(?:condition|variation|pursuant|details|non[- ]material|amendment)\b", re.IGNORECASE
+)
 TRIAGE_BUCKETS = frozenset(
     {
         "SAFE_APPROVE_AGREEMENT",
@@ -261,3 +275,35 @@ def routine_recruitment_policy_outcome(
     ):
         return "INELIGIBLE"
     return "QA_HOLDOUT" if routine_recruitment_qa_holdout(signal_id) else "AUTO_APPROVE"
+
+
+def explicit_nursery_loss_candidate(
+    *, vertical: str, source_type: str, review_status: str, title: str | None
+) -> bool:
+    """Identify a primary Planning application explicitly removing nursery use.
+
+    This is intentionally narrower than generic title matching: follow-up
+    records and new/mixed nursery proposals remain for human review.
+    """
+    text = str(title or "")
+    return (
+        vertical == "NURSERY"
+        and source_type == "planning"
+        and review_status == "PENDING"
+        and bool(_EXPLICIT_NURSERY_LOSS_RE.search(text))
+        and not _NURSERY_LOSS_FOLLOW_UP_RE.search(text)
+    )
+
+
+def explicit_nursery_loss_qa_holdout(signal_id: str) -> bool:
+    return UUID(str(signal_id)).int % NURSERY_PLANNING_LOSS_QA_MODULUS == 0
+
+
+def explicit_nursery_loss_policy_outcome(
+    *, signal_id: str, vertical: str, source_type: str, review_status: str, title: str | None
+) -> str:
+    if not explicit_nursery_loss_candidate(
+        vertical=vertical, source_type=source_type, review_status=review_status, title=title
+    ):
+        return "INELIGIBLE"
+    return "QA_HOLDOUT" if explicit_nursery_loss_qa_holdout(signal_id) else "AUTO_REJECT"

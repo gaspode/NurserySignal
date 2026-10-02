@@ -137,12 +137,15 @@ from app.planning_outcomes import (
 from app.queueing import EnrichmentMessage, send_enrichment_message
 from app.recruitment import recruitment_record_from_signal
 from app.review_triage import (
+    NURSERY_PLANNING_LOSS_POLICY_VERSION,
+    NURSERY_PLANNING_LOSS_QA_MODULUS,
     REFUSAL_POLICY_VERSION,
     ROUTINE_RECRUITMENT_POLICY_VERSION,
     SAFE_APPROVAL_MIN_CONFIDENCE,
     SAFE_APPROVAL_POLICY_VERSION,
     SAFE_APPROVAL_VERTICALS,
     deterministic_review_recommendation,
+    explicit_nursery_loss_policy_outcome,
     planning_refusal_assessment,
     review_triage_bucket,
     routine_recruitment_policy_outcome,
@@ -3709,7 +3712,8 @@ def _review_triage_rows(
         params.append(vertical)
     rows = conn.execute(
         f"""
-        SELECT rs.id, rs.vertical, rs.source_type, rs.metadata, se.review_status,
+        SELECT rs.id, rs.title, rs.discovered_at, rs.vertical, rs.source_type, rs.metadata,
+               se.review_status,
                se.extracted_facts, ai.status, ai.recommendation, ai.confidence,
                ai.prompt_version, se.reviewed_by, se.reviewed_at
         FROM raw_signals rs
@@ -3730,6 +3734,8 @@ def _review_triage_rows(
     ).fetchall()
     fields = (
         "id",
+        "title",
+        "discovered_at",
         "vertical",
         "source_type",
         "metadata",
@@ -4238,6 +4244,142 @@ def safe_agreement_bulk_approve(
         "qa_holdouts": sum(item["updated"] and item["outcome"] == "QA_HOLDOUT" for item in results),
         "signal_ids": updated_ids,
         "vertical": policy_vertical,
+        "actor": actor,
+    }
+
+
+def nursery_planning_loss_backlog(
+    settings: Settings, *, actor: str, preview: bool, limit: int = 100
+) -> dict[str, Any]:
+    """Preview/apply only historically validated explicit nursery-loss rejections."""
+    bounded_limit = min(max(int(limit), 1), 100)
+    with connection(settings) as conn:
+        pending = _review_triage_rows(conn, "PENDING", "NURSERY")
+        reviewed = _review_triage_rows(conn, "APPROVED", "NURSERY") + _review_triage_rows(
+            conn, "REJECTED", "NURSERY"
+        )
+
+    def outcome(item: dict[str, Any], status: str | None = None) -> str:
+        return explicit_nursery_loss_policy_outcome(
+            signal_id=str(item["id"]),
+            vertical=str(item["vertical"]),
+            source_type=str(item["source_type"]),
+            review_status=status or str(item["review_status"]),
+            title=item.get("title"),
+        )
+
+    eligible = [item for item in pending if outcome(item) != "INELIGIBLE"]
+    historical = [
+        item
+        for item in reviewed
+        if not str(item.get("reviewed_by") or "").startswith("system:")
+        and outcome(item, "PENDING") != "INELIGIBLE"
+    ]
+    historical_approved = sum(item["review_status"] == "APPROVED" for item in historical)
+    execution_allowed = len(historical) >= 10 and historical_approved == 0
+    batch = eligible[:bounded_limit]
+    auto = [item for item in batch if outcome(item) == "AUTO_REJECT"]
+    holdouts = [item for item in batch if outcome(item) == "QA_HOLDOUT"]
+    result = {
+        "preview": bool(preview),
+        "policy_version": NURSERY_PLANNING_LOSS_POLICY_VERSION,
+        "vertical": "NURSERY",
+        "source_type": "planning",
+        "pending_planning_total": sum(item["source_type"] == "planning" for item in pending),
+        "eligible_total": len(eligible),
+        "batch_count": len(batch),
+        "would_auto_reject": len(auto),
+        "qa_holdouts": len(holdouts),
+        "limit": bounded_limit,
+        "historical_validation": {
+            "human_reviewed": len(historical),
+            "approved": historical_approved,
+            "rejected": len(historical) - historical_approved,
+            "precision": (len(historical) - historical_approved) / len(historical)
+            if historical
+            else None,
+        },
+        "execution_allowed": execution_allowed,
+        "samples": [
+            {"signal_id": str(item["id"]), "title": item.get("title"), "outcome": outcome(item)}
+            for item in batch[:10]
+        ],
+    }
+    if preview or not execution_allowed:
+        return result
+
+    updated = rejected = holdout_writes = errors = 0
+    for item in batch:
+        signal_id = str(item["id"])
+        decision = outcome(item)
+        marker = {
+            "policy_version": NURSERY_PLANNING_LOSS_POLICY_VERSION,
+            "outcome": decision,
+            "qa_bucket": UUID(signal_id).int % NURSERY_PLANNING_LOSS_QA_MODULUS,
+            "reason": (
+                "Primary planning application explicitly changes nursery use to "
+                "non-nursery residential use."
+            ),
+            "trigger": "admin_backlog",
+        }
+        try:
+            with connection(settings) as conn:
+                if decision == "QA_HOLDOUT":
+                    row = conn.execute(
+                        """
+                        UPDATE signal_enrichments
+                        SET extracted_facts = extracted_facts || %s, updated_at = now()
+                        WHERE raw_signal_id = %s AND review_status = 'PENDING'
+                          AND COALESCE(
+                            extracted_facts->'nursery_planning_loss_review'->>'policy_version', ''
+                          ) <> %s
+                        RETURNING raw_signal_id
+                        """,
+                        (
+                            Jsonb({"nursery_planning_loss_review": marker}),
+                            signal_id,
+                            NURSERY_PLANNING_LOSS_POLICY_VERSION,
+                        ),
+                    ).fetchone()
+                    action = "NURSERY_PLANNING_LOSS_QA_HOLDOUT"
+                else:
+                    row = conn.execute(
+                        """
+                        UPDATE signal_enrichments
+                        SET review_status = 'REJECTED', reviewed_by = %s, reviewed_at = now(),
+                            extracted_facts = extracted_facts || %s, updated_at = now()
+                        WHERE raw_signal_id = %s AND review_status = 'PENDING'
+                        RETURNING raw_signal_id
+                        """,
+                        (
+                            f"system:{NURSERY_PLANNING_LOSS_POLICY_VERSION}",
+                            Jsonb({"nursery_planning_loss_review": marker}),
+                            signal_id,
+                        ),
+                    ).fetchone()
+                    action = "NURSERY_PLANNING_LOSS_AUTO_REJECT"
+                if row:
+                    conn.execute(
+                        """
+                        INSERT INTO admin_audit_events
+                            (action, actor, target_type, target_count, details, vertical)
+                        VALUES (%s, %s, 'signal', 1, %s, 'NURSERY')
+                        """,
+                        (action, actor, Jsonb({"signal_id": signal_id, **marker})),
+                    )
+                    conn.commit()
+                    updated += 1
+                    rejected += int(decision == "AUTO_REJECT")
+                    holdout_writes += int(decision == "QA_HOLDOUT")
+        except Exception:
+            errors += 1
+    return {
+        **result,
+        "preview": False,
+        "updated": updated,
+        "auto_rejected": rejected,
+        "qa_holdouts_recorded": holdout_writes,
+        "errors": errors,
         "actor": actor,
     }
 
