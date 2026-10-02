@@ -15,6 +15,8 @@ SAFE_APPROVAL_MIN_CONFIDENCE = 0.95
 SAFE_APPROVAL_POLICY_VERSION = "safe-approval-v1"
 SAFE_APPROVAL_VERTICALS = frozenset({"NURSERY"})
 SAFE_APPROVAL_QA_MODULUS = 10
+ROUTINE_RECRUITMENT_POLICY_VERSION = "nursery-routine-recruitment-v1"
+ROUTINE_RECRUITMENT_QA_MODULUS = 10
 TRIAGE_BUCKETS = frozenset(
     {
         "SAFE_APPROVE_AGREEMENT",
@@ -210,3 +212,52 @@ def safe_approval_policy_outcome(
     ):
         return "INELIGIBLE"
     return "QA_HOLDOUT" if safe_approval_qa_holdout(signal_id) else "AUTO_APPROVE"
+
+
+def routine_recruitment_candidate(
+    *,
+    vertical: str,
+    source_type: str,
+    review_status: str,
+    extracted_facts: Any,
+) -> bool:
+    """Return only routine Nursery recruitment already known to support, not create, work.
+
+    This deliberately does not use an AI recommendation.  It is limited to the
+    deterministic recruitment-v2 classification that has an explicit
+    SUPPORT_EXISTING_ONLY decision and no ambiguity flags.
+    """
+    facts = extracted_facts if isinstance(extracted_facts, dict) else {}
+    return (
+        vertical == "NURSERY"
+        and source_type == "recruitment"
+        and review_status == "PENDING"
+        and facts.get("classification") == "recruitment-routine"
+        and facts.get("recruitment_relevance") == "RELEVANT_ROUTINE"
+        and facts.get("recruitment_candidate_matched") is True
+        and facts.get("commercial_change_evidence") == "NONE"
+        and facts.get("opportunity_creation_decision") == "SUPPORT_EXISTING_ONLY"
+        and not facts.get("recruitment_ambiguity_flags")
+        and not facts.get("recruitment_exclusions")
+    )
+
+
+def routine_recruitment_qa_bucket(signal_id: str) -> int:
+    return UUID(str(signal_id)).int % ROUTINE_RECRUITMENT_QA_MODULUS
+
+
+def routine_recruitment_qa_holdout(signal_id: str) -> bool:
+    return routine_recruitment_qa_bucket(signal_id) == 0
+
+
+def routine_recruitment_policy_outcome(
+    *, signal_id: str, vertical: str, source_type: str, review_status: str, extracted_facts: Any
+) -> str:
+    if not routine_recruitment_candidate(
+        vertical=vertical,
+        source_type=source_type,
+        review_status=review_status,
+        extracted_facts=extracted_facts,
+    ):
+        return "INELIGIBLE"
+    return "QA_HOLDOUT" if routine_recruitment_qa_holdout(signal_id) else "AUTO_APPROVE"

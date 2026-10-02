@@ -138,12 +138,15 @@ from app.queueing import EnrichmentMessage, send_enrichment_message
 from app.recruitment import recruitment_record_from_signal
 from app.review_triage import (
     REFUSAL_POLICY_VERSION,
+    ROUTINE_RECRUITMENT_POLICY_VERSION,
     SAFE_APPROVAL_MIN_CONFIDENCE,
     SAFE_APPROVAL_POLICY_VERSION,
     SAFE_APPROVAL_VERTICALS,
     deterministic_review_recommendation,
     planning_refusal_assessment,
     review_triage_bucket,
+    routine_recruitment_policy_outcome,
+    routine_recruitment_qa_bucket,
     safe_approval_policy_outcome,
     safe_approval_qa_bucket,
     validate_triage_bucket,
@@ -4235,6 +4238,204 @@ def safe_agreement_bulk_approve(
         "qa_holdouts": sum(item["updated"] and item["outcome"] == "QA_HOLDOUT" for item in results),
         "signal_ids": updated_ids,
         "vertical": policy_vertical,
+        "actor": actor,
+    }
+
+
+def _routine_recruitment_review_rows(conn: Any, review_status: str) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        """
+        SELECT rs.id, rs.vertical, rs.source_type, se.review_status, se.extracted_facts,
+               se.reviewed_by, se.reviewed_at
+        FROM raw_signals rs
+        JOIN signal_enrichments se ON se.raw_signal_id = rs.id
+        WHERE rs.vertical = 'NURSERY' AND rs.source_type = 'recruitment'
+          AND se.review_status = %s
+        ORDER BY rs.discovered_at DESC, rs.id DESC
+        LIMIT 5000
+        """,
+        (review_status,),
+    ).fetchall()
+    fields = (
+        "id",
+        "vertical",
+        "source_type",
+        "review_status",
+        "extracted_facts",
+        "reviewed_by",
+        "reviewed_at",
+    )
+    return [dict(zip(fields, row)) for row in rows]
+
+
+def nursery_routine_recruitment_backlog(
+    settings: Settings, *, actor: str, preview: bool, limit: int = 100
+) -> dict[str, Any]:
+    """Preview or apply the bounded, deterministic routine-recruitment policy.
+
+    Historical validation is computed from human decisions only.  The policy is
+    deliberately disabled unless that comparable cohort has at least 20 rows
+    and no human rejections; this prevents an empty or noisy history becoming
+    an automation authority.
+    """
+    bounded_limit = min(max(int(limit), 1), 100)
+    with connection(settings) as conn:
+        pending = _routine_recruitment_review_rows(conn, "PENDING")
+        reviewed = _routine_recruitment_review_rows(
+            conn, "APPROVED"
+        ) + _routine_recruitment_review_rows(conn, "REJECTED")
+    eligible = [
+        item
+        for item in pending
+        if routine_recruitment_policy_outcome(
+            signal_id=str(item["id"]),
+            vertical=str(item["vertical"]),
+            source_type=str(item["source_type"]),
+            review_status=str(item["review_status"]),
+            extracted_facts=item["extracted_facts"],
+        )
+        != "INELIGIBLE"
+    ]
+    historical = [
+        item
+        for item in reviewed
+        if not str(item.get("reviewed_by") or "").startswith("system:")
+        and routine_recruitment_policy_outcome(
+            signal_id=str(item["id"]),
+            vertical=str(item["vertical"]),
+            source_type=str(item["source_type"]),
+            review_status="PENDING",
+            extracted_facts=item["extracted_facts"],
+        )
+        != "INELIGIBLE"
+    ]
+    historical_rejected = sum(item["review_status"] == "REJECTED" for item in historical)
+    execution_allowed = len(historical) >= 20 and historical_rejected == 0
+    batch = eligible[:bounded_limit]
+    auto = [
+        item
+        for item in batch
+        if routine_recruitment_policy_outcome(
+            signal_id=str(item["id"]),
+            vertical=str(item["vertical"]),
+            source_type=str(item["source_type"]),
+            review_status=str(item["review_status"]),
+            extracted_facts=item["extracted_facts"],
+        )
+        == "AUTO_APPROVE"
+    ]
+    holdouts = [item for item in batch if item not in auto]
+    result = {
+        "preview": bool(preview),
+        "policy_version": ROUTINE_RECRUITMENT_POLICY_VERSION,
+        "vertical": "NURSERY",
+        "source_type": "recruitment",
+        "pending_recruitment_total": len(pending),
+        "eligible_total": len(eligible),
+        "batch_count": len(batch),
+        "would_auto_approve": len(auto),
+        "qa_holdouts": len(holdouts),
+        "remaining_manual": len(pending) - len(eligible),
+        "limit": bounded_limit,
+        "historical_validation": {
+            "human_reviewed": len(historical),
+            "approved": len(historical) - historical_rejected,
+            "rejected": historical_rejected,
+            "precision": (len(historical) - historical_rejected) / len(historical)
+            if historical
+            else None,
+        },
+        "execution_allowed": execution_allowed,
+        "samples": [
+            {
+                "signal_id": str(item["id"]),
+                "outcome": routine_recruitment_policy_outcome(
+                    signal_id=str(item["id"]),
+                    vertical=str(item["vertical"]),
+                    source_type=str(item["source_type"]),
+                    review_status=str(item["review_status"]),
+                    extracted_facts=item["extracted_facts"],
+                ),
+            }
+            for item in batch[:10]
+        ],
+    }
+    if preview or not execution_allowed:
+        return result
+
+    updated_ids: list[str] = []
+    errors = 0
+    for item in batch:
+        signal_id = str(item["id"])
+        outcome = routine_recruitment_policy_outcome(
+            signal_id=signal_id,
+            vertical=str(item["vertical"]),
+            source_type=str(item["source_type"]),
+            review_status=str(item["review_status"]),
+            extracted_facts=item["extracted_facts"],
+        )
+        marker = {
+            "policy_version": ROUTINE_RECRUITMENT_POLICY_VERSION,
+            "outcome": outcome,
+            "qa_bucket": routine_recruitment_qa_bucket(signal_id),
+            "reason": "Routine Nursery recruitment supports an existing opportunity only.",
+            "trigger": "admin_backlog",
+        }
+        try:
+            with connection(settings) as conn:
+                if outcome == "QA_HOLDOUT":
+                    updated = conn.execute(
+                        """
+                        UPDATE signal_enrichments
+                        SET extracted_facts = extracted_facts || %s, updated_at = now()
+                        WHERE raw_signal_id = %s AND review_status = 'PENDING'
+                          AND COALESCE(
+                              extracted_facts->'routine_recruitment_review'->>'policy_version', ''
+                          ) <> %s
+                        RETURNING raw_signal_id
+                        """,
+                        (
+                            Jsonb({"routine_recruitment_review": marker}),
+                            signal_id,
+                            ROUTINE_RECRUITMENT_POLICY_VERSION,
+                        ),
+                    ).fetchone()
+                    action = "NURSERY_ROUTINE_RECRUITMENT_QA_HOLDOUT"
+                else:
+                    updated = conn.execute(
+                        """UPDATE signal_enrichments SET review_status = 'APPROVED',
+                               reviewed_by = %s, reviewed_at = now(),
+                               extracted_facts = extracted_facts || %s, updated_at = now()
+                               WHERE raw_signal_id = %s AND review_status = 'PENDING'
+                               RETURNING raw_signal_id""",
+                        (
+                            f"system:{ROUTINE_RECRUITMENT_POLICY_VERSION}",
+                            Jsonb({"routine_recruitment_review": marker}),
+                            signal_id,
+                        ),
+                    ).fetchone()
+                    action = "NURSERY_ROUTINE_RECRUITMENT_AUTO_APPROVE"
+                if updated:
+                    conn.execute(
+                        """
+                        INSERT INTO admin_audit_events
+                            (action, actor, target_type, target_count, details, vertical)
+                        VALUES (%s, %s, 'signal', 1, %s, 'NURSERY')
+                        """,
+                        (action, actor, Jsonb({"signal_id": signal_id, **marker})),
+                    )
+                    conn.commit()
+                    updated_ids.append(signal_id)
+        except Exception:
+            errors += 1
+    return {
+        **result,
+        "preview": False,
+        "updated": len(updated_ids),
+        "auto_approved": sum(str(item["id"]) in updated_ids for item in auto),
+        "qa_holdouts_recorded": sum(str(item["id"]) in updated_ids for item in holdouts),
+        "errors": errors,
+        "signal_ids": updated_ids,
         "actor": actor,
     }
 
@@ -9187,9 +9388,7 @@ def care_opportunity_orphan_cleanup(
         category="UNSUPPORTED_ORPHAN_CANDIDATE",
         view="inventory",
     )
-    attention_before = care_opportunity_hygiene_audit(
-        settings, limit=1, view="needs_attention"
-    )
+    attention_before = care_opportunity_hygiene_audit(settings, limit=1, view="needs_attention")
     # The authoritative audit can exceed one page; its orphan_candidates list is complete.
     cohort = before["orphan_candidates"]
     summary = summarize_orphan_cleanup(cohort)
@@ -9201,8 +9400,7 @@ def care_opportunity_orphan_cleanup(
         for item in cohort
         if item.get("review_status") == "REJECTED"
         and item.get("system_cleanup_resolved")
-        and str(item.get("customer_lifecycle_stage") or "")
-        not in {"STOPPED", "NEEDS_REVIEW"}
+        and str(item.get("customer_lifecycle_stage") or "") not in {"STOPPED", "NEEDS_REVIEW"}
     ][:bounded_limit]
     selected = eligible[: max(bounded_limit - len(restore_candidates), 0)]
     resolved = 0
@@ -9270,9 +9468,7 @@ def care_opportunity_orphan_cleanup(
                     conn.commit()
                     restored_for_safety += 1
             except Exception as exc:
-                failures.append(
-                    {"opportunity_id": opportunity_id, "error": type(exc).__name__}
-                )
+                failures.append({"opportunity_id": opportunity_id, "error": type(exc).__name__})
         for decision in selected:
             opportunity_id = str(UUID(decision["opportunity_id"]))
             try:
@@ -9379,9 +9575,9 @@ def care_opportunity_orphan_cleanup(
                     }
                 )
 
-    after = care_opportunity_hygiene_audit(
-        settings, limit=1, view="needs_attention"
-    ) if apply else None
+    after = (
+        care_opportunity_hygiene_audit(settings, limit=1, view="needs_attention") if apply else None
+    )
     return {
         "policy_version": OPPORTUNITY_ORPHAN_CLEANUP_POLICY_VERSION,
         "apply": apply,
@@ -9402,9 +9598,7 @@ def care_opportunity_orphan_cleanup(
         "applied_opportunity_ids": applied_ids,
         "sample_auto_resolvable": eligible[:10],
         "sample_preserved": [
-            decision
-            for decision in summary["decisions"]
-            if decision["outcome"] == "PRESERVE"
+            decision for decision in summary["decisions"] if decision["outcome"] == "PRESERVE"
         ][:10],
         "needs_attention_before": attention_before.get("filtered_total"),
         "needs_attention_after": after.get("filtered_total") if after else None,

@@ -94,6 +94,7 @@ from app.repository import (
     list_procurement_evaluations,
     list_signals,
     merge_opportunities,
+    nursery_routine_recruitment_backlog,
     opportunity_detail,
     organisation_detail,
     planning_family_historical_preview,
@@ -381,6 +382,8 @@ def _admin_path(path: str) -> tuple[str, str | None]:
         return "care-planning-lawfulness-approval", None
     if path == "/admin/review-triage/safe-approve":
         return "review-triage-safe-approve", None
+    if path == "/admin/review-triage/nursery-routine-recruitment":
+        return "review-triage-nursery-routine-recruitment", None
     if path == "/admin/verticals/CHILDRENS_HOME/backfill":
         return "care-backfill", None
     if path == "/admin/opportunities":
@@ -450,9 +453,7 @@ def _admin_path(path: str) -> tuple[str, str | None]:
 
 def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     settings = Settings.from_env()
-    if event.get("operation") == "care_publication_coordinator" and not event.get(
-        "requestContext"
-    ):
+    if event.get("operation") == "care_publication_coordinator" and not event.get("requestContext"):
         return execute_care_publication_batch(
             settings,
             actor="SYSTEM_PUBLICATION_COORDINATOR",
@@ -460,9 +461,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             trigger_source="SCHEDULED",
             require_recurring=True,
         )
-    if event.get("operation") == "care_withdrawal_coordinator" and not event.get(
-        "requestContext"
-    ):
+    if event.get("operation") == "care_withdrawal_coordinator" and not event.get("requestContext"):
         return execute_care_withdrawal_batch(
             settings,
             actor="SYSTEM_WITHDRAWAL_COORDINATOR",
@@ -491,9 +490,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         queued = queue_due_care_planning_watches(
             settings,
             max_due=max_due,
-            retry_run_ids=[str(value) for value in retry_run_ids]
-            if retry_run_ids
-            else None,
+            retry_run_ids=[str(value) for value in retry_run_ids] if retry_run_ids else None,
         )
         queued["enrolment"] = {
             key: enrolment[key]
@@ -1978,6 +1975,21 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                         limit=min(max(int(payload.get("limit", 100)), 1), 100),
                         threshold=float(payload.get("threshold", 0.95)),
                         vertical=vertical,
+                    ),
+                )
+            if action == "review-triage-nursery-routine-recruitment" and method == "POST":
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                payload = parse_json_payload(_raw_body(event))
+                actor = str(claims.get("sub") or claims.get("username") or "unknown")
+                return _response(
+                    200,
+                    nursery_routine_recruitment_backlog(
+                        settings,
+                        actor=actor,
+                        preview=bool(payload.get("preview", True)),
+                        limit=min(max(int(payload.get("limit", 100)), 1), 100),
                     ),
                 )
             if action == "care-backfill" and method == "POST":

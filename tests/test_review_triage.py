@@ -13,6 +13,9 @@ from app.review_triage import (
     normalize_planning_decision,
     planning_refusal_assessment,
     review_triage_bucket,
+    routine_recruitment_candidate,
+    routine_recruitment_policy_outcome,
+    routine_recruitment_qa_holdout,
     safe_approval_candidate,
     safe_approval_policy_outcome,
     safe_approval_qa_bucket,
@@ -314,6 +317,61 @@ def test_safe_approval_holdout_is_stable_and_refusal_wins() -> None:
         ai_status="SUCCEEDED",
         ai_recommendation="APPROVE",
         ai_confidence=1.0,
+    )
+
+
+def test_routine_nursery_recruitment_is_a_narrow_support_only_policy() -> None:
+    signal_id = str(uuid4())
+    facts = {
+        "classification": "recruitment-routine",
+        "recruitment_relevance": "RELEVANT_ROUTINE",
+        "recruitment_candidate_matched": True,
+        "commercial_change_evidence": "NONE",
+        "opportunity_creation_decision": "SUPPORT_EXISTING_ONLY",
+        "recruitment_ambiguity_flags": [],
+        "recruitment_exclusions": [],
+    }
+    assert routine_recruitment_candidate(
+        vertical="NURSERY",
+        source_type="recruitment",
+        review_status="PENDING",
+        extracted_facts=facts,
+    )
+    expected = "QA_HOLDOUT" if routine_recruitment_qa_holdout(signal_id) else "AUTO_APPROVE"
+    assert (
+        routine_recruitment_policy_outcome(
+            signal_id=signal_id,
+            vertical="NURSERY",
+            source_type="recruitment",
+            review_status="PENDING",
+            extracted_facts=facts,
+        )
+        == expected
+    )
+
+
+def test_routine_recruitment_policy_keeps_ambiguous_and_care_records_manual() -> None:
+    facts = {
+        "classification": "recruitment-routine",
+        "recruitment_relevance": "RELEVANT_ROUTINE",
+        "recruitment_candidate_matched": True,
+        "commercial_change_evidence": "NONE",
+        "opportunity_creation_decision": "SUPPORT_EXISTING_ONLY",
+        "recruitment_ambiguity_flags": ["mixed_setting"],
+        "recruitment_exclusions": [],
+    }
+    assert not routine_recruitment_candidate(
+        vertical="NURSERY",
+        source_type="recruitment",
+        review_status="PENDING",
+        extracted_facts=facts,
+    )
+    facts["recruitment_ambiguity_flags"] = []
+    assert not routine_recruitment_candidate(
+        vertical="CHILDRENS_HOME",
+        source_type="recruitment",
+        review_status="PENDING",
+        extracted_facts=facts,
     )
 
 

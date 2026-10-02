@@ -1766,3 +1766,11 @@ Paid-pilot activation check (2026-09-28):
   and `37004482019`. Production queues are empty apart from the six known collector-DLQ baseline
   messages. No publication, withdrawal, watcher or collector policy changed; the next work is the
   four explicit pending-signal reviews and separate investigation of the existing watcher 404s.
+- Pending-review automation adds the deliberately narrow `nursery-routine-recruitment-v1` policy.
+  It is restricted to NurserySignal records deterministically classified as unambiguous routine
+  recruitment with `RELEVANT_ROUTINE` and `SUPPORT_EXISTING_ONLY`; it cannot create an opportunity.
+  A stable ten-percent QA holdout remains pending. The bounded admin preview/apply path is guarded by
+  comparable human-review validation (at least twenty records and zero rejections), records policy
+  provenance and per-signal audit events, and is idempotent. Planning disagreement, school/mixed-use,
+  horticultural, lawfulness and CareProspect cohorts remain manual by design. Deployment and bounded
+  production execution are pending this change's validation gate.
