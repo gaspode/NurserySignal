@@ -1772,5 +1772,14 @@ Paid-pilot activation check (2026-09-28):
   A stable ten-percent QA holdout remains pending. The bounded admin preview/apply path is guarded by
   comparable human-review validation (at least twenty records and zero rejections), records policy
   provenance and per-signal audit events, and is idempotent. Planning disagreement, school/mixed-use,
-  horticultural, lawfulness and CareProspect cohorts remain manual by design. Deployment and bounded
-  production execution are pending this change's validation gate.
+  horticultural, lawfulness and CareProspect cohorts remain manual by design. Commit `940bf0f` passed
+  CI run `37025625665` and deployed successfully in run `37025781577`. The live preview found exactly
+  22 eligible pending routine-recruitment records, validated against 148 comparable human decisions
+  (148 approved / 0 rejected), and retained one deterministic QA holdout. The bounded production batch
+  wrote 21 automatic APPROVED decisions and one QA marker with zero errors; its immediate rerun wrote
+  zero records. Pending signals fell from 447 to 426 (NurserySignal 431 to 410; CareProspect unchanged
+  at 16), while approved signals rose from 1,463 to 1,484. No provider calls, opportunity creation or
+  relationships, lifecycle, publication, withdrawal, watcher, matching or collector settings changed.
+  The remaining 426 are intentionally manual: 409 Nursery Planning records (105 rule/AI disagreements
+  and 304 manual-only), the one QA holdout, and all 16 CareProspect records. Backend (640) and frontend
+  (71 focused) tests, Ruff, frontend build and Terraform fmt/validate pass.
