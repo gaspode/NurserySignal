@@ -1724,5 +1724,16 @@ Paid-pilot activation check (2026-09-28):
   records remain for human review. Original signal relationships and creation provenance remain
   attached, and the active relationship prevents recalculation from recreating the same invalid
   shell. Each applied resolution records an audit event and is idempotent; terminal records leave
-  the actionable Needs Attention view while remaining inspectable in inventory/history. Production
-  preview/apply counts and deployment identifiers are pending the disabled-first rollout.
+  the actionable Needs Attention view while remaining inspectable in inventory/history. The live
+  preview found 348 draft orphans: 297 SIGNAL_REJECTED, 32 OLD_CREATION_RULE, nine PLANNING_REFUSED,
+  five PLANNING_WITHDRAWN and five TAXONOMY_RECLASSIFIED. It admitted 331 and preserved 17: fourteen
+  terminal Planning records with approved review-level evidence and three records with active
+  Planning watches. Bounded execution resolved all 331 with no failures or publication, withdrawal,
+  lifecycle, relationship or provider changes; transaction guards safely skipped overlapping
+  selections during one duplicated invocation. The repeat run selected zero and wrote nothing.
+  Needs Attention fell from 352 to 21 (17 preserved orphans plus four investigations), with no
+  duplicate/superseded candidates. CI run `36988899993` and deployment run `36989026952` passed for
+  commit `2a8be49`; 633 backend tests, Ruff, frontend build and Terraform fmt/validate/plan/apply pass.
+  API/database health is green, active queues/DLQs are empty, and the six known collector-DLQ
+  baseline messages remain unchanged. The remaining 17 require human review; no broader automation
+  policy changed.
