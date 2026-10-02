@@ -1811,3 +1811,13 @@ Paid-pilot activation check (2026-09-28):
   wording with no construction, conversion, extension, demolition or procedural wording. It has eight exact
   human precedents (8 rejected / 0 approved), uses a stable ten-percent QA holdout, and is deployment/production
   preview pending. CareProspect remains out of scope.
+- `nursery-planning-arboriculture-v1` deployed and completed its initial bounded run. Its production preview
+  found 14 exact standalone tree-work disagreements, validated against 8 human rejections / 0 approvals; 12
+  were automatically rejected and 2 stable QA holdouts were retained. A first no-write attempt exposed a safe
+  audit serialisation failure because PostgreSQL NUMERIC AI confidence arrived as `Decimal`; no signal changed,
+  the confidence is now explicitly serialised as a float, and the retried batch completed with zero errors.
+  The repeat run wrote zero records. Nursery Planning pending fell from 392 to 380, and deterministic/AI
+  disagreement from 86 to 74; the 306 manual-only records remain unchanged. CI runs `37041880102` and
+  `37042684172`, deployments `37042012582` and `37042825087`, passed. No provider, CareProspect, opportunity,
+  lifecycle, publication, watcher or matching actions occurred. Active queues are empty; the collector-manual
+  DLQ retains its six known baseline messages.
