@@ -1864,4 +1864,6 @@ Paid-pilot activation check (2026-09-28):
   and dashboard pending counts reuse the same source predicate as signal search/listing; excluded records are
   reported separately as `evaluation_pending` with vertical and source-type breakdowns. This is read-only
   projection work: no signal review, provider, opportunity, lifecycle, publication, watcher or queue state is
-  changed. Deployment and production reconciliation pending.
+  changed. Production now reconciles at 333 actionable pending records (332 Nursery Planning and one Nursery
+  Recruitment; zero CareProspect) with 12 separately-labelled CareProspect procurement-evaluation records.
+  CI `37148790820` and deploy `37148869660` passed.
