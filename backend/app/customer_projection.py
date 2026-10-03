@@ -99,6 +99,11 @@ def generated_customer_summary(row: dict[str, Any]) -> str:
         or row.get("lifecycle_stage")
         or ""
     )
+    if row.get("foundational_evidence") is False:
+        return (
+            "Current reviewed evidence concerns existing or supporting context and does "
+            "not establish a new children’s-home opening."
+        )
     if lifecycle == "PLANNING_PENDING":
         return (
             "A planning application has been submitted for material children’s-home "

@@ -152,3 +152,14 @@ def test_generated_summary_is_stage_aware_without_overstating_certainty() -> Non
     assert "approved" in approved
     assert "appeal is in progress" in appeal
     assert "opening confirmed" not in pending.lower()
+
+
+def test_generated_summary_does_not_imply_opening_without_foundational_evidence() -> None:
+    summary = generated_customer_summary(
+        {
+            "customer_lifecycle_stage": "NEEDS_REVIEW",
+            "source_types": ["planning"],
+            "foundational_evidence": False,
+        }
+    )
+    assert "does not establish a new children’s-home opening" in summary

@@ -1871,5 +1871,8 @@ Paid-pilot activation check (2026-09-28):
   Current support classification, rather than planning-family primary provenance, determines the timeline role;
   a primary-family signal reclassified as `LAWFULNESS_EXISTING` / `SUPPORT_EXISTING_ONLY` therefore renders as
   supporting evidence and cannot keep a misleading new-opening basis. The existing bounded semantic-drift and
-  orphan-resolution paths remain the only mutating repair mechanisms; production preview/application and
-  validation are pending.
+  orphan-resolution paths remain the only mutating repair mechanisms. The initial production repair corrected
+  the single safe `LAWFULNESS_EXISTING_ON_OPENING` candidate (Ampthill Road) and then resolved its unsupported
+  DRAFT shell through the existing audited orphan policy; no publication, withdrawal, relationship, watcher,
+  provider or customer-state mutation occurred. Generated customer-summary previews now also state explicitly
+  when current evidence does not establish an opening. Final projection deployment/verification is pending.

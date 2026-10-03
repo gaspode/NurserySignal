@@ -11570,6 +11570,7 @@ def opportunity_detail(settings: Settings, opportunity_id: str) -> dict[str, Any
         "local_authority": authorities[0] if len(authorities) == 1 else None,
         "region": regions[0] if len(regions) == 1 else None,
         "change_type": opportunity[7],
+        "foundational_evidence": foundational_count > 0,
         "source_types": sorted(
             {str(signal["source_type"]) for signal in approved_customer_signals}
         ),
