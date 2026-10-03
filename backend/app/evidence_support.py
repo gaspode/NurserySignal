@@ -115,6 +115,43 @@ def classify_evidence_support(signal: dict[str, Any]) -> EvidenceSupport:
     return EvidenceSupport.NON_SUPPORTING
 
 
+def current_opportunity_basis_reason(
+    opportunity: dict[str, Any], signals: list[dict[str, Any]]
+) -> str | None:
+    """Project present-tense basis copy without rewriting creation provenance."""
+    if str(opportunity.get("vertical") or "") != "CHILDRENS_HOME":
+        return opportunity.get("creation_reason") or opportunity.get("stage_reason") or None
+
+    active = [
+        signal
+        for signal in signals
+        if signal.get("relationship_status", signal.get("status")) == "ACTIVE"
+    ]
+    if EvidenceSupport.FOUNDATIONAL in [classify_evidence_support(signal) for signal in active]:
+        return opportunity.get("creation_reason") or opportunity.get("stage_reason") or None
+
+    existing_lawfulness = any(
+        str(signal.get("source_type") or "").lower() == "planning"
+        and signal.get("review_status") == "APPROVED"
+        and str((signal.get("extracted_facts") or {}).get("planning_subtype") or "")
+        == "LAWFULNESS_EXISTING"
+        and str(
+            (signal.get("extracted_facts") or {}).get("opportunity_creation_decision")
+            or ""
+        )
+        == "SUPPORT_EXISTING_ONLY"
+        for signal in active
+    )
+    if existing_lawfulness:
+        return (
+            "Planning evidence confirms existing children's-home use; it does not "
+            "establish a new-opening event."
+        )
+    if str(opportunity.get("change_type") or "") == "OPENING":
+        return "No current approved foundational evidence supports this as a new-opening event."
+    return opportunity.get("stage_reason") or opportunity.get("creation_reason") or None
+
+
 def planning_timeline_projection(signal: dict[str, Any]) -> dict[str, Any]:
     """Project compact, authoritative Planning semantics for the admin timeline."""
     if str(signal.get("source_type") or "").lower() != "planning":

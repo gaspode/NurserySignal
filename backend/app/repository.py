@@ -81,6 +81,7 @@ from app.db import connection
 from app.evidence_support import (
     EvidenceSupport,
     classify_evidence_support,
+    current_opportunity_basis_reason,
     planning_timeline_projection,
 )
 from app.ingestion import NormalizedSignal
@@ -11414,7 +11415,7 @@ def opportunity_detail(settings: Settings, opportunity_id: str) -> dict[str, Any
                       customer_lifecycle_stage, customer_lifecycle_reason,
                       customer_lifecycle_policy_version, customer_lifecycle_evaluated_at,
                       publication_automation_blocked, publication_automation_reason,
-                      publication_automation_provenance
+                      publication_automation_provenance, review_status
                FROM opportunities WHERE id = %s""",
             (opportunity_id,),
         ).fetchone()
@@ -11574,6 +11575,15 @@ def opportunity_detail(settings: Settings, opportunity_id: str) -> dict[str, Any
         ),
     }
     lifecycle_preview = derive_care_lifecycle(active_signals)
+    basis_reason = current_opportunity_basis_reason(
+        {
+            "vertical": opportunity[6],
+            "change_type": opportunity[7],
+            "stage_reason": opportunity[12],
+            "creation_reason": opportunity[13],
+        },
+        signals,
+    )
     return {
         "id": opportunity[0],
         "name": opportunity[1],
@@ -11605,6 +11615,8 @@ def opportunity_detail(settings: Settings, opportunity_id: str) -> dict[str, Any
         "publication_automation_blocked": opportunity[27],
         "publication_automation_reason": opportunity[28],
         "publication_automation_provenance": opportunity[29] or {},
+        "review_status": opportunity[30],
+        "basis_reason": basis_reason,
         "derived_customer_lifecycle": lifecycle_preview.lifecycle.value,
         "derived_customer_lifecycle_reason": lifecycle_preview.reason,
         "derived_customer_lifecycle_policy_version": CARE_LIFECYCLE_POLICY_VERSION,

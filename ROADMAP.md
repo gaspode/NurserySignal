@@ -1867,3 +1867,9 @@ Paid-pilot activation check (2026-09-28):
   changed. Production now reconciles at 333 actionable pending records (332 Nursery Planning and one Nursery
   Recruitment; zero CareProspect) with 12 separately-labelled CareProspect procurement-evaluation records.
   CI `37148790820` and deploy `37148869660` passed.
+- CareProspect opportunity detail now separates immutable creation provenance from the current evidence basis.
+  Current support classification, rather than planning-family primary provenance, determines the timeline role;
+  a primary-family signal reclassified as `LAWFULNESS_EXISTING` / `SUPPORT_EXISTING_ONLY` therefore renders as
+  supporting evidence and cannot keep a misleading new-opening basis. The existing bounded semantic-drift and
+  orphan-resolution paths remain the only mutating repair mechanisms; production preview/application and
+  validation are pending.

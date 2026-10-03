@@ -1256,8 +1256,8 @@ describe("admin frontend", () => {
       change_type: "OPENING",
       confidence: 0.95,
       signals: [
-        { id: "approved", source_type: "planning", title: "C3 to C2 change", relationship_status: "ACTIVE", match_reason: "merged from 380399bb-example", source_url: "https://planning.example/approved", planning_outcome: "APPROVED", planning_decision_raw: "Grant Permission Subject To Conditions", planning_status_raw: "Decided", planning_subtype: "NEW_HOME_CHANGE_OF_USE", opportunity_creation_decision: "CREATE_OPPORTUNITY", planning_families: [{ id: "family-approved", relationship_type: "PRIMARY_APPLICATION", planning_authority: "Example Council", raw_reference: "24/001/FUL", origin_status: "FOUND" }] },
-        { id: "followup", source_type: "planning", title: "Condition details", relationship_status: "ACTIVE", planning_outcome: "APPROVED", planning_subtype: "CONDITION_DISCHARGE", opportunity_creation_decision: "SUPPORT_EXISTING_ONLY", planning_families: [{ id: "family-followup", relationship_type: "REFERENCES_APPLICATION", planning_authority: "Example Council", raw_reference: "24/001/FUL", origin_status: "FOUND" }] },
+        { id: "approved", source_type: "planning", title: "C3 to C2 change", relationship_status: "ACTIVE", match_reason: "merged from 380399bb-example", source_url: "https://planning.example/approved", planning_outcome: "APPROVED", planning_decision_raw: "Grant Permission Subject To Conditions", planning_status_raw: "Decided", planning_subtype: "NEW_HOME_CHANGE_OF_USE", opportunity_creation_decision: "CREATE_OPPORTUNITY", evidence_support_classification: "FOUNDATIONAL", planning_families: [{ id: "family-approved", relationship_type: "PRIMARY_APPLICATION", planning_authority: "Example Council", raw_reference: "24/001/FUL", origin_status: "FOUND" }] },
+        { id: "followup", source_type: "planning", title: "Condition details", relationship_status: "ACTIVE", planning_outcome: "APPROVED", planning_subtype: "CONDITION_DISCHARGE", opportunity_creation_decision: "SUPPORT_EXISTING_ONLY", evidence_support_classification: "SUPPORTING_FOLLOWUP", planning_families: [{ id: "family-followup", relationship_type: "REFERENCES_APPLICATION", planning_authority: "Example Council", raw_reference: "24/001/FUL", origin_status: "FOUND" }] },
         { id: "refused", source_type: "planning", title: "Refused opening", relationship_status: "ACTIVE", planning_outcome: "REFUSED", planning_decision_raw: "Refused LUC", planning_subtype: "NEW_HOME_OTHER_EXPLICIT", opportunity_creation_decision: "CREATE_OPPORTUNITY", planning_consistency_warning: true },
         { id: "withdrawn", source_type: "planning", title: "Withdrawn application", relationship_status: "ACTIVE", planning_outcome: "WITHDRAWN", planning_subtype: "AMBIGUOUS", opportunity_creation_decision: "REVIEW" },
         { id: "pending", source_type: "planning", title: "Pending lawfulness", relationship_status: "ACTIVE", planning_outcome: "PENDING", planning_subtype: "LAWFULNESS_PROPOSED", opportunity_creation_decision: "CREATE_OPPORTUNITY" },
@@ -1272,7 +1272,8 @@ describe("admin frontend", () => {
     expect(approved).toHaveTextContent("Decision: Approved");
     expect(approved).toHaveTextContent("Explicit new home — change of use");
     expect(approved).toHaveTextContent("Opportunity action: Create opportunity");
-    expect(approved).toHaveTextContent("Foundational application");
+    expect(approved).toHaveTextContent("Foundational evidence");
+    expect(approved).toHaveTextContent("Primary planning application");
     expect(approved).toHaveTextContent("Raw council decision: Grant Permission Subject To Conditions");
     expect(approved).toHaveTextContent("Raw council status: Decided");
     expect(within(approved).getByText("Relationship provenance")).toBeInTheDocument();
@@ -1303,7 +1304,7 @@ describe("admin frontend", () => {
       evidence_support: { foundational: 0, supporting_followups: 1, unresolved_origins: 1 },
       signals: [{
         id: "followup-1", source_type: "planning", title: "Discharge of conditions",
-        relationship_status: "ACTIVE", planning_families: [{
+        relationship_status: "ACTIVE", evidence_support_classification: "SUPPORTING_FOLLOWUP", planning_families: [{
           id: "family-1", planning_authority: "Example Council", raw_reference: "24/03385/FUL",
           relationship_type: "REFERENCES_APPLICATION", origin_status: "MISSING",
           latest_recovery_status: null,
@@ -1321,12 +1322,32 @@ describe("admin frontend", () => {
     render(<OpportunityDetail opportunityId="opp-2" apiClient={apiClient} onBack={onBack} onNavigate={onNavigate} contextQuery="from=opportunity-hygiene&category=NEEDS_INVESTIGATION&hygiene_offset=4&hygiene_total=8" />);
     expect(await screen.findByText("0 foundational signals · 1 supporting follow-up signal")).toBeInTheDocument();
     expect(screen.getByText("Supporting follow-up")).toBeInTheDocument();
+    expect(screen.getByText("Referenced planning application")).toBeInTheDocument();
     expect(screen.getByText("Originating planning application has not yet been resolved.")).toBeInTheDocument();
     await waitFor(() => expect(screen.getByRole("button", { name: "Next →" })).toBeEnabled());
     await userEvent.click(screen.getByRole("button", { name: "Next →" }));
     expect(onNavigate).toHaveBeenCalledWith(expect.stringContaining("/opportunities/opp-next?"));
     await userEvent.click(screen.getByRole("button", { name: "Find referenced application" }));
     expect(apiClient).toHaveBeenCalledWith("/admin/signals/followup-1/planning-origin", expect.objectContaining({ method: "POST" }));
+  });
+
+  it("uses the current evidence role rather than stale primary-family provenance", async () => {
+    const apiClient = vi.fn().mockResolvedValue({
+      id: "opp-reclassified", name: "Children's home — Example", lifecycle_stage: "PLANNING",
+      change_type: "OTHER_CHANGE", confidence: 0.8,
+      basis_reason: "Planning evidence confirms existing children's-home use; it does not establish a new-opening event.",
+      evidence_support: { foundational: 0, supporting_followups: 1 },
+      signals: [{
+        id: "lawfulness", source_type: "planning", title: "Existing lawful development",
+        relationship_status: "ACTIVE", evidence_support_classification: "SUPPORTING_FOLLOWUP",
+        planning_families: [{ id: "family-primary", relationship_type: "PRIMARY_APPLICATION", planning_authority: "Example Council", raw_reference: "26/001" }],
+      }],
+    });
+    render(<OpportunityDetail opportunityId="opp-reclassified" apiClient={apiClient} onBack={vi.fn()} />);
+    expect(await screen.findByText("Supporting follow-up")).toBeInTheDocument();
+    expect(screen.getByText("Primary planning application")).toBeInTheDocument();
+    expect(screen.queryByText("Foundational application")).not.toBeInTheDocument();
+    expect(screen.getByText(/does not establish a new-opening event/i)).toBeInTheDocument();
   });
 
   it("preserves publication-candidate context through publish and advance", async () => {

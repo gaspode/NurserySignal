@@ -4,6 +4,7 @@ import pytest
 from app.evidence_support import (
     EvidenceSupport,
     classify_evidence_support,
+    current_opportunity_basis_reason,
     planning_timeline_projection,
 )
 from app.opportunity_hygiene import audit_opportunities
@@ -98,6 +99,38 @@ def test_current_support_only_overrides_old_relationship_create_semantics() -> N
         "opportunity_creation_decision": "CREATE_OPPORTUNITY"
     }
     assert classify_evidence_support(signal) is EvidenceSupport.SUPPORTING_FOLLOWUP
+
+
+def test_existing_lawfulness_support_only_replaces_stale_opening_basis_copy() -> None:
+    signal = planning_signal(
+        subtype="LAWFULNESS_EXISTING", decision="SUPPORT_EXISTING_ONLY"
+    )
+    reason = current_opportunity_basis_reason(
+        {
+            "vertical": "CHILDRENS_HOME",
+            "change_type": "OPENING",
+            "creation_reason": "Planning evidence indicates a new children's home",
+            "stage_reason": "planning evidence",
+        },
+        [signal],
+    )
+    assert reason == (
+        "Planning evidence confirms existing children's-home use; it does not "
+        "establish a new-opening event."
+    )
+
+
+def test_valid_foundation_preserves_current_opening_basis_copy() -> None:
+    signal = planning_signal()
+    reason = current_opportunity_basis_reason(
+        {
+            "vertical": "CHILDRENS_HOME",
+            "change_type": "OPENING",
+            "creation_reason": "Planning evidence indicates a new children's home",
+        },
+        [signal],
+    )
+    assert reason == "Planning evidence indicates a new children's home"
 
 
 @pytest.mark.parametrize(
