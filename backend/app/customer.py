@@ -952,6 +952,174 @@ def customer_readiness(settings: Settings) -> dict[str, Any]:
     }
 
 
+CUSTOMER_PUBLICATION_QUALITY_SCHEMA_VERSION = "signalhub-customer-publication-quality-v1"
+
+
+def _published_quality_assessment(row: dict[str, Any], *, now: datetime) -> tuple[str, list[str]]:
+    """Classify a published customer record without changing publication state."""
+    reasons: list[str] = []
+    location_present = any(
+        (
+            customer_safe_place(row.get("town")),
+            customer_safe_place(row.get("local_authority"), authority=True),
+            customer_safe_place(row.get("region")),
+            postcode_district(row.get("postcode")),
+        )
+    )
+    if not row.get("approved_signal_count"):
+        reasons.append("no_current_approved_evidence")
+    if str(row.get("customer_lifecycle_stage") or "") == "STOPPED":
+        reasons.append("stopped_lifecycle")
+    if str(row.get("customer_lifecycle_stage") or "") in {"NEEDS_REVIEW", "APPEAL_PENDING"}:
+        reasons.append("lifecycle_requires_human_review")
+    if not location_present:
+        reasons.append("missing_site_or_location_identity")
+    if not str(row.get("operator_name") or "").strip():
+        reasons.append("missing_organisation_identity")
+    if not row.get("official_source_link_count"):
+        reasons.append("missing_official_source_link")
+    updated_at = row.get("latest_update_at")
+    if updated_at and updated_at < now - timedelta(days=180):
+        reasons.append("stale_over_180_days")
+    if not (
+        str(row.get("customer_title") or "").strip()
+        or str(row.get("generated_title") or "").strip()
+    ):
+        reasons.append("missing_customer_title")
+    if not (
+        str(row.get("customer_summary") or "").strip()
+        or str(row.get("generated_summary") or "").strip()
+    ):
+        reasons.append("missing_customer_summary")
+
+    if {"no_current_approved_evidence", "stopped_lifecycle"} & set(reasons):
+        return "SHOULD_NOT_CURRENTLY_BE_PUBLISHED", reasons
+    if "lifecycle_requires_human_review" in reasons:
+        return "MISLEADING_OR_STALE_CUSTOMER_WORDING", reasons
+    if "missing_site_or_location_identity" in reasons:
+        return "NEEDS_SITE_IDENTITY", reasons
+    if "missing_organisation_identity" in reasons:
+        return "NEEDS_ORGANISATION_IDENTITY", reasons
+    if reasons:
+        return "USABLE_WITH_MINOR_ENRICHMENT", reasons
+    return "CUSTOMER_READY", reasons
+
+
+def customer_publication_quality(settings: Settings, *, sample_limit: int = 5) -> dict[str, Any]:
+    """Return a bounded, read-only quality audit for the customer-visible cohort."""
+    bounded_sample_limit = min(max(int(sample_limit), 1), 10)
+    with connection(settings) as conn:
+        rows = conn.execute(
+            """SELECT o.id, o.customer_title, o.customer_summary, o.operator_name,
+                      o.town, o.postcode, o.change_type,
+                      COALESCE(o.customer_lifecycle_stage, o.lifecycle_stage),
+                      o.latest_update_at, geo.region, geo.local_authority,
+                      COALESCE(evidence.approved_signal_count, 0),
+                      COALESCE(evidence.official_source_link_count, 0),
+                      COALESCE(evidence.source_types, ARRAY[]::text[])
+               FROM opportunities o
+               LEFT JOIN LATERAL (
+                 SELECT
+                   (array_agg(NULLIF(rs.metadata->>'region', '')) FILTER
+                     (WHERE rs.metadata->>'region' IS NOT NULL))[1] AS region,
+                   (array_agg(NULLIF(COALESCE(rs.metadata->>'local_authority',
+                     rs.metadata->>'council', rs.metadata->'authority'->>'name'), '')) FILTER
+                     (WHERE COALESCE(rs.metadata->>'local_authority', rs.metadata->>'council',
+                       rs.metadata->'authority'->>'name') IS NOT NULL))[1] AS local_authority
+                 FROM opportunity_signals os
+                 JOIN raw_signals rs ON rs.id = os.raw_signal_id
+                 WHERE os.opportunity_id = o.id AND os.status = 'ACTIVE'
+               ) geo ON TRUE
+               LEFT JOIN LATERAL (
+                 SELECT count(*) FILTER (
+                          WHERE se.review_status = 'APPROVED'
+                            AND rs.source_type <> 'procurement'
+                        ) AS approved_signal_count,
+                        count(*) FILTER (
+                          WHERE se.review_status = 'APPROVED'
+                            AND rs.source_type <> 'procurement'
+                            AND rs.source_url ~ '^https?://'
+                        ) AS official_source_link_count,
+                        array_agg(DISTINCT rs.source_type) FILTER (
+                          WHERE se.review_status = 'APPROVED'
+                            AND rs.source_type <> 'procurement'
+                        ) AS source_types
+                 FROM opportunity_signals os
+                 JOIN raw_signals rs ON rs.id = os.raw_signal_id
+                 LEFT JOIN signal_enrichments se ON se.raw_signal_id = rs.id
+                 WHERE os.opportunity_id = o.id AND os.status = 'ACTIVE'
+               ) evidence ON TRUE
+               WHERE o.vertical = 'CHILDRENS_HOME'
+                 AND o.publication_status = 'PUBLISHED'
+                 AND o.merged_into_opportunity_id IS NULL
+               ORDER BY o.latest_update_at DESC, o.id"""
+        ).fetchall()
+    fields = (
+        "id", "customer_title", "customer_summary", "operator_name", "town", "postcode",
+        "change_type", "customer_lifecycle_stage", "latest_update_at", "region",
+        "local_authority", "approved_signal_count", "official_source_link_count", "source_types",
+    )
+    now = datetime.now(UTC)
+    items: list[dict[str, Any]] = []
+    for value in rows:
+        row = dict(zip(fields, value))
+        projection = {
+            **row,
+            "source_types": list(row.get("source_types") or []),
+        }
+        row["generated_title"] = _customer_title(projection)
+        row["generated_summary"] = generated_customer_summary(projection)
+        quality, reasons = _published_quality_assessment(row, now=now)
+        location = customer_safe_place(row.get("town")) or customer_safe_place(
+            row.get("local_authority"), authority=True
+        ) or customer_safe_place(row.get("region"))
+        items.append(
+            {
+                "opportunity_id": str(row["id"]),
+                "quality": quality,
+                "reasons": reasons,
+                "lifecycle": row.get("customer_lifecycle_stage"),
+                "source_types": projection["source_types"],
+                "has_operator": bool(str(row.get("operator_name") or "").strip()),
+                "has_location": bool(location or postcode_district(row.get("postcode"))),
+                "latest_update_at": row.get("latest_update_at"),
+                "customer_title": row["generated_title"],
+            }
+        )
+    from collections import Counter
+
+    quality_counts = Counter(item["quality"] for item in items)
+    reason_counts = Counter(reason for item in items for reason in item["reasons"])
+    lifecycle_counts = Counter(str(item["lifecycle"] or "UNSET") for item in items)
+    source_counts = Counter(source for item in items for source in item["source_types"])
+    duplicate_keys: dict[tuple[str, str], list[str]] = {}
+    for item in items:
+        key = (item["customer_title"].casefold(), str(item["lifecycle"] or ""))
+        duplicate_keys.setdefault(key, []).append(item["opportunity_id"])
+    duplicate_groups = [
+        {"title": key[0], "lifecycle": key[1], "opportunity_ids": ids}
+        for key, ids in duplicate_keys.items()
+        if len(ids) > 1
+    ]
+    return {
+        "schema_version": CUSTOMER_PUBLICATION_QUALITY_SCHEMA_VERSION,
+        "generated_at": now.isoformat(),
+        "read_only": True,
+        "customer_surface_verticals": ["CHILDRENS_HOME"],
+        "published_total": len(items),
+        "quality_counts": dict(sorted(quality_counts.items())),
+        "reason_counts": dict(sorted(reason_counts.items())),
+        "lifecycle_counts": dict(sorted(lifecycle_counts.items())),
+        "source_type_counts": dict(sorted(source_counts.items())),
+        "duplicate_looking_groups": len(duplicate_groups),
+        "duplicate_looking_samples": duplicate_groups[:bounded_sample_limit],
+        "samples": {
+            quality: [item for item in items if item["quality"] == quality][:bounded_sample_limit]
+            for quality in sorted(quality_counts)
+        },
+    }
+
+
 def pilot_curation_inventory(
     settings: Settings, *, limit: int = 100, publication_status: str | None = None
 ) -> dict[str, Any]:

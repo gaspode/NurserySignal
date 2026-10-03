@@ -41,6 +41,7 @@ from app.customer import (
     create_saved_search,
     customer_context,
     customer_opportunity_detail,
+    customer_publication_quality,
     customer_readiness,
     digest_preview,
     get_customer_preferences,
@@ -290,6 +291,8 @@ def _admin_path(path: str) -> tuple[str, str | None]:
         return "customer-account-list", None
     if path == "/admin/customer-readiness":
         return "customer-readiness", None
+    if path == "/admin/customer-publication-quality":
+        return "customer-publication-quality", None
     if path.startswith("/admin/customer-accounts/"):
         return "customer-account-detail", path[len("/admin/customer-accounts/") :]
     if path == "/admin/backtesting":
@@ -815,6 +818,16 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 if admin_error:
                     return admin_error
                 return _response(200, customer_readiness(settings))
+            if action == "customer-publication-quality" and method == "GET":
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                return _response(
+                    200,
+                    customer_publication_quality(
+                        settings, sample_limit=min(max(int(_query(event, "limit") or "5"), 1), 10)
+                    ),
+                )
             if action == "opportunity-publication" and method == "POST" and signal_id:
                 admin_error = _require_admin(claims, settings)
                 if admin_error:

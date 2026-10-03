@@ -8,6 +8,16 @@ Build a UK sales-intelligence service that surfaces timely, commercially useful 
 
 The MVP succeeds by being trustworthy and actionable, not by maximizing raw signal count.
 
+## Customer commercial readiness
+
+- The first customer-readiness tranche adds a read-only, versioned published-opportunity quality report for
+  CareProspect. It classifies customer-visible records by current evidence/lifecycle safety, site identity,
+  organisation identity, source-link coverage and stale data; samples are bounded and no publication state is
+  changed. The report makes the deliberately CareProspect-only customer surface explicit rather than implying
+  that NurserySignal already has a customer portal.
+- Initial production audit and any follow-on identity/content work are pending. No review, matching, provider,
+  watcher, publication or withdrawal policy change is included in this tranche.
+
 ## CareProspect planning watcher reliability
 
 - Planning lifecycle refresh now prefers each signal's stable Plota application identifier and

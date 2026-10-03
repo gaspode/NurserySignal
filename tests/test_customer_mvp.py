@@ -10,6 +10,7 @@ from app.config import Settings
 from app.customer import (
     _eligibility_sql,
     _project_opportunity,
+    _published_quality_assessment,
     apply_pilot_publications,
     list_customer_opportunities,
     pilot_curation_inventory,
@@ -57,6 +58,42 @@ def customer_context(*, nationwide: bool = True) -> dict:
     }
 
 
+def test_published_quality_requires_current_evidence_and_safe_lifecycle() -> None:
+    now = datetime.now(UTC)
+    quality, reasons = _published_quality_assessment(
+        {
+            "approved_signal_count": 0,
+            "official_source_link_count": 1,
+            "customer_lifecycle_stage": "STOPPED",
+            "town": "Liverpool",
+            "postcode": "L17 9QN",
+            "operator_name": "Example Care Ltd",
+            "generated_title": "Children's home — Liverpool, L17",
+            "generated_summary": "Summary",
+        },
+        now=now,
+    )
+    assert quality == "SHOULD_NOT_CURRENTLY_BE_PUBLISHED"
+    assert {"no_current_approved_evidence", "stopped_lifecycle"} <= set(reasons)
+
+
+def test_published_quality_identifies_identity_and_review_gaps() -> None:
+    quality, reasons = _published_quality_assessment(
+        {
+            "approved_signal_count": 1,
+            "official_source_link_count": 1,
+            "customer_lifecycle_stage": "NEEDS_REVIEW",
+            "generated_title": "Children's home development",
+            "generated_summary": "Summary",
+        },
+        now=datetime.now(UTC),
+    )
+    assert quality == "MISLEADING_OR_STALE_CUSTOMER_WORDING"
+    assert "lifecycle_requires_human_review" in reasons
+    assert "missing_site_or_location_identity" in reasons
+    assert "missing_organisation_identity" in reasons
+
+
 def test_customer_role_cannot_access_admin_or_ingestion(monkeypatch) -> None:
     monkeypatch.setattr("app.handler.customer_context", lambda *_: customer_context())
     assert handler(event("/admin/signals"), None)["statusCode"] == 403
@@ -74,6 +111,24 @@ def test_customer_feed_requires_customer_membership(monkeypatch) -> None:
     response = handler(event("/customer/opportunities", claims=ADMIN), None)
     assert response["statusCode"] == 403
     assert called is False
+
+
+def test_customer_publication_quality_is_admin_only_and_read_only(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "app.handler.customer_publication_quality",
+        lambda *_args, **_kwargs: {
+            "schema_version": "signalhub-customer-publication-quality-v1",
+            "read_only": True,
+            "published_total": 1,
+        },
+    )
+    denied = handler(event("/admin/customer-publication-quality"), None)
+    assert denied["statusCode"] == 403
+    response = handler(
+        event("/admin/customer-publication-quality", claims=ADMIN, query={"limit": "5"}), None
+    )
+    assert response["statusCode"] == 200
+    assert json.loads(response["body"])["read_only"] is True
 
 
 def test_customer_feed_forwards_only_bounded_safe_filters(monkeypatch) -> None:
