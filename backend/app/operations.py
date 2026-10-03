@@ -16,6 +16,8 @@ from app.db import connection
 from app.repository import (
     _care_withdrawal_preview_from_inventory,
     _current_care_publication_inventory,
+    actionable_review_source_clause,
+    pending_review_cohorts,
 )
 
 OPERATIONS_SUMMARY_SCHEMA_VERSION = "signalhub-operations-summary-v1"
@@ -76,10 +78,12 @@ def operations_summary(settings: Settings) -> dict[str, Any]:
     decisions = inventory["decisions"]
     hygiene_counts = Counter(item["hygiene"]["category"] for item in decisions)
     publication_outcomes = Counter(item["decision"].outcome for item in decisions)
+    pending_review = pending_review_cohorts(settings)
+    actionable_source_clause = actionable_review_source_clause("rs")
 
     with connection(settings) as conn:
         ingestion_rows = conn.execute(
-            """WITH windows(label, since_at) AS (
+            f"""WITH windows(label, since_at) AS (
                  VALUES ('24h', now() - interval '24 hours'),
                         ('7d', now() - interval '7 days'),
                         ('30d', now() - interval '30 days')
@@ -92,13 +96,15 @@ def operations_summary(settings: Settings) -> dict[str, Any]:
                FROM windows w
                JOIN raw_signals rs ON rs.discovered_at >= w.since_at
                LEFT JOIN signal_enrichments se ON se.raw_signal_id = rs.id
+               WHERE {actionable_source_clause}
                GROUP BY w.label, rs.vertical, rs.source_type
                ORDER BY w.label, rs.vertical, rs.source_type"""
         ).fetchall()
         signal_rows = conn.execute(
-            """SELECT rs.vertical, COALESCE(se.review_status, 'UNENRICHED'), count(*)
+            f"""SELECT rs.vertical, COALESCE(se.review_status, 'UNENRICHED'), count(*)
                FROM raw_signals rs
                LEFT JOIN signal_enrichments se ON se.raw_signal_id = rs.id
+               WHERE {actionable_source_clause}
                GROUP BY rs.vertical, COALESCE(se.review_status, 'UNENRICHED')"""
         ).fetchall()
         unmatched_rows = conn.execute(
@@ -412,6 +418,13 @@ def operations_summary(settings: Settings) -> dict[str, Any]:
             "unmatched_signal": (
                 "Approved actionable signal without an ACTIVE opportunity relationship."
             ),
+            "actionable_pending_review": (
+                "Enriched PENDING signals in the human review queue; excludes "
+                "evaluation-only procurement evidence."
+            ),
+            "evaluation_pending": (
+                "PENDING evaluation-only evidence, tracked outside the human signal-review queue."
+            ),
         },
         "ingestion": {
             "windows": _window_payload(ingestion_rows),
@@ -442,6 +455,8 @@ def operations_summary(settings: Settings) -> dict[str, Any]:
                     signal_status["REJECTED"], signal_status["APPROVED"] + signal_status["REJECTED"]
                 ),
             },
+            "pending_review": pending_review["actionable"],
+            "evaluation_pending": pending_review["evaluation"],
         },
         "opportunities": {
             "active_total": sum(active_by_vertical.values()),

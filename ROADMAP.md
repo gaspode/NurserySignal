@@ -1859,3 +1859,9 @@ Paid-pilot activation check (2026-09-28):
   search and automation switches remain absent. The planning-watch retry only queues a bounded existing exact
   identity through the ordinary worker and retains existing quota controls. Production rollout remains gated on
   a fresh OAuth authorization granting the new admin scope and harmless tools/list verification.
+- Pending-review observability now has one canonical cohort: enriched `PENDING` signals that appear in the
+  human review queue, excluding evaluation-only procurement evidence. Operations Summary, MCP review summary
+  and dashboard pending counts reuse the same source predicate as signal search/listing; excluded records are
+  reported separately as `evaluation_pending` with vertical and source-type breakdowns. This is read-only
+  projection work: no signal review, provider, opportunity, lifecycle, publication, watcher or queue state is
+  changed. Deployment and production reconciliation pending.

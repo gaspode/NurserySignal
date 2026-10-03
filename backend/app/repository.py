@@ -169,6 +169,61 @@ from app.verticals import (
 )
 
 PLANNING_FAMILY_HISTORICAL_BACKFILL_VERSION = "planning-family-historical-backfill-v1"
+EVALUATION_ONLY_SOURCE_TYPES = ("procurement",)
+
+
+def actionable_review_source_clause(alias: str = "rs") -> str:
+    """Return the shared source predicate for the human signal-review queue.
+
+    Procurement is deliberately retained as shadow/evaluation evidence and has
+    its own administrative surface.  It is not a human signal-review item.
+    Keep this predicate shared with the operational counts so a dashboard
+    number always denotes the same cohort as the queue an administrator opens.
+    """
+    values = ", ".join(f"'{value}'" for value in EVALUATION_ONLY_SOURCE_TYPES)
+    return f"{alias}.source_type NOT IN ({values})"
+
+
+def pending_review_cohorts(settings: Settings) -> dict[str, Any]:
+    """Return the canonical actionable/evaluation PENDING-review cohorts.
+
+    This is intentionally a read-only projection.  `actionable` is the one
+    definition used by the signal review queue, MCP backlog summary, and admin
+    dashboard counts.  Evaluation-only records are surfaced separately rather
+    than silently mixed into a human-review total.
+    """
+    actionable_clause = actionable_review_source_clause("rs")
+    with connection(settings) as conn:
+        rows = conn.execute(
+            f"""
+            SELECT CASE WHEN {actionable_clause}
+                        THEN 'ACTIONABLE_PENDING_REVIEW'
+                        ELSE 'EVALUATION_PENDING'
+                   END AS cohort,
+                   rs.vertical,
+                   rs.source_type,
+                   count(*)
+            FROM raw_signals rs
+            JOIN signal_enrichments se ON se.raw_signal_id = rs.id
+            WHERE se.review_status = 'PENDING'
+            GROUP BY cohort, rs.vertical, rs.source_type
+            ORDER BY cohort, rs.vertical, rs.source_type
+            """
+        ).fetchall()
+
+    result: dict[str, Any] = {
+        "actionable": {"total": 0, "by_vertical": {}, "by_source_type": {}},
+        "evaluation": {"total": 0, "by_vertical": {}, "by_source_type": {}},
+    }
+    for cohort, vertical, source_type, count in rows:
+        target = result["actionable" if cohort == "ACTIONABLE_PENDING_REVIEW" else "evaluation"]
+        value = int(count or 0)
+        target["total"] += value
+        target["by_vertical"][str(vertical)] = target["by_vertical"].get(str(vertical), 0) + value
+        target["by_source_type"][str(source_type)] = (
+            target["by_source_type"].get(str(source_type), 0) + value
+        )
+    return result
 
 
 def record_admin_audit(
@@ -753,7 +808,7 @@ def list_signals(
     else:
         # Evaluation-only procurement evidence has its own admin surface and
         # must not inflate the human signal-review inbox or overview counts.
-        clauses.append("rs.source_type <> 'procurement'")
+        clauses.append(actionable_review_source_clause("rs"))
     if discovered_from:
         clauses.append("rs.discovered_at >= %s::timestamptz")
         params.append(discovered_from)

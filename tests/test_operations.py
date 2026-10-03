@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 from app.config import Settings
 from app.operations import OPERATIONS_SUMMARY_SCHEMA_VERSION, _rate, operations_summary
+from app.repository import actionable_review_source_clause, pending_review_cohorts
 
 
 class Result:
@@ -148,6 +149,17 @@ def test_operations_summary_is_versioned_bounded_and_read_only(monkeypatch) -> N
     }
     monkeypatch.setattr("app.operations.connection", fake_connection)
     monkeypatch.setattr(
+        "app.operations.pending_review_cohorts",
+        lambda settings: {
+            "actionable": {
+                "total": 2,
+                "by_vertical": {"NURSERY": 2},
+                "by_source_type": {"planning": 2},
+            },
+            "evaluation": {"total": 0, "by_vertical": {}, "by_source_type": {}},
+        },
+    )
+    monkeypatch.setattr(
         "app.operations._current_care_publication_inventory",
         lambda settings: {
             "opportunities": [opportunity],
@@ -174,6 +186,8 @@ def test_operations_summary_is_versioned_bounded_and_read_only(monkeypatch) -> N
     assert summary["schema_version"] == OPERATIONS_SUMMARY_SCHEMA_VERSION
     assert summary["read_only"] is True
     assert summary["signals"]["by_review_status"] == {"APPROVED": 8, "PENDING": 2}
+    assert summary["signals"]["pending_review"]["total"] == 2
+    assert summary["signals"]["evaluation_pending"]["total"] == 0
     assert summary["lifecycle"]["current"] == {"PLANNING_APPROVED": 1}
     assert summary["planning_watcher"]["polls"]["change_rate"]["rate_percent"] == 50.0
     watcher_failure = summary["planning_watcher"]["recent_failures"][0]
@@ -199,3 +213,39 @@ def test_operations_summary_is_versioned_bounded_and_read_only(monkeypatch) -> N
 
 def test_zero_denominators_and_missing_metrics_are_explicit() -> None:
     assert _rate(0, 0) == {"numerator": 0, "denominator": 0, "rate_percent": None}
+
+
+def test_pending_review_cohorts_separate_actionable_and_evaluation_records(monkeypatch) -> None:
+    class CohortConnection:
+        def execute(self, statement, params=None):
+            sql = " ".join(statement.split())
+            assert "se.review_status = 'PENDING'" in sql
+            assert "rs.source_type NOT IN ('procurement')" in sql
+            return Result(
+                rows=[
+                    ("ACTIONABLE_PENDING_REVIEW", "NURSERY", "planning", 332),
+                    ("EVALUATION_PENDING", "CHILDRENS_HOME", "procurement", 12),
+                ]
+            )
+
+    @contextmanager
+    def fake_connection(settings):
+        yield CohortConnection()
+
+    monkeypatch.setattr("app.repository.connection", fake_connection)
+    cohorts = pending_review_cohorts(Settings(environment="test"))
+
+    assert cohorts["actionable"] == {
+        "total": 332,
+        "by_vertical": {"NURSERY": 332},
+        "by_source_type": {"planning": 332},
+    }
+    assert cohorts["evaluation"] == {
+        "total": 12,
+        "by_vertical": {"CHILDRENS_HOME": 12},
+        "by_source_type": {"procurement": 12},
+    }
+
+
+def test_actionable_review_source_predicate_matches_queue_semantics() -> None:
+    assert actionable_review_source_clause("signal") == "signal.source_type NOT IN ('procurement')"
