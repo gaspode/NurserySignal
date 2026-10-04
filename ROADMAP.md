@@ -1894,3 +1894,12 @@ Paid-pilot activation check (2026-09-28):
   action capped at 25 links, with one audit event per link and no organisation creation or provider calls.
   Production preview, validation and a safe bounded apply are pending; the seven published `NEEDS_REVIEW`
   wording records remain analysis-only and are not altered by this tranche.
+- Production validation of `care-customer-operator-enrichment-v1` completed with zero writes. The current
+  published cohort is 387 (it grew since the earlier 312-record audit): all 387 have no operator identity and
+  no role-labelled applicant or agent retained in their active approved local Planning metadata, so each is
+  correctly classified `NO_MATCH` and none is eligible for automatic linkage. The preview made zero provider
+  calls; no publication, lifecycle, watcher, relationship or customer state changed. The seven `NEEDS_REVIEW`
+  customer-wording exceptions are all Planning-only records with safe geography but no operator, and need
+  evidence/lifecycle investigation rather than a wording-only rewrite. The next valuable identity step is a
+  separately approved, privacy-safe local evidence capture/enrichment strategy; it must not promote ambiguous
+  historical organisation hints or create organisations speculatively.
