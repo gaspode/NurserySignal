@@ -1942,3 +1942,12 @@ Paid-pilot activation check (2026-09-28):
   recovered without re-fetching. Earlier timed-out runs persisted no party, organisation or opportunity data;
   no further source requests are authorised until the lock/report revision is deployed and the completed sample
   audit is inspected.
+- The official-source feasibility gate has now failed closed. A completed 20-record, authority-diverse exact-URL
+  sample recorded `SOURCE_UNAVAILABLE` for all 20 results; no applicant/agent party fact, organisation, link,
+  review, lifecycle, publication or customer state was written. Infrastructure inspection confirms the API
+  Lambda runs in VPC subnets with an Internet Gateway route but no NAT/public egress, so public local-authority
+  pages are not reachable from that runtime. The source remains explicitly invoked, preview-only and unscheduled;
+  its revised durable-run lock prevents any future overlapping client retries and its report endpoint exposes
+  stored accounting without re-fetching. No wider Idox adapter/backfill is justified. A future decision would
+  need an explicitly costed, security-reviewed egress design (or a different existing-network execution path)
+  followed by a fresh 10-record exact-URL feasibility sample; it must not be enabled implicitly.
