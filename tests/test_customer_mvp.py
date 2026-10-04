@@ -194,6 +194,24 @@ def test_customer_operator_enrichment_endpoint_is_admin_only_and_requires_confir
     assert unconfirmed["statusCode"] == 400
 
 
+def test_customer_planning_party_backfill_endpoint_is_admin_only_and_requires_confirmation(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "app.handler.customer_planning_party_backfill_preview",
+        lambda *_args, **_kwargs: {"read_only": True, "provider_calls": 0},
+    )
+    denied = handler(event("/admin/customer-planning-party-backfill"), None)
+    assert denied["statusCode"] == 403
+    allowed = handler(event("/admin/customer-planning-party-backfill", claims=ADMIN), None)
+    assert allowed["statusCode"] == 200
+    assert json.loads(allowed["body"])["provider_calls"] == 0
+    unconfirmed = handler(
+        event("/admin/customer-planning-party-backfill", "POST", claims=ADMIN, body="{}"), None
+    )
+    assert unconfirmed["statusCode"] == 400
+
+
 def test_customer_feed_forwards_only_bounded_safe_filters(monkeypatch) -> None:
     captured = {}
     monkeypatch.setattr("app.handler.customer_context", lambda *_: customer_context())

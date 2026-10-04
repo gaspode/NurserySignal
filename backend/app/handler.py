@@ -38,11 +38,13 @@ from app.care_planning_review import (
 from app.config import Settings
 from app.customer import (
     apply_customer_operator_enrichment,
+    apply_customer_planning_party_backfill,
     apply_pilot_publications,
     create_saved_search,
     customer_context,
     customer_operator_enrichment_preview,
     customer_opportunity_detail,
+    customer_planning_party_backfill_preview,
     customer_publication_quality,
     customer_readiness,
     digest_preview,
@@ -297,6 +299,8 @@ def _admin_path(path: str) -> tuple[str, str | None]:
         return "customer-publication-quality", None
     if path == "/admin/customer-operator-enrichment":
         return "customer-operator-enrichment", None
+    if path == "/admin/customer-planning-party-backfill":
+        return "customer-planning-party-backfill", None
     if path.startswith("/admin/customer-accounts/"):
         return "customer-account-detail", path[len("/admin/customer-accounts/") :]
     if path == "/admin/backtesting":
@@ -529,6 +533,18 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 max_batch_size=int(event.get("max_batch_size") or 25),
             )
         return customer_operator_enrichment_preview(
+            settings, sample_limit=int(event.get("limit") or 10)
+        )
+    if event.get("operation") == "customer_planning_party_backfill" and not event.get(
+        "requestContext"
+    ):
+        if bool(event.get("apply")):
+            return apply_customer_planning_party_backfill(
+                settings,
+                actor=str(event.get("actor") or "SYSTEM_PLANNING_PARTY_BACKFILL"),
+                max_batch_size=int(event.get("max_batch_size") or 100),
+            )
+        return customer_planning_party_backfill_preview(
             settings, sample_limit=int(event.get("limit") or 10)
         )
     if event.get("operation") == "care_foundational_evidence_diagnostic" and not event.get(
@@ -868,6 +884,32 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                         settings,
                         actor=actor,
                         max_batch_size=min(max(int(payload.get("max_batch_size") or 25), 1), 25),
+                    ),
+                )
+            if action == "customer-planning-party-backfill" and method == "GET":
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                return _response(
+                    200,
+                    customer_planning_party_backfill_preview(
+                        settings, sample_limit=min(max(int(_query(event, "limit") or "10"), 1), 25)
+                    ),
+                )
+            if action == "customer-planning-party-backfill" and method == "POST":
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                payload = parse_json_payload(_raw_body(event))
+                if payload.get("confirm") is not True:
+                    return _response(400, {"error": "confirm=true is required"})
+                actor = str(claims.get("sub") or claims.get("username") or "unknown")
+                return _response(
+                    200,
+                    apply_customer_planning_party_backfill(
+                        settings,
+                        actor=actor,
+                        max_batch_size=min(max(int(payload.get("max_batch_size") or 100), 1), 100),
                     ),
                 )
             if action == "opportunity-publication" and method == "POST" and signal_id:

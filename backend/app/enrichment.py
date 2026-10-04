@@ -6,6 +6,7 @@ from typing import Any
 from app.classification import CLASSIFICATION_RULE_VERSION, classify_signal_text
 from app.opportunity_policy import opportunity_creation_decision
 from app.planning import candidate_decision, planning_record_from_signal
+from app.planning_parties import extract_planning_party_provenance
 from app.recruitment import classify_recruitment, recruitment_record_from_signal
 
 
@@ -73,6 +74,11 @@ def fixture_enrichment(
         classification = "irrelevant-or-unclear"
 
     metadata = raw.get("metadata") or {}
+    planning_party_provenance = None
+    if source_type == "planning":
+        planning_party_provenance, _ = extract_planning_party_provenance(
+            metadata, raw_source_identifier=raw.get("external_id") or raw.get("id")
+        )
     expected_date = metadata.get("expected_opening_date")
     if expected_date:
         date.fromisoformat(str(expected_date))
@@ -98,6 +104,7 @@ def fixture_enrichment(
         ),
         "school_nursery": school_nursery,
         "source_type": raw["source_type"],
+        "planning_party_provenance": planning_party_provenance,
         "recruitment_candidate_matched": recruitment_candidate["matched"]
         if recruitment_candidate
         else None,

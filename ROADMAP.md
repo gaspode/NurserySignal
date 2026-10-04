@@ -1910,3 +1910,10 @@ Paid-pilot activation check (2026-09-28):
   children’s-nursery conversion, or otherwise ambiguous care-home wording. The correct next action is targeted
   evidence/taxonomy review, not a title-only change or automatic withdrawal; no customer copy, publication,
   lifecycle or identity link was changed.
+- Planning party provenance is now captured by the shared `planning-party-provenance-v1` extractor. It stores
+  explicitly-labelled applicant and agent fields separately, including company-like/company-number indicators,
+  source paths, raw record identity and extraction time; it never treats a generic organisation hint as an
+  applicant. Future Planning enrichment and a bounded, audited CareProspect published-evidence backfill share
+  the same extractor. The backfill has preview and confirmed batch paths (100 maximum), makes no provider calls
+  or organisations, and writes only missing facts. Deployment and production dry-run/apply verification remain
+  pending.

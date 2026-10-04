@@ -21,6 +21,7 @@ from app.customer_projection import (
 )
 from app.db import connection
 from app.organisation_types import is_public_authority_name
+from app.planning_parties import extract_planning_party_provenance
 
 PLAN_ENTITLEMENTS = {
     "STARTER": {
@@ -1082,6 +1083,23 @@ def classify_customer_operator_identity(
     }
 
 
+def _organisation_identity_index(conn: Any) -> dict[str, list[dict[str, str]]]:
+    operator_rows = conn.execute(
+        """SELECT op.id, op.name, op.legal_name, oa.alias
+           FROM operators op
+           LEFT JOIN organisation_aliases oa ON oa.operator_id = op.id
+           WHERE COALESCE(op.organisation_type, 'UNKNOWN') <> 'PUBLIC_AUTHORITY'"""
+    ).fetchall()
+    by_identity: dict[str, list[dict[str, str]]] = {}
+    for operator_id, name, legal_name, alias in operator_rows:
+        candidate = {"id": str(operator_id), "name": str(name)}
+        for value in (name, legal_name, alias):
+            identity = normalize_identity(value)
+            if identity:
+                by_identity.setdefault(identity, []).append(candidate)
+    return by_identity
+
+
 def _customer_operator_enrichment_rows(conn: Any) -> list[dict[str, Any]]:
     rows = conn.execute(
         """SELECT o.id, COALESCE(o.customer_title, o.name), o.postcode, o.town,
@@ -1089,11 +1107,11 @@ def _customer_operator_enrichment_rows(conn: Any) -> list[dict[str, Any]]:
                   COALESCE(agents.values, ARRAY[]::text[])
            FROM opportunities o
            LEFT JOIN LATERAL (
-             SELECT array_agg(DISTINCT NULLIF(trim(COALESCE(
-                        rs.metadata->>'applicant', rs.metadata->'provider_record'->>'applicant'
-                      )), '')) FILTER (WHERE NULLIF(trim(COALESCE(
-                        rs.metadata->>'applicant', rs.metadata->'provider_record'->>'applicant'
-                      )), '') IS NOT NULL)
+             SELECT array_agg(DISTINCT NULLIF(trim(
+                        se.extracted_facts->'planning_party_provenance'->'applicant'->>'name'
+                      ), '')) FILTER (WHERE NULLIF(trim(
+                        se.extracted_facts->'planning_party_provenance'->'applicant'->>'name'
+                      ), '') IS NOT NULL)
                       AS values
              FROM opportunity_signals os
              JOIN raw_signals rs ON rs.id = os.raw_signal_id
@@ -1102,11 +1120,11 @@ def _customer_operator_enrichment_rows(conn: Any) -> list[dict[str, Any]]:
                AND rs.source_type = 'planning' AND se.review_status = 'APPROVED'
            ) applicants ON TRUE
            LEFT JOIN LATERAL (
-             SELECT array_agg(DISTINCT NULLIF(trim(COALESCE(
-                        rs.metadata->>'agent', rs.metadata->'provider_record'->>'agent'
-                      )), '')) FILTER (WHERE NULLIF(trim(COALESCE(
-                        rs.metadata->>'agent', rs.metadata->'provider_record'->>'agent'
-                      )), '') IS NOT NULL)
+             SELECT array_agg(DISTINCT NULLIF(trim(
+                        se.extracted_facts->'planning_party_provenance'->'agent'->>'name'
+                      ), '')) FILTER (WHERE NULLIF(trim(
+                        se.extracted_facts->'planning_party_provenance'->'agent'->>'name'
+                      ), '') IS NOT NULL)
                       AS values
              FROM opportunity_signals os
              JOIN raw_signals rs ON rs.id = os.raw_signal_id
@@ -1121,19 +1139,7 @@ def _customer_operator_enrichment_rows(conn: Any) -> list[dict[str, Any]]:
              AND NULLIF(trim(o.operator_name), '') IS NULL
            ORDER BY o.latest_update_at DESC, o.id"""
     ).fetchall()
-    operator_rows = conn.execute(
-        """SELECT op.id, op.name, op.legal_name, oa.alias
-           FROM operators op
-           LEFT JOIN organisation_aliases oa ON oa.operator_id = op.id
-           WHERE COALESCE(op.organisation_type, 'UNKNOWN') <> 'PUBLIC_AUTHORITY'"""
-    ).fetchall()
-    by_identity: dict[str, list[dict[str, str]]] = {}
-    for operator_id, name, legal_name, alias in operator_rows:
-        candidate = {"id": str(operator_id), "name": str(name)}
-        for value in (name, legal_name, alias):
-            identity = normalize_identity(value)
-            if identity:
-                by_identity.setdefault(identity, []).append(candidate)
+    by_identity = _organisation_identity_index(conn)
     items: list[dict[str, Any]] = []
     for opportunity_id, title, postcode, town, applicants, agents in rows:
         classification = classify_customer_operator_identity(
@@ -1248,6 +1254,181 @@ def apply_customer_operator_enrichment(
         "skipped": skipped,
         "remaining_unlinked": remaining,
         "provider_calls": 0,
+        "items": changed,
+    }
+
+
+def _published_planning_party_rows(conn: Any) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        """SELECT o.id, rs.id, rs.external_id, rs.metadata, se.extracted_facts
+           FROM opportunities o
+           JOIN opportunity_signals os ON os.opportunity_id = o.id AND os.status = 'ACTIVE'
+           JOIN raw_signals rs ON rs.id = os.raw_signal_id AND rs.source_type = 'planning'
+           JOIN signal_enrichments se ON se.raw_signal_id = rs.id AND se.review_status = 'APPROVED'
+           WHERE o.vertical = 'CHILDRENS_HOME'
+             AND o.publication_status = 'PUBLISHED'
+             AND o.merged_into_opportunity_id IS NULL
+           ORDER BY o.id, rs.id"""
+    ).fetchall()
+    items: list[dict[str, Any]] = []
+    for opportunity_id, signal_id, external_id, metadata, facts in rows:
+        facts = facts if isinstance(facts, dict) else {}
+        existing = facts.get("planning_party_provenance")
+        if isinstance(existing, dict) and existing.get("version"):
+            provenance, category = existing, "ALREADY_POPULATED"
+        else:
+            provenance, category = extract_planning_party_provenance(
+                metadata,
+                raw_source_identifier=external_id or signal_id,
+            )
+        items.append(
+            {
+                "opportunity_id": str(opportunity_id),
+                "signal_id": str(signal_id),
+                "external_id": str(external_id or ""),
+                "metadata": metadata,
+                "provenance": provenance,
+                "category": category,
+                "already_populated": category == "ALREADY_POPULATED",
+            }
+        )
+    return items
+
+
+def _party_backfill_report(conn: Any, *, sample_limit: int) -> dict[str, Any]:
+    from collections import Counter, defaultdict
+
+    items = _published_planning_party_rows(conn)
+    by_opportunity: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for item in items:
+        by_opportunity[item["opportunity_id"]].append(item)
+    organisations = _organisation_identity_index(conn)
+    expected_safe = 0
+    for records in by_opportunity.values():
+        applicants = [
+            str((record["provenance"] or {}).get("applicant", {}).get("name") or "")
+            for record in records
+            if isinstance((record["provenance"] or {}).get("applicant"), dict)
+        ]
+        agents = [
+            str((record["provenance"] or {}).get("agent", {}).get("name") or "")
+            for record in records
+            if isinstance((record["provenance"] or {}).get("agent"), dict)
+        ]
+        if classify_customer_operator_identity(
+            applicants=applicants, agents=agents, organisations_by_identity=organisations
+        )["automation_allowed"]:
+            expected_safe += 1
+    counts = Counter(item["category"] for item in items)
+    company_like = sum(
+        1
+        for item in items
+        if isinstance((item["provenance"] or {}).get("applicant"), dict)
+        and bool(item["provenance"]["applicant"].get("company_like"))
+    )
+    person = sum(
+        1
+        for item in items
+        if item["category"] == "APPLICANT_PERSON_EXTRACTED"
+    )
+    return {
+        "policy_version": "planning-party-provenance-v1",
+        "provider_calls": 0,
+        "published_opportunities_examined": len(by_opportunity),
+        "planning_signals_examined": len(items),
+        "category_counts": dict(sorted(counts.items())),
+        "company_like_applicants": company_like,
+        "person_applicants": person,
+        "expected_safe_auto_link_count": expected_safe,
+        "samples": [
+            {
+                "opportunity_id": item["opportunity_id"],
+                "signal_id": item["signal_id"],
+                "external_id": item["external_id"],
+                "category": item["category"],
+                "provenance": item["provenance"],
+            }
+            for item in items[:sample_limit]
+        ],
+        "_items": items,
+    }
+
+
+def customer_planning_party_backfill_preview(
+    settings: Settings, *, sample_limit: int = 10
+) -> dict[str, Any]:
+    """Preview a local-only structured party-provenance backfill."""
+    with connection(settings) as conn:
+        report = _party_backfill_report(conn, sample_limit=min(max(sample_limit, 1), 25))
+    report.pop("_items", None)
+    report.update(
+        {
+            "schema_version": "signalhub-planning-party-backfill-preview-v1",
+            "generated_at": datetime.now(UTC).isoformat(),
+            "read_only": True,
+        }
+    )
+    return report
+
+
+def apply_customer_planning_party_backfill(
+    settings: Settings, *, actor: str, max_batch_size: int = 100
+) -> dict[str, Any]:
+    """Persist missing party provenance for a bounded set of published Planning signals."""
+    limit = min(max(int(max_batch_size), 1), 100)
+    with connection(settings) as conn:
+        report = _party_backfill_report(conn, sample_limit=0)
+        candidates = [
+            item for item in report.pop("_items") if not item["already_populated"]
+        ][:limit]
+        changed: list[dict[str, str]] = []
+        for item in candidates:
+            if item["provenance"] is None:
+                # Preserve malformed payloads untouched: they need a human/data repair path.
+                continue
+            row = conn.execute(
+                """UPDATE signal_enrichments
+                   SET extracted_facts = extracted_facts || %s, updated_at = now()
+                   WHERE raw_signal_id = %s
+                     AND review_status = 'APPROVED'
+                     AND COALESCE(extracted_facts->'planning_party_provenance'->>'version', '') = ''
+                   RETURNING raw_signal_id""",
+                (Jsonb({"planning_party_provenance": item["provenance"]}), item["signal_id"]),
+            ).fetchone()
+            if row:
+                changed.append({"signal_id": item["signal_id"], "category": item["category"]})
+        audit = conn.execute(
+            """INSERT INTO admin_audit_events
+               (action, actor, target_type, target_count, details, vertical)
+               VALUES ('planning_party_provenance_backfill', %s, 'raw_signal', %s, %s,
+                       'CHILDRENS_HOME') RETURNING id""",
+            (
+                actor,
+                len(changed),
+                Jsonb(
+                    {
+                        "policy_version": "planning-party-provenance-v1",
+                        "selected": len(candidates),
+                        "persisted": len(changed),
+                        "provider_calls": 0,
+                        "category_counts": report["category_counts"],
+                    }
+                ),
+            ),
+        ).fetchone()
+        conn.commit()
+        remaining = sum(
+            1 for item in _published_planning_party_rows(conn) if not item["already_populated"]
+        )
+    return {
+        "policy_version": "planning-party-provenance-v1",
+        "max_batch_size": limit,
+        "selected": len(candidates),
+        "persisted": len(changed),
+        "skipped": len(candidates) - len(changed),
+        "remaining_missing": remaining,
+        "provider_calls": 0,
+        "audit_event_id": str(audit[0]),
         "items": changed,
     }
 
