@@ -236,6 +236,19 @@ def test_official_planning_party_preview_is_admin_only_and_explicitly_enabled(mo
     assert captured["limit"] == 20
 
 
+def test_official_planning_party_report_is_admin_only_and_does_not_fetch(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "app.handler.official_planning_party_latest_report",
+        lambda *_args: {"available": True, "provider_requests": 0},
+    )
+    denied = handler(event("/admin/customer-official-planning-party-preview", "GET"), None)
+    assert denied["statusCode"] == 403
+    allowed = handler(
+        event("/admin/customer-official-planning-party-preview", "GET", claims=ADMIN), None
+    )
+    assert allowed["statusCode"] == 200
+
+
 def test_customer_feed_forwards_only_bounded_safe_filters(monkeypatch) -> None:
     captured = {}
     monkeypatch.setattr("app.handler.customer_context", lambda *_: customer_context())

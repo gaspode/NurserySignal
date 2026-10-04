@@ -52,6 +52,7 @@ from app.customer import (
     list_customer_accounts,
     list_customer_opportunities,
     list_saved_searches,
+    official_planning_party_latest_report,
     official_planning_party_preview,
     pilot_curation_inventory,
     queue_customer_account_provision,
@@ -560,6 +561,10 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             limit=int(event.get("limit") or 20),
             max_per_authority=int(event.get("max_per_authority") or 2),
         )
+    if event.get("operation") == "customer_official_planning_party_report" and not event.get(
+        "requestContext"
+    ):
+        return official_planning_party_latest_report(settings)
     if event.get("operation") == "care_foundational_evidence_diagnostic" and not event.get(
         "requestContext"
     ):
@@ -943,6 +948,11 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                         ),
                     ),
                 )
+            if action == "customer-official-planning-party-preview" and method == "GET":
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                return _response(200, official_planning_party_latest_report(settings))
             if action == "opportunity-publication" and method == "POST" and signal_id:
                 admin_error = _require_admin(claims, settings)
                 if admin_error:

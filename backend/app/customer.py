@@ -1458,9 +1458,26 @@ def official_planning_party_preview(
             "provider_requests": 0,
             "reason": "explicit enabled=true is required; no scheduled execution exists",
         }
-    bounded_limit = min(max(int(limit), 1), 30)
+    # Public Authority portals do not offer a uniform response-time guarantee.
+    # Ten retains an authority-diverse diagnostic sample while leaving robust headroom
+    # under the API Lambda's 60-second ceiling.
+    bounded_limit = min(max(int(limit), 1), 10)
     bounded_per_authority = min(max(int(max_per_authority), 1), 3)
     with connection(settings) as conn:
+        locked = conn.execute(
+            "SELECT pg_try_advisory_xact_lock(hashtext('official_planning_party_preview'))"
+        ).fetchone()[0]
+        if not locked:
+            raise ValueError("an official Planning-party preview is already starting")
+        running = conn.execute(
+            """SELECT id FROM admin_audit_events
+               WHERE action = 'official_planning_party_preview'
+                 AND details->>'state' = 'RUNNING'
+                 AND created_at > now() - interval '15 minutes'
+               ORDER BY created_at DESC LIMIT 1"""
+        ).fetchone()
+        if running:
+            raise ValueError("an official Planning-party preview is already running")
         used_today = conn.execute(
             """SELECT COALESCE(sum(target_count), 0) FROM admin_audit_events
                WHERE action = 'official_planning_party_preview'
@@ -1498,6 +1515,25 @@ def official_planning_party_preview(
             if len(selected) >= bounded_limit:
                 break
         organisations_by_identity = _organisation_identity_index(conn)
+        audit = conn.execute(
+            """INSERT INTO admin_audit_events
+               (action, actor, target_type, target_count, details, vertical)
+               VALUES ('official_planning_party_preview', %s, 'raw_signal', 0, %s,
+                       'CHILDRENS_HOME') RETURNING id""",
+            (
+                actor,
+                Jsonb(
+                    {
+                        "source": "OFFICIAL_IDOX_PUBLIC_ACCESS",
+                        "preview_only": True,
+                        "state": "RUNNING",
+                        "request_limit": bounded_limit,
+                        "max_per_authority": bounded_per_authority,
+                    }
+                ),
+            ),
+        ).fetchone()
+        conn.commit()
 
     # Four concurrent exact-page requests keep the deliberately small sample within
     # the backend Lambda's 60-second limit even when several authorities time out.
@@ -1549,23 +1585,28 @@ def official_planning_party_preview(
             }
         )
     counts = Counter(item["fetch_status"] for item in results)
+    authority_outcomes = Counter(
+        f"{item['authority']}:{item['fetch_status']}" for item in results
+    )
     with connection(settings) as conn:
         conn.execute(
-            """INSERT INTO admin_audit_events
-               (action, actor, target_type, target_count, details, vertical)
-               VALUES ('official_planning_party_preview', %s, 'raw_signal', %s, %s,
-                       'CHILDRENS_HOME')""",
+            """UPDATE admin_audit_events
+               SET target_count = %s, details = %s
+               WHERE id = %s""",
             (
-                actor,
                 len(results),
                 Jsonb(
                     {
                         "source": "OFFICIAL_IDOX_PUBLIC_ACCESS",
                         "preview_only": True,
+                        "state": "COMPLETED",
+                        "request_limit": bounded_limit,
                         "max_per_authority": bounded_per_authority,
                         "outcome_counts": dict(counts),
+                        "authority_outcomes": dict(authority_outcomes),
                     }
                 ),
+                audit[0],
             ),
         )
         conn.commit()
@@ -1574,11 +1615,42 @@ def official_planning_party_preview(
         "preview_only": True,
         "source_strategy": "OFFICIAL_IDOX_PUBLIC_ACCESS_EXACT_URL_ONLY",
         "provider_requests": len(results),
+        "audit_event_id": str(audit[0]),
         "daily_request_limit": 50,
         "max_per_authority": bounded_per_authority,
         "candidate_authorities": len(per_authority),
         "outcome_counts": dict(sorted(counts.items())),
         "items": results,
+    }
+
+
+def official_planning_party_latest_report(settings: Settings) -> dict[str, Any]:
+    """Return the last persisted preview accounting without fetching any pages."""
+    with connection(settings) as conn:
+        row = conn.execute(
+            """SELECT id, created_at, target_count, details
+               FROM admin_audit_events
+               WHERE action = 'official_planning_party_preview'
+               ORDER BY created_at DESC LIMIT 1"""
+        ).fetchone()
+    if not row:
+        return {
+            "schema_version": "signalhub-official-planning-party-report-v1",
+            "available": False,
+            "provider_requests": 0,
+        }
+    audit_id, created_at, target_count, details = row
+    details = details if isinstance(details, dict) else {}
+    return {
+        "schema_version": "signalhub-official-planning-party-report-v1",
+        "available": details.get("state") == "COMPLETED",
+        "audit_event_id": str(audit_id),
+        "generated_at": created_at.isoformat(),
+        "provider_requests": int(target_count or 0),
+        "preview_only": details.get("preview_only") is True,
+        "state": details.get("state"),
+        "outcome_counts": details.get("outcome_counts", {}),
+        "authority_outcomes": details.get("authority_outcomes", {}),
     }
 
 
