@@ -82,14 +82,24 @@ def generated_customer_title(row: dict[str, Any]) -> str:
         or row.get("lifecycle_stage")
         or ""
     )
-    subject = {
-        "OPENING": "New children’s home",
-        "EXPANSION": "Children’s home expansion",
-        "RELOCATION": "Children’s home relocation",
-        "OTHER_CHANGE": "Children’s home development",
-    }.get(str(row.get("change_type") or ""), "Children’s home development")
+    nursery = str(row.get("vertical") or "") == "NURSERY"
+    subject = (
+        {
+            "OPENING": "New nursery",
+            "EXPANSION": "Nursery expansion",
+            "RELOCATION": "Nursery relocation",
+            "OTHER_CHANGE": "Other nursery change",
+        }.get(str(row.get("change_type") or ""), "Nursery opportunity")
+        if nursery
+        else {
+            "OPENING": "New children’s home",
+            "EXPANSION": "Children’s home expansion",
+            "RELOCATION": "Children’s home relocation",
+            "OTHER_CHANGE": "Children’s home development",
+        }.get(str(row.get("change_type") or ""), "Children’s home development")
+    )
     if lifecycle == "NEEDS_REVIEW":
-        subject = "Children’s home"
+        subject = "Nursery opportunity" if nursery else "Children’s home"
     return f"{subject} — {location}" if location else subject
 
 
@@ -107,23 +117,25 @@ def generated_customer_summary(row: dict[str, Any]) -> str:
         or row.get("lifecycle_stage")
         or ""
     )
+    nursery = str(row.get("vertical") or "") == "NURSERY"
+    noun = "nursery" if nursery else "children’s-home"
     if row.get("foundational_evidence") is False:
         return (
             "Current reviewed evidence concerns existing or supporting context and does "
-            "not establish a new children’s-home opening."
+            f"not establish a new {noun} opening."
         )
     if lifecycle == "PLANNING_PENDING":
         return (
-            "A planning application has been submitted for material children’s-home "
+            f"A planning application has been submitted for material {noun} "
             "provision and is awaiting a decision."
         )
     if lifecycle == "PLANNING_APPROVED":
-        return "Planning permission has been approved for material children’s-home provision."
+        return f"Planning permission has been approved for material {noun} provision."
     if lifecycle == "APPEAL_PENDING":
-        return "A planning appeal is in progress for proposed children’s-home provision."
+        return f"A planning appeal is in progress for proposed {noun} provision."
     if lifecycle == "NEEDS_REVIEW":
         return (
-            "The current status of this children’s-home opportunity is under review. "
+            f"The current status of this {noun} opportunity is under review. "
             "Reviewed public evidence is available for context."
         )
     if lifecycle == "DELIVERY_SIGNAL_DETECTED":
@@ -134,8 +146,8 @@ def generated_customer_summary(row: dict[str, Any]) -> str:
         return "Multiple independent public sources support this opportunity."
     if "planning" in sources:
         if change == "EXPANSION":
-            return "A planning application explicitly indicates increased children’s-home capacity."
-        return "A planning application explicitly proposes material children’s-home provision."
+            return f"A planning application explicitly indicates increased {noun} capacity."
+        return f"A planning application explicitly proposes material {noun} provision."
     if "recruitment" in sources:
         return (
             "Recruitment evidence explicitly refers to a new or materially changing "
@@ -143,7 +155,7 @@ def generated_customer_summary(row: dict[str, Any]) -> str:
         )
     if "ofsted" in sources:
         return "Official Ofsted evidence confirms regulatory progress."
-    return "Reviewed public evidence supports a material children’s-home change."
+    return f"Reviewed public evidence supports a material {noun} change."
 
 
 def customer_summary(row: dict[str, Any]) -> str:

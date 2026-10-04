@@ -39,6 +39,7 @@ from app.config import Settings
 from app.customer import (
     apply_customer_operator_enrichment,
     apply_customer_planning_party_backfill,
+    apply_nursery_customer_publications,
     apply_pilot_publications,
     create_saved_search,
     customer_context,
@@ -53,6 +54,7 @@ from app.customer import (
     list_customer_accounts,
     list_customer_opportunities,
     list_saved_searches,
+    nursery_customer_publication_preview,
     official_planning_party_latest_report,
     official_planning_party_preview,
     pilot_curation_inventory,
@@ -528,9 +530,21 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             limit=int(event.get("limit") or 100),
             publication_status=event.get("publication_status"),
         )
-    if event.get("operation") == "customer_operator_enrichment" and not event.get(
+    if event.get("operation") == "nursery_customer_publication_preview" and not event.get(
         "requestContext"
     ):
+        return nursery_customer_publication_preview(settings, limit=int(event.get("limit") or 25))
+    if event.get("operation") == "nursery_customer_publication_apply" and not event.get(
+        "requestContext"
+    ):
+        if event.get("confirm") is not True:
+            raise ValueError("explicit confirmation is required")
+        return apply_nursery_customer_publications(
+            settings,
+            limit=int(event.get("limit") or 25),
+            actor=str(event.get("actor") or "iam-nursery-customer-publication")[:200],
+        )
+    if event.get("operation") == "customer_operator_enrichment" and not event.get("requestContext"):
         if bool(event.get("apply")):
             return apply_customer_operator_enrichment(
                 settings,
@@ -652,6 +666,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 "plan": event.get("plan"),
                 "allowed_regions": event.get("allowed_regions"),
                 "allowed_local_authorities": event.get("allowed_local_authorities"),
+                "allowed_verticals": event.get("allowed_verticals"),
             },
             actor=str(event.get("actor") or "iam-operational-pilot-activation")[:200],
         )
@@ -768,13 +783,16 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                         first_detected_from=_query(event, "first_detected_from"),
                         updated_since=_query(event, "updated_since"),
                         saved_only=path == "/customer/saved",
+                        vertical=_query(event, "vertical"),
                     ),
                 )
             if path.startswith("/customer/opportunities/"):
                 parts = path[len("/customer/opportunities/") :].split("/")
                 opportunity_id = str(UUID(parts[0]))
                 if len(parts) == 1 and method == "GET":
-                    detail = customer_opportunity_detail(settings, customer, opportunity_id)
+                    detail = customer_opportunity_detail(
+                        settings, customer, opportunity_id, vertical=_query(event, "vertical")
+                    )
                     return (
                         _response(200, detail)
                         if detail
@@ -782,7 +800,11 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                     )
                 if len(parts) == 2 and parts[1] == "save" and method in {"POST", "DELETE"}:
                     save_customer_opportunity(
-                        settings, customer, opportunity_id, saved=method == "POST"
+                        settings,
+                        customer,
+                        opportunity_id,
+                        saved=method == "POST",
+                        vertical=_query(event, "vertical"),
                     )
                     record_customer_event(
                         settings,
@@ -807,7 +829,14 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                     )
             if path == "/customer/saved-searches":
                 if method == "GET":
-                    return _response(200, {"items": list_saved_searches(settings, customer)})
+                    return _response(
+                        200,
+                        {
+                            "items": list_saved_searches(
+                                settings, customer, vertical=_query(event, "vertical")
+                            )
+                        },
+                    )
                 if method == "POST":
                     return _response(
                         201,
@@ -816,7 +845,9 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                         ),
                     )
             if path == "/customer/digest/preview" and method == "GET":
-                return _response(200, digest_preview(settings, customer))
+                return _response(
+                    200, digest_preview(settings, customer, vertical=_query(event, "vertical"))
+                )
             if path == "/customer/events" and method == "POST":
                 record_customer_event(settings, customer, parse_json_payload(_raw_body(event)))
                 return _response(202, {"status": "recorded"})
@@ -881,6 +912,26 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                     200,
                     customer_publication_quality(
                         settings, sample_limit=min(max(int(_query(event, "limit") or "5"), 1), 10)
+                    ),
+                )
+            if action == "nursery-customer-publication" and method == "GET":
+                return _response(
+                    200,
+                    nursery_customer_publication_preview(
+                        settings, limit=min(max(int(_query(event, "limit") or "25"), 1), 50)
+                    ),
+                )
+            if action == "nursery-customer-publication" and method == "POST":
+                payload = parse_json_payload(_raw_body(event))
+                if payload.get("confirm") is not True:
+                    return _response(400, {"error": "confirm=true is required"})
+                actor = str(claims.get("sub") or claims.get("username") or "unknown")
+                return _response(
+                    200,
+                    apply_nursery_customer_publications(
+                        settings,
+                        limit=min(max(int(payload.get("limit") or 25), 1), 25),
+                        actor=actor,
                     ),
                 )
             if action == "customer-operator-enrichment" and method == "GET":

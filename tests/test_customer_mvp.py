@@ -8,6 +8,7 @@ from uuid import uuid4
 
 from app.config import Settings
 from app.customer import (
+    _allowed_customer_vertical,
     _eligibility_sql,
     _needs_review_wording_preview_item,
     _project_opportunity,
@@ -21,6 +22,7 @@ from app.customer import (
 from app.customer_digest import _safe_provider_error, queue_weekly_digests, sender_handler
 from app.customer_provisioning import handler as provisioning_handler
 from app.handler import handler
+from app.nursery_customer_publication import evaluate_nursery_customer_publication
 from botocore.exceptions import ClientError
 
 ADMIN = {"sub": "admin", "cognito:groups": ["NurserySignalAdmins"]}
@@ -52,12 +54,68 @@ def customer_context(*, nationwide: bool = True) -> dict:
         "plan": "PRO" if nationwide else "STARTER",
         "allowed_regions": [] if nationwide else ["West Midlands"],
         "allowed_local_authorities": [],
+        "allowed_verticals": ["CHILDRENS_HOME"],
         "entitlements": {
             "nationwide": nationwide,
             "saved_searches": nationwide,
             "alert_frequencies": ["OFF", "WEEKLY"],
         },
     }
+
+
+def test_customer_vertical_access_is_server_side_and_defaults_existing_accounts_to_care() -> None:
+    care = customer_context()
+    assert _allowed_customer_vertical(care, None) == "CHILDRENS_HOME"
+    with __import__("pytest").raises(PermissionError, match="customer_vertical_not_permitted"):
+        _allowed_customer_vertical(care, "NURSERY")
+    dual = {**care, "allowed_verticals": ["CHILDRENS_HOME", "NURSERY"]}
+    assert _allowed_customer_vertical(dual, "NURSERY") == "NURSERY"
+
+
+def test_nursery_customer_publication_admits_only_clear_reviewed_planning_change() -> None:
+    decision = evaluate_nursery_customer_publication(
+        {
+            "vertical": "NURSERY",
+            "publication_status": "DRAFT",
+            "review_status": "APPROVED",
+            "change_type": "OPENING",
+            "site_identity": True,
+            "approved_planning_count": 1,
+            "source_types": ["planning"],
+            "planning_outcome": "APPROVED",
+            "name": "New nursery at Example",
+            "signal_title": "Change of use to day nursery",
+            "facts": {"planning_candidate_matched": True},
+            "lifecycle_stage": "APPROVED",
+        }
+    )
+    assert decision["outcome"] == "ELIGIBLE"
+    assert decision["stage"] == "PLANNING_APPROVED"
+
+
+def test_nursery_customer_publication_excludes_ambiguous_or_terminal_cases() -> None:
+    base = {
+        "vertical": "NURSERY",
+        "publication_status": "DRAFT",
+        "review_status": "APPROVED",
+        "change_type": "OPENING",
+        "site_identity": True,
+        "approved_planning_count": 1,
+        "source_types": ["planning"],
+        "name": "New nursery",
+        "signal_title": "Day nursery",
+        "facts": {"planning_candidate_matched": True},
+    }
+    refused = evaluate_nursery_customer_publication({**base, "planning_outcome": "REFUSED"})
+    mixed = evaluate_nursery_customer_publication(
+        {
+            **base,
+            "planning_outcome": "APPROVED",
+            "signal_title": "Mixed-use school and nursery",
+        }
+    )
+    assert "terminal_planning_outcome" in refused["reasons"]
+    assert "initial_cohort_ambiguity_excluded" in mixed["reasons"]
 
 
 def test_published_quality_requires_current_evidence_and_safe_lifecycle() -> None:
@@ -615,9 +673,7 @@ def test_pilot_inventory_publication_filter_is_bounded_and_site_safe(monkeypatch
         yield Connection()
 
     monkeypatch.setattr("app.customer.connection", fake_connection)
-    result = pilot_curation_inventory(
-        SimpleNamespace(), limit=999, publication_status="published"
-    )
+    result = pilot_curation_inventory(SimpleNamespace(), limit=999, publication_status="published")
     assert result == {"count": 0, "limit": 100, "items": []}
     assert "o.publication_status = %s" in executed[0][0]
     assert executed[0][1] == ("PUBLISHED", 100)

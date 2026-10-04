@@ -1977,3 +1977,14 @@ Paid-pilot activation check (2026-09-28):
   organisation identity where applicable. Any future unresolved record with an explicit customer-content override
   remains manual review rather than being overwritten. No provider call, publication/withdrawal action, operator
   identity action or customer-state mutation is authorised by this projection repair.
+- NurserySignal customer MVP implementation is ready for a controlled production preview. The shared customer
+  portal now carries an explicitly authorised `CHILDRENS_HOME` or `NURSERY` vertical through feed, detail, saved
+  items, saved searches and digest preview; customer accounts retain Care-only access by default and may be
+  granted Nursery or dual access through an audited account update. The initial `nursery-customer-publication-v1`
+  policy is deliberately separate from Care automation, read-only by default, and admits only reviewed, explicit
+  Planning-origin Nursery openings/expansions/relocations with safe site identity and no terminal or ambiguity
+  boundary. It excludes mixed-use, school, horticultural, lawfulness/certificate, terminal, unsupported and
+  non-draft cases. A bounded, confirmed apply path is capped at 25 and records run/item/audit provenance; no
+  recurring Nursery publication exists. Production preview and, only if its samples are safe, one 20–25 record
+  initial cohort remain the next gate. Care publication/withdrawal, watcher cadence, providers and review policy
+  are unchanged.

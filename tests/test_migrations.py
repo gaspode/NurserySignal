@@ -38,8 +38,9 @@ def test_initial_migration_exists_and_contains_provenance_tables() -> None:
         "0030_care_publication_automation.sql",
         "0031_care_withdrawal_automation.sql",
         "0032_mcp_readonly_audit.sql",
-        "0033_mcp_oauth_transactions.sql",
-    ]
+            "0033_mcp_oauth_transactions.sql",
+            "0034_customer_vertical_access_and_nursery_publication.sql",
+        ]
     sql = "\n".join(path.read_text(encoding="utf-8") for path in files)
     tables = (
         "operators",
