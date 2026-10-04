@@ -163,3 +163,15 @@ def test_generated_summary_does_not_imply_opening_without_foundational_evidence(
         }
     )
     assert "does not establish a new children’s-home opening" in summary
+
+
+def test_generated_summary_uses_neutral_wording_for_unresolved_foundational_evidence() -> None:
+    summary = generated_customer_summary(
+        {
+            "customer_lifecycle_stage": "NEEDS_REVIEW",
+            "source_types": ["planning"],
+            "foundational_evidence": True,
+        }
+    )
+    assert "under review" in summary
+    assert "proposes material" not in summary

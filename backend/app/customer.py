@@ -9,9 +9,11 @@ from typing import Any
 import boto3
 from psycopg.types.json import Jsonb
 
+from app.care_lifecycle import derive_care_lifecycle
 from app.config import Settings
 from app.correlation import normalize_identity
 from app.customer_projection import (
+    customer_safe_location,
     customer_safe_place,
     customer_summary,
     customer_title,
@@ -20,6 +22,11 @@ from app.customer_projection import (
     safe_evidence_title,
 )
 from app.db import connection
+from app.evidence_support import (
+    EvidenceSupport,
+    classify_evidence_support,
+    current_opportunity_basis_reason,
+)
 from app.official_planning_fetch import fetch_idox_party_via_fetcher
 from app.organisation_types import is_public_authority_name
 from app.planning_parties import extract_planning_party_provenance
@@ -959,6 +966,7 @@ def customer_readiness(settings: Settings) -> dict[str, Any]:
 
 CUSTOMER_PUBLICATION_QUALITY_SCHEMA_VERSION = "signalhub-customer-publication-quality-v1"
 CUSTOMER_OPERATOR_ENRICHMENT_POLICY_VERSION = "care-customer-operator-enrichment-v1"
+CUSTOMER_NEEDS_REVIEW_WORDING_POLICY_VERSION = "care-customer-needs-review-wording-v1"
 
 
 def _company_like_applicant(value: Any) -> bool:
@@ -1817,6 +1825,123 @@ def customer_publication_quality(settings: Settings, *, sample_limit: int = 5) -
             quality: [item for item in items if item["quality"] == quality][:bounded_sample_limit]
             for quality in sorted(quality_counts)
         },
+    }
+
+
+def _neutral_needs_review_title(opportunity: dict[str, Any]) -> str:
+    """Return a factual non-opening title for an unresolved published record."""
+    location = customer_safe_location(
+        town=opportunity.get("town"),
+        local_authority=opportunity.get("local_authority"),
+        region=opportunity.get("region"),
+        postcode=opportunity.get("postcode"),
+    )
+    return f"Children’s home — {location}" if location else "Children’s home"
+
+
+def _needs_review_wording_preview_item(opportunity: dict[str, Any]) -> dict[str, Any]:
+    """Assess one published unresolved opportunity without changing business state."""
+    relationships = opportunity.get("relationships") or []
+    active = [item for item in relationships if item.get("status") == "ACTIVE"]
+    support = [classify_evidence_support(item) for item in active]
+    lifecycle = derive_care_lifecycle(active)
+    provenance = opportunity.get("publication_automation_provenance") or {}
+    automated = bool(provenance.get("policy_version"))
+    protected = bool(opportunity.get("publication_automation_blocked")) or not automated
+    stored_lifecycle = str(opportunity.get("customer_lifecycle_stage") or "NEEDS_REVIEW")
+    current_title = str(opportunity.get("customer_title") or "").strip() or None
+    current_summary = str(opportunity.get("customer_summary") or "").strip() or None
+    proposed_title = _neutral_needs_review_title(opportunity)
+    proposed_summary = generated_customer_summary(
+        {
+            "customer_lifecycle_stage": "NEEDS_REVIEW",
+            "foundational_evidence": EvidenceSupport.FOUNDATIONAL in support,
+            "source_types": sorted(
+                {str(item.get("source_type")) for item in active if item.get("source_type")}
+            ),
+        }
+    )
+    basis = current_opportunity_basis_reason(opportunity, active)
+
+    if protected:
+        action = "MANUAL_INVESTIGATION"
+        reason = "manual/protected publication content must not be overwritten automatically"
+        automation_allowed = False
+    elif lifecycle.lifecycle.value != stored_lifecycle:
+        action = "LIFECYCLE_RECALCULATION"
+        reason = "stored lifecycle differs from the current deterministic lifecycle"
+        automation_allowed = False
+    elif opportunity.get("publication_status") != "PUBLISHED":
+        action = "MANUAL_INVESTIGATION"
+        reason = "opportunity is no longer currently published"
+        automation_allowed = False
+    else:
+        action = "SAFE_DERIVED_WORDING_FIX"
+        reason = "automatically published unresolved record requires neutral current-state wording"
+        automation_allowed = True
+
+    signals = [
+        {
+            "signal_id": str(item.get("id")),
+            "title": item.get("title"),
+            "review_status": item.get("review_status"),
+            "source_type": item.get("source_type"),
+            "planning_subtype": (item.get("extracted_facts") or {}).get("planning_subtype"),
+            "planning_outcome": (item.get("metadata") or {}).get("planning_outcome"),
+            "opportunity_action": (item.get("extracted_facts") or {}).get(
+                "opportunity_creation_decision"
+            ),
+            "evidence_role": classify_evidence_support(item).value,
+        }
+        for item in active
+    ]
+    return {
+        "opportunity_id": str(opportunity["id"]),
+        "title": opportunity.get("name"),
+        "publication_status": opportunity.get("publication_status"),
+        "publication_provenance": "AUTOMATIC" if automated else "MANUAL_OR_PROTECTED",
+        "customer_lifecycle": stored_lifecycle,
+        "derived_lifecycle": lifecycle.lifecycle.value,
+        "derived_lifecycle_reason": lifecycle.reason,
+        "customer_title": current_title,
+        "customer_summary": current_summary,
+        "current_basis_reason": basis,
+        "evidence_support": {
+            "foundational": support.count(EvidenceSupport.FOUNDATIONAL),
+            "supporting_followups": support.count(EvidenceSupport.SUPPORTING_FOLLOWUP),
+            "other_lifecycle": support.count(EvidenceSupport.OTHER_LIFECYCLE),
+        },
+        "signals": signals,
+        "quality_reason": "lifecycle_requires_human_review",
+        "recommended_action": action,
+        "automation_allowed": automation_allowed,
+        "proposed_customer_title": proposed_title,
+        "proposed_customer_summary": proposed_summary,
+        "proposed_publication_impact": "NONE",
+        "proposed_lifecycle_impact": (
+            "NONE" if action != "LIFECYCLE_RECALCULATION" else "RECALCULATE"
+        ),
+        "reason": reason,
+    }
+
+
+def customer_needs_review_wording_preview(settings: Settings) -> dict[str, Any]:
+    """Read-only projection audit for the bounded published NEEDS_REVIEW cohort."""
+    from app.repository import _care_policy_opportunities
+
+    with connection(settings) as conn:
+        opportunities = _care_policy_opportunities(conn)
+    items = [
+        _needs_review_wording_preview_item(opportunity)
+        for opportunity in opportunities
+        if opportunity.get("publication_status") == "PUBLISHED"
+        and str(opportunity.get("customer_lifecycle_stage") or "") == "NEEDS_REVIEW"
+    ]
+    return {
+        "policy_version": CUSTOMER_NEEDS_REVIEW_WORDING_POLICY_VERSION,
+        "preview_only": True,
+        "published_needs_review_count": len(items),
+        "items": items[:25],
     }
 
 

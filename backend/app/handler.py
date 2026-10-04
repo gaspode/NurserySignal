@@ -42,6 +42,7 @@ from app.customer import (
     apply_pilot_publications,
     create_saved_search,
     customer_context,
+    customer_needs_review_wording_preview,
     customer_operator_enrichment_preview,
     customer_opportunity_detail,
     customer_planning_party_backfill_preview,
@@ -539,6 +540,10 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         return customer_operator_enrichment_preview(
             settings, sample_limit=int(event.get("limit") or 10)
         )
+    if event.get("operation") == "customer_needs_review_wording_preview" and not event.get(
+        "requestContext"
+    ):
+        return customer_needs_review_wording_preview(settings)
     if event.get("operation") == "customer_planning_party_backfill" and not event.get(
         "requestContext"
     ):

@@ -113,6 +113,11 @@ def generated_customer_summary(row: dict[str, Any]) -> str:
         return "Planning permission has been approved for material children’s-home provision."
     if lifecycle == "APPEAL_PENDING":
         return "A planning appeal is in progress for proposed children’s-home provision."
+    if lifecycle == "NEEDS_REVIEW":
+        return (
+            "The current status of this children’s-home opportunity is under review. "
+            "Reviewed public evidence is available for context."
+        )
     if lifecycle == "DELIVERY_SIGNAL_DETECTED":
         return "Reviewed recruitment evidence indicates mobilisation for this opportunity."
     if lifecycle in {"REGISTRATION_DETECTED", "REGISTERED"}:
