@@ -1089,8 +1089,11 @@ def _customer_operator_enrichment_rows(conn: Any) -> list[dict[str, Any]]:
                   COALESCE(agents.values, ARRAY[]::text[])
            FROM opportunities o
            LEFT JOIN LATERAL (
-             SELECT array_agg(DISTINCT NULLIF(trim(rs.metadata->>'applicant'), ''))
-                      FILTER (WHERE NULLIF(trim(rs.metadata->>'applicant'), '') IS NOT NULL)
+             SELECT array_agg(DISTINCT NULLIF(trim(COALESCE(
+                        rs.metadata->>'applicant', rs.metadata->'provider_record'->>'applicant'
+                      )), '')) FILTER (WHERE NULLIF(trim(COALESCE(
+                        rs.metadata->>'applicant', rs.metadata->'provider_record'->>'applicant'
+                      )), '') IS NOT NULL)
                       AS values
              FROM opportunity_signals os
              JOIN raw_signals rs ON rs.id = os.raw_signal_id
@@ -1099,8 +1102,11 @@ def _customer_operator_enrichment_rows(conn: Any) -> list[dict[str, Any]]:
                AND rs.source_type = 'planning' AND se.review_status = 'APPROVED'
            ) applicants ON TRUE
            LEFT JOIN LATERAL (
-             SELECT array_agg(DISTINCT NULLIF(trim(rs.metadata->>'agent'), ''))
-                      FILTER (WHERE NULLIF(trim(rs.metadata->>'agent'), '') IS NOT NULL)
+             SELECT array_agg(DISTINCT NULLIF(trim(COALESCE(
+                        rs.metadata->>'agent', rs.metadata->'provider_record'->>'agent'
+                      )), '')) FILTER (WHERE NULLIF(trim(COALESCE(
+                        rs.metadata->>'agent', rs.metadata->'provider_record'->>'agent'
+                      )), '') IS NOT NULL)
                       AS values
              FROM opportunity_signals os
              JOIN raw_signals rs ON rs.id = os.raw_signal_id
