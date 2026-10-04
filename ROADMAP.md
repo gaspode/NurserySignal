@@ -1903,3 +1903,10 @@ Paid-pilot activation check (2026-09-28):
   evidence/lifecycle investigation rather than a wording-only rewrite. The next valuable identity step is a
   separately approved, privacy-safe local evidence capture/enrichment strategy; it must not promote ambiguous
   historical organisation hints or create organisations speculatively.
+- The seven published `NEEDS_REVIEW` wording exceptions are now characterised: each has one approved Planning
+  signal and foundational support, but its current deterministic subtype/action remains `AMBIGUOUS` / `REVIEW`,
+  so lifecycle derivation cannot safely decide a customer stage. Two are pending (Bromley change-of-use and
+  Nottingham lawfulness); five are approved but include boundary semantics such as respite provision, a
+  children’s-nursery conversion, or otherwise ambiguous care-home wording. The correct next action is targeted
+  evidence/taxonomy review, not a title-only change or automatic withdrawal; no customer copy, publication,
+  lifecycle or identity link was changed.
