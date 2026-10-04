@@ -52,6 +52,7 @@ from app.customer import (
     list_customer_accounts,
     list_customer_opportunities,
     list_saved_searches,
+    official_planning_party_preview,
     pilot_curation_inventory,
     queue_customer_account_provision,
     record_customer_account,
@@ -301,6 +302,8 @@ def _admin_path(path: str) -> tuple[str, str | None]:
         return "customer-operator-enrichment", None
     if path == "/admin/customer-planning-party-backfill":
         return "customer-planning-party-backfill", None
+    if path == "/admin/customer-official-planning-party-preview":
+        return "customer-official-planning-party-preview", None
     if path.startswith("/admin/customer-accounts/"):
         return "customer-account-detail", path[len("/admin/customer-accounts/") :]
     if path == "/admin/backtesting":
@@ -546,6 +549,16 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             )
         return customer_planning_party_backfill_preview(
             settings, sample_limit=int(event.get("limit") or 10)
+        )
+    if event.get("operation") == "customer_official_planning_party_preview" and not event.get(
+        "requestContext"
+    ):
+        return official_planning_party_preview(
+            settings,
+            actor=str(event.get("actor") or "SYSTEM_OFFICIAL_PLANNING_PARTY_PREVIEW"),
+            enabled=bool(event.get("enabled")),
+            limit=int(event.get("limit") or 20),
+            max_per_authority=int(event.get("max_per_authority") or 2),
         )
     if event.get("operation") == "care_foundational_evidence_diagnostic" and not event.get(
         "requestContext"
@@ -910,6 +923,24 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                         settings,
                         actor=actor,
                         max_batch_size=min(max(int(payload.get("max_batch_size") or 100), 1), 100),
+                    ),
+                )
+            if action == "customer-official-planning-party-preview" and method == "POST":
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                payload = parse_json_payload(_raw_body(event))
+                actor = str(claims.get("sub") or claims.get("username") or "unknown")
+                return _response(
+                    200,
+                    official_planning_party_preview(
+                        settings,
+                        actor=actor,
+                        enabled=payload.get("enabled") is True,
+                        limit=min(max(int(payload.get("limit") or 20), 1), 30),
+                        max_per_authority=min(
+                            max(int(payload.get("max_per_authority") or 2), 1), 3
+                        ),
                     ),
                 )
             if action == "opportunity-publication" and method == "POST" and signal_id:

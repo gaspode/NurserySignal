@@ -22,6 +22,7 @@ from app.customer_projection import (
 from app.db import connection
 from app.organisation_types import is_public_authority_name
 from app.planning_parties import extract_planning_party_provenance
+from app.planning_party_official import fetch_idox_party_page, official_party_provenance
 
 PLAN_ENTITLEMENTS = {
     "STARTER": {
@@ -1430,6 +1431,140 @@ def apply_customer_planning_party_backfill(
         "provider_calls": 0,
         "audit_event_id": str(audit[0]),
         "items": changed,
+    }
+
+
+def official_planning_party_preview(
+    settings: Settings,
+    *,
+    actor: str,
+    enabled: bool,
+    limit: int = 20,
+    max_per_authority: int = 2,
+) -> dict[str, Any]:
+    """Fetch a tightly bounded sample of exact official Idox detail URLs.
+
+    This is deliberately preview-only: it creates no organisations, party facts,
+    evidence documents or opportunity links.  One audit row records request
+    accounting; source responses are not retained until a separately approved
+    persistence/apply phase.
+    """
+    from collections import Counter, defaultdict
+
+    if not enabled:
+        return {
+            "preview_only": True,
+            "enabled": False,
+            "provider_requests": 0,
+            "reason": "explicit enabled=true is required; no scheduled execution exists",
+        }
+    bounded_limit = min(max(int(limit), 1), 30)
+    bounded_per_authority = min(max(int(max_per_authority), 1), 3)
+    with connection(settings) as conn:
+        used_today = conn.execute(
+            """SELECT COALESCE(sum(target_count), 0) FROM admin_audit_events
+               WHERE action = 'official_planning_party_preview'
+                 AND created_at >= date_trunc('day', now())"""
+        ).fetchone()[0]
+        if int(used_today or 0) + bounded_limit > 50:
+            raise ValueError("official Planning-party daily preview request limit reached")
+        rows = conn.execute(
+            """SELECT o.id, rs.id, rs.external_id, rs.source_url,
+                      COALESCE(rs.metadata->>'council', rs.metadata->>'local_authority', 'Unknown')
+               FROM opportunities o
+               JOIN opportunity_signals os ON os.opportunity_id = o.id AND os.status = 'ACTIVE'
+               JOIN raw_signals rs ON rs.id = os.raw_signal_id AND rs.source_type = 'planning'
+               JOIN signal_enrichments se
+                 ON se.raw_signal_id = rs.id AND se.review_status = 'APPROVED'
+               WHERE o.vertical = 'CHILDRENS_HOME' AND o.publication_status = 'PUBLISHED'
+                 AND o.operator_id IS NULL AND NULLIF(trim(o.operator_name), '') IS NULL
+                 AND COALESCE(
+                       se.extracted_facts->'planning_party_provenance'->'applicant'->>'name', ''
+                     ) = ''
+                 AND rs.source_url ILIKE '%/applicationDetails.do?%'
+               ORDER BY COALESCE(
+                          rs.metadata->>'council', rs.metadata->>'local_authority', 'Unknown'
+                        ),
+                        rs.discovered_at DESC"""
+        ).fetchall()
+        selected: list[tuple[Any, ...]] = []
+        per_authority: dict[str, int] = defaultdict(int)
+        for row in rows:
+            authority = str(row[4] or "Unknown")
+            if per_authority[authority] >= bounded_per_authority:
+                continue
+            selected.append(row)
+            per_authority[authority] += 1
+            if len(selected) >= bounded_limit:
+                break
+        organisations_by_identity = _organisation_identity_index(conn)
+
+    results: list[dict[str, Any]] = []
+    for opportunity_id, signal_id, external_id, source_url, authority in selected:
+        result = fetch_idox_party_page(str(source_url))
+        provenance = official_party_provenance(result, application_reference=str(external_id or ""))
+        identity = classify_customer_operator_identity(
+            applicants=[result.applicant_name] if result.applicant_name else [],
+            agents=[value for value in (result.agent_name, result.agent_company) if value],
+            organisations_by_identity=organisations_by_identity,
+        )
+        results.append(
+            {
+                "opportunity_id": str(opportunity_id),
+                "signal_id": str(signal_id),
+                "planning_reference": str(external_id or ""),
+                "authority": str(authority),
+                "source_url": result.source_url,
+                "fetch_status": result.outcome,
+                "applicant_name": result.applicant_name,
+                "applicant_company_like": bool(
+                    (provenance.get("applicant") or {}).get("company_like")
+                ),
+                "agent_name": result.agent_name,
+                "agent_company": result.agent_company,
+                "extraction_confidence": (
+                    "EXPLICIT_LABEL" if result.applicant_name or result.agent_name else "NONE"
+                ),
+                "operator_link_candidate": {
+                    "outcome": identity["outcome"],
+                    "automation_allowed": identity["automation_allowed"],
+                    "proposed_organisation": identity["proposed_organisation"],
+                    "reason": identity["reason"],
+                },
+                "detail": result.detail,
+            }
+        )
+    counts = Counter(item["fetch_status"] for item in results)
+    with connection(settings) as conn:
+        conn.execute(
+            """INSERT INTO admin_audit_events
+               (action, actor, target_type, target_count, details, vertical)
+               VALUES ('official_planning_party_preview', %s, 'raw_signal', %s, %s,
+                       'CHILDRENS_HOME')""",
+            (
+                actor,
+                len(results),
+                Jsonb(
+                    {
+                        "source": "OFFICIAL_IDOX_PUBLIC_ACCESS",
+                        "preview_only": True,
+                        "max_per_authority": bounded_per_authority,
+                        "outcome_counts": dict(counts),
+                    }
+                ),
+            ),
+        )
+        conn.commit()
+    return {
+        "schema_version": "signalhub-official-planning-party-preview-v1",
+        "preview_only": True,
+        "source_strategy": "OFFICIAL_IDOX_PUBLIC_ACCESS_EXACT_URL_ONLY",
+        "provider_requests": len(results),
+        "daily_request_limit": 50,
+        "max_per_authority": bounded_per_authority,
+        "candidate_authorities": len(per_authority),
+        "outcome_counts": dict(sorted(counts.items())),
+        "items": results,
     }
 
 

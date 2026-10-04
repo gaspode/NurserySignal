@@ -1924,3 +1924,13 @@ Paid-pilot activation check (2026-09-28):
   organisations, publication, lifecycle, review, matching or watcher state changed. The next identity gain
   requires future provider payloads that actually include explicitly-labelled parties, or a separately approved
   local historical evidence source with equivalent role labels.
+- Historical Planning-party source research now has a deliberately narrow, preview-only next gate:
+  `official-idox-planning-party-v1`. It follows only an already-retained exact HTTPS Idox Public Access
+  application-detail URL, switches only that page to its labelled Details tab, and never searches a council
+  site by reference or crawls a portal. It extracts `APPLICANT` and `AGENT` separately, classifies explicit
+  applicant company/person and agent-only outcomes, and passes applicant companies through the existing
+  exact-local-organisation preview without creating or linking organisations. The preview is capped at 30
+  records, three per authority and 50 daily requests, is explicitly enabled per run, retry-bounded, audited,
+  unscheduled and stores no response body until a separately approved apply/persistence phase. Production
+  multi-authority sampling and the coverage/legal-operational gate remain pending; no broad backfill is
+  authorised.

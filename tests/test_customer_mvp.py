@@ -212,6 +212,30 @@ def test_customer_planning_party_backfill_endpoint_is_admin_only_and_requires_co
     assert unconfirmed["statusCode"] == 400
 
 
+def test_official_planning_party_preview_is_admin_only_and_explicitly_enabled(monkeypatch) -> None:
+    captured = {}
+
+    def preview(*_args, **kwargs):
+        captured.update(kwargs)
+        return {"preview_only": True, "provider_requests": 0}
+
+    monkeypatch.setattr("app.handler.official_planning_party_preview", preview)
+    denied = handler(event("/admin/customer-official-planning-party-preview", "POST"), None)
+    assert denied["statusCode"] == 403
+    allowed = handler(
+        event(
+            "/admin/customer-official-planning-party-preview",
+            "POST",
+            claims=ADMIN,
+            body='{"enabled": true, "limit": 20, "max_per_authority": 2}',
+        ),
+        None,
+    )
+    assert allowed["statusCode"] == 200
+    assert captured["enabled"] is True
+    assert captured["limit"] == 20
+
+
 def test_customer_feed_forwards_only_bounded_safe_filters(monkeypatch) -> None:
     captured = {}
     monkeypatch.setattr("app.handler.customer_context", lambda *_: customer_context())
