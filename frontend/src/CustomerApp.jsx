@@ -6,6 +6,10 @@ function go(path) {
   window.location.hash = path;
 }
 
+function withVertical(path, vertical) {
+  return vertical === "NURSERY" ? `${path}${path.includes("?") ? "&" : "?"}vertical=NURSERY` : path;
+}
+
 function formatDate(value) {
   if (!value) return "—";
   const date = new Date(value);
@@ -14,7 +18,7 @@ function formatDate(value) {
     : new Intl.DateTimeFormat("en-GB", { dateStyle: "medium" }).format(date);
 }
 
-export function CustomerShell({ account, user, path, onLogout, vertical, onVerticalChange, children }) {
+export function CustomerShell({ account, user, path, onLogout, vertical = "CHILDRENS_HOME", onVerticalChange = () => {}, children }) {
   const route = path.split("?")[0];
   const product = vertical === "NURSERY" ? "NurserySignal" : "CareProspect";
   return <div className="care-app">
@@ -49,7 +53,7 @@ function OpportunityCard({ item, onOpen, onSave }) {
   </article>;
 }
 
-export function OpportunityFeed({ api, savedOnly = false, vertical }) {
+export function OpportunityFeed({ api, savedOnly = false, vertical = "CHILDRENS_HOME" }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -57,7 +61,7 @@ export function OpportunityFeed({ api, savedOnly = false, vertical }) {
   const load = useCallback(async () => {
     setLoading(true); setError("");
     const params = new URLSearchParams();
-    params.set("vertical", vertical);
+    if (vertical === "NURSERY") params.set("vertical", vertical);
     Object.entries(filters).forEach(([key, value]) => value && params.set(key, value));
     try {
       setData(await api(`${savedOnly ? "/customer/saved" : "/customer/opportunities"}?${params}`));
@@ -68,7 +72,7 @@ export function OpportunityFeed({ api, savedOnly = false, vertical }) {
   useEffect(() => { load(); }, [load]);
   async function toggleSave(item) {
     try {
-      await api(`/customer/opportunities/${item.id}/save?vertical=${vertical}`, { method: item.saved ? "DELETE" : "POST" });
+      await api(withVertical(`/customer/opportunities/${item.id}/save`, vertical), { method: item.saved ? "DELETE" : "POST" });
       await load();
     } catch (saveError) { setError(saveError.message || "The opportunity could not be saved."); }
   }
@@ -87,11 +91,11 @@ export function OpportunityFeed({ api, savedOnly = false, vertical }) {
   </section>;
 }
 
-export function CustomerOpportunityDetail({ api, id, vertical }) {
+export function CustomerOpportunityDetail({ api, id, vertical = "CHILDRENS_HOME" }) {
   const [item, setItem] = useState(null);
   const [error, setError] = useState("");
   useEffect(() => {
-    api(`/customer/opportunities/${id}?vertical=${vertical}`).then((value) => {
+    api(withVertical(`/customer/opportunities/${id}`, vertical)).then((value) => {
       setItem(value);
       api("/customer/events", { method: "POST", body: JSON.stringify({ event_type: "OPPORTUNITY_VIEWED", opportunity_id: id }) }).catch(() => {});
     }).catch((loadError) => setError(loadError.message || "Opportunity not found."));
@@ -99,7 +103,7 @@ export function CustomerOpportunityDetail({ api, id, vertical }) {
   if (error) return <PortalState tone="error">{error}</PortalState>;
   if (!item) return <PortalState>Loading opportunity…</PortalState>;
   async function toggleSave() {
-    await api(`/customer/opportunities/${id}/save?vertical=${vertical}`, { method: item.saved ? "DELETE" : "POST" });
+    await api(withVertical(`/customer/opportunities/${id}/save`, vertical), { method: item.saved ? "DELETE" : "POST" });
     setItem({ ...item, saved: !item.saved });
   }
   return <section>
@@ -113,7 +117,7 @@ export function CustomerOpportunityDetail({ api, id, vertical }) {
   </section>;
 }
 
-export function AlertsPage({ api, account, vertical }) {
+export function AlertsPage({ api, account, vertical = "CHILDRENS_HOME" }) {
   const [preferences, setPreferences] = useState(null);
   const [digest, setDigest] = useState(null);
   const [savedSearches, setSavedSearches] = useState([]);
@@ -124,7 +128,7 @@ export function AlertsPage({ api, account, vertical }) {
   useEffect(() => {
     api("/customer/preferences").then(setPreferences).catch((e) => setError(e.message));
     if (account.entitlements.saved_searches) {
-      api(`/customer/saved-searches?vertical=${vertical}`).then((value) => setSavedSearches(value.items || [])).catch((e) => setError(e.message));
+      api(withVertical("/customer/saved-searches", vertical)).then((value) => setSavedSearches(value.items || [])).catch((e) => setError(e.message));
     }
   }, [api, account.entitlements.saved_searches]);
   async function save(event) {
@@ -141,7 +145,7 @@ export function AlertsPage({ api, account, vertical }) {
   }
   if (!preferences) return <PortalState>{error || "Loading alert preferences…"}</PortalState>;
   const frequencies = account.entitlements.alert_frequencies || ["OFF", "WEEKLY"];
-  return <section><div className="care-page-heading"><div><p className="care-eyebrow">Stay informed</p><h1>Alerts and preferences</h1><p>Choose how {vertical === "NURSERY" ? "NurserySignal" : "CareProspect"} should keep you updated.</p></div></div>{notice && <PortalState>{notice}</PortalState>}{error && <PortalState tone="error">{error}</PortalState>}<div className="care-detail-grid"><form className="care-panel care-form" onSubmit={save}><h2>Digest frequency</h2><label>Email frequency<select value={preferences.frequency} onChange={(e) => setPreferences({ ...preferences, frequency: e.target.value })}>{frequencies.map((value) => <option key={value} value={value}>{value === "OFF" ? "Off" : value[0] + value.slice(1).toLowerCase()}</option>)}</select></label><label>Regions<input value={(preferences.regions || []).join(", ")} onChange={(e) => setPreferences({ ...preferences, regions: e.target.value.split(",").map((v) => v.trim()).filter(Boolean) })} placeholder="e.g. West Midlands" /></label><label>Local authorities<input value={(preferences.local_authorities || []).join(", ")} onChange={(e) => setPreferences({ ...preferences, local_authorities: e.target.value.split(",").map((v) => v.trim()).filter(Boolean) })} /></label><button className="care-primary">Save preferences</button></form><div className="care-panel"><h2>Weekly digest preview</h2><p>Preview the customer-safe intelligence that will appear in your digest.</p><button className="care-secondary" onClick={() => api(`/customer/digest/preview?vertical=${vertical}`).then(setDigest).catch((e) => setError(e.message))}>Generate preview</button>{digest && <div className="digest-preview"><strong>{digest.subject}</strong><p>{digest.opportunities.length} recent opportunities</p><ul>{digest.opportunities.slice(0, 5).map((item) => <li key={item.id}>{item.title}</li>)}</ul>{digest.delivery_status === "PREVIEW_ONLY" && <p className="care-muted">Email delivery is awaiting a verified sender; preferences and digest generation are active.</p>}</div>}</div></div>{account.entitlements.saved_searches && <form className="care-panel care-form" onSubmit={saveSearch}><h2>Saved searches</h2><p className="care-muted">Keep a simple geography search ready for future digests.</p><label>Search name<input required value={searchName} onChange={(e) => setSearchName(e.target.value)} placeholder="West Midlands openings" /></label><label>Region<input required value={searchRegion} onChange={(e) => setSearchRegion(e.target.value)} placeholder="West Midlands" /></label><button className="care-secondary">Save search</button>{savedSearches.map((item) => <div className="saved-search-row" key={item.id}><strong>{item.name}</strong><span>{item.criteria?.region || "All permitted areas"}</span></div>)}</form>}</section>;
+  return <section><div className="care-page-heading"><div><p className="care-eyebrow">Stay informed</p><h1>Alerts and preferences</h1><p>Choose how {vertical === "NURSERY" ? "NurserySignal" : "CareProspect"} should keep you updated.</p></div></div>{notice && <PortalState>{notice}</PortalState>}{error && <PortalState tone="error">{error}</PortalState>}<div className="care-detail-grid"><form className="care-panel care-form" onSubmit={save}><h2>Digest frequency</h2><label>Email frequency<select value={preferences.frequency} onChange={(e) => setPreferences({ ...preferences, frequency: e.target.value })}>{frequencies.map((value) => <option key={value} value={value}>{value === "OFF" ? "Off" : value[0] + value.slice(1).toLowerCase()}</option>)}</select></label><label>Regions<input value={(preferences.regions || []).join(", ")} onChange={(e) => setPreferences({ ...preferences, regions: e.target.value.split(",").map((v) => v.trim()).filter(Boolean) })} placeholder="e.g. West Midlands" /></label><label>Local authorities<input value={(preferences.local_authorities || []).join(", ")} onChange={(e) => setPreferences({ ...preferences, local_authorities: e.target.value.split(",").map((v) => v.trim()).filter(Boolean) })} /></label><button className="care-primary">Save preferences</button></form><div className="care-panel"><h2>Weekly digest preview</h2><p>Preview the customer-safe intelligence that will appear in your digest.</p><button className="care-secondary" onClick={() => api(withVertical("/customer/digest/preview", vertical)).then(setDigest).catch((e) => setError(e.message))}>Generate preview</button>{digest && <div className="digest-preview"><strong>{digest.subject}</strong><p>{(digest.opportunities || []).length} recent opportunities</p><ul>{(digest.opportunities || []).slice(0, 5).map((item) => <li key={item.id}>{item.title}</li>)}</ul>{digest.delivery_status === "PREVIEW_ONLY" && <p className="care-muted">Email delivery is awaiting a verified sender; preferences and digest generation are active.</p>}</div>}</div></div>{account.entitlements.saved_searches && <form className="care-panel care-form" onSubmit={saveSearch}><h2>Saved searches</h2><p className="care-muted">Keep a simple geography search ready for future digests.</p><label>Search name<input required value={searchName} onChange={(e) => setSearchName(e.target.value)} placeholder="West Midlands openings" /></label><label>Region<input required value={searchRegion} onChange={(e) => setSearchRegion(e.target.value)} placeholder="West Midlands" /></label><button className="care-secondary">Save search</button>{savedSearches.map((item) => <div className="saved-search-row" key={item.id}><strong>{item.name}</strong><span>{item.criteria?.region || "All permitted areas"}</span></div>)}</form>}</section>;
 }
 
 function AccountPage({ account }) {
