@@ -20,9 +20,10 @@ from app.customer_projection import (
     safe_evidence_title,
 )
 from app.db import connection
+from app.official_planning_fetch import fetch_idox_party_via_fetcher
 from app.organisation_types import is_public_authority_name
 from app.planning_parties import extract_planning_party_provenance
-from app.planning_party_official import fetch_idox_party_page, official_party_provenance
+from app.planning_party_official import official_party_provenance
 
 PLAN_ENTITLEMENTS = {
     "STARTER": {
@@ -1542,7 +1543,7 @@ def official_planning_party_preview(
     from concurrent.futures import ThreadPoolExecutor
 
     def fetch(row: tuple[Any, ...]) -> tuple[tuple[Any, ...], Any]:
-        return row, fetch_idox_party_page(str(row[3]), timeout=4, retries=1)
+        return row, fetch_idox_party_via_fetcher(settings, str(row[3]))
 
     fetched: dict[str, Any] = {}
     with ThreadPoolExecutor(max_workers=4, thread_name_prefix="official-party") as executor:

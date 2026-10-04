@@ -45,6 +45,7 @@ class Settings:
     companies_house_manual_run_queue_url: str | None = None
     companies_house_lookup_function_name: str | None = None
     procurement_manual_run_queue_url: str | None = None
+    official_planning_fetcher_function_name: str | None = None
     care_lifecycle_watcher_schedule_enabled: bool = False
     mcp_resource_url: str | None = None
     mcp_oauth_issuer: str | None = None
@@ -122,6 +123,9 @@ class Settings:
             ),
             procurement_manual_run_queue_url=(
                 os.getenv("PROCUREMENT_MANUAL_RUN_QUEUE_URL") or None
+            ),
+            official_planning_fetcher_function_name=(
+                os.getenv("OFFICIAL_PLANNING_FETCHER_FUNCTION_NAME") or None
             ),
             care_lifecycle_watcher_schedule_enabled=os.getenv(
                 "CARE_LIFECYCLE_WATCHER_SCHEDULE_ENABLED", "false"

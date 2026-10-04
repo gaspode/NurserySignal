@@ -82,6 +82,11 @@ output "planning_collector_function_name" {
   value = aws_lambda_function.planning_collector.function_name
 }
 
+output "official_planning_fetcher_function_name" {
+  description = "Non-VPC exact-URL-only official Planning page fetcher."
+  value       = aws_lambda_function.official_planning_fetcher.function_name
+}
+
 output "planning_provider_secret_arn" {
   value = aws_secretsmanager_secret.planning_provider.arn
 }

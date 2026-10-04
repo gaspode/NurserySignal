@@ -47,9 +47,12 @@ resource "aws_iam_role_policy" "lambda_application" {
         Resource = local.ai_invoke_resources
       },
       {
-        Effect   = "Allow"
-        Action   = ["lambda:InvokeFunction"]
-        Resource = aws_lambda_function.companies_house_collector.arn
+        Effect = "Allow"
+        Action = ["lambda:InvokeFunction"]
+        Resource = [
+          aws_lambda_function.companies_house_collector.arn,
+          aws_lambda_function.official_planning_fetcher.arn
+        ]
       },
       {
         Effect   = "Allow"

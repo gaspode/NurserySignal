@@ -61,6 +61,7 @@ resource "aws_lambda_function" "backend" {
       COMPANIES_HOUSE_MANUAL_RUN_QUEUE_URL    = aws_sqs_queue.companies_house_manual_runs.url
       COMPANIES_HOUSE_LOOKUP_FUNCTION_NAME    = aws_lambda_function.companies_house_collector.function_name
       PROCUREMENT_MANUAL_RUN_QUEUE_URL        = aws_sqs_queue.procurement_manual_runs.url
+      OFFICIAL_PLANNING_FETCHER_FUNCTION_NAME = aws_lambda_function.official_planning_fetcher.function_name
       CARE_LIFECYCLE_WATCHER_SCHEDULE_ENABLED = "true"
     }
   }

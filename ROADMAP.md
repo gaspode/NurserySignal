@@ -1951,3 +1951,11 @@ Paid-pilot activation check (2026-09-28):
   stored accounting without re-fetching. No wider Idox adapter/backfill is justified. A future decision would
   need an explicitly costed, security-reviewed egress design (or a different existing-network execution path)
   followed by a fresh 10-record exact-URL feasibility sample; it must not be enabled implicitly.
+- A replacement non-VPC egress design is now staged for the same narrow feasibility gate: an exact-URL-only
+  `official-planning-fetcher` Lambda with a logs-only role, no VPC, database, secrets, S3, queues or business
+  permissions. The VPC backend may invoke only this function through its existing Lambda endpoint; the fetcher
+  returns at most 180 KB of HTML/text and the backend retains parsing, party-role provenance, audit and all
+  business logic. It uses a reviewed official Idox hostname allowlist, HTTPS/exact-path/key validation,
+  public-DNS preflight, same-host-only redirects, tight timeout/response limits and explicit error categories.
+  Deployment and one ten-record, max-three-per-authority preview are pending; no schedule or broad backfill is
+  authorised.

@@ -107,6 +107,11 @@ def fetch_idox_party_page(
             return OfficialPartyResult(
                 "SOURCE_UNAVAILABLE", details_url, detail=type(exc).__name__
             )
+    return parse_idox_party_html(details_url, body)
+
+
+def parse_idox_party_html(details_url: str, body: str) -> OfficialPartyResult:
+    """Parse a bounded official Idox Details response inside the trusted backend."""
     applicant = _field(body, "Applicant Name")
     agent = _field(body, "Agent Name")
     agent_company = _field(body, "Agent Company Name")
