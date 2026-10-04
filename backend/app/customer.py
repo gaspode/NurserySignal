@@ -1128,6 +1128,13 @@ def nursery_customer_publication_preview(settings: Settings, *, limit: int = 25)
     ]
     samples = []
     for item in rows[: min(max(limit, 1), 50)]:
+        customer_preview = _project_opportunity(
+            {**item, "lifecycle_stage": item["policy"]["stage"]}, saved=False
+        )
+        for timestamp_key in ("first_detected", "last_updated"):
+            timestamp = customer_preview.get(timestamp_key)
+            if hasattr(timestamp, "isoformat"):
+                customer_preview[timestamp_key] = timestamp.isoformat()
         samples.append(
             {
                 "opportunity_id": str(item["id"]),
@@ -1137,9 +1144,7 @@ def nursery_customer_publication_preview(settings: Settings, *, limit: int = 25)
                 "site_identity": item["site_identity"],
                 "operator_known": bool(item.get("operator_name")),
                 "policy": item["policy"],
-                "customer_preview": _project_opportunity(
-                    {**item, "lifecycle_stage": item["policy"]["stage"]}, saved=False
-                ),
+                "customer_preview": customer_preview,
             }
         )
     return {
