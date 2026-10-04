@@ -1915,5 +1915,12 @@ Paid-pilot activation check (2026-09-28):
   source paths, raw record identity and extraction time; it never treats a generic organisation hint as an
   applicant. Future Planning enrichment and a bounded, audited CareProspect published-evidence backfill share
   the same extractor. The backfill has preview and confirmed batch paths (100 maximum), makes no provider calls
-  or organisations, and writes only missing facts. Deployment and production dry-run/apply verification remain
-  pending.
+  or organisations, and writes only missing facts.
+- Production validation and backfill completed: 387 published CareProspect opportunities had 406 linked,
+  approved Planning signals, all with no explicitly role-labelled applicant or agent in their retained raw
+  payloads. Five audited bounded batches persisted `NO_ROLE_LABELLED_IDENTITY` provenance for all 406; the
+  repeat wrote zero rows. There were zero company-like applicants, zero expected or actual safe operator links,
+  and the operator-enrichment preview remains 387 `NO_MATCH` / zero `SAFE_AUTO_LINK`. No provider calls,
+  organisations, publication, lifecycle, review, matching or watcher state changed. The next identity gain
+  requires future provider payloads that actually include explicitly-labelled parties, or a separately approved
+  local historical evidence source with equivalent role labels.
