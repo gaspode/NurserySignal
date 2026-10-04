@@ -1966,3 +1966,13 @@ Paid-pilot activation check (2026-09-28):
   broader historical pass is authorised. The next gate is a separate, evidence-led decision on whether reviewing
   further authority host/layout adapters has enough expected commercial value; this path must be abandoned rather
   than broadened automatically if that remains unproven.
+- Published `NEEDS_REVIEW` customer copy is now a derived projection rather than a stale opening claim. The seven
+  affected legacy/manual publications each retain one approved foundational Planning signal, but their current
+  subtype/action is `AMBIGUOUS` / `REVIEW`; both stored and derived lifecycle remain `NEEDS_REVIEW`. As none has
+  a customer title or summary override, the customer surface now safely renders `Children’s home — <coarse area>`
+  and a factual status-under-review summary without rewriting historical creation provenance, evidence, lifecycle,
+  publication or manual-protection state. The quality audit now reports zero
+  `MISLEADING_OR_STALE_CUSTOMER_WORDING`; all published records are instead correctly surfaced as needing
+  organisation identity where applicable. Any future unresolved record with an explicit customer-content override
+  remains manual review rather than being overwritten. No provider call, publication/withdrawal action, operator
+  identity action or customer-state mutation is authorised by this projection repair.
