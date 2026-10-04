@@ -1934,3 +1934,8 @@ Paid-pilot activation check (2026-09-28):
   unscheduled and stores no response body until a separately approved apply/persistence phase. Production
   multi-authority sampling and the coverage/legal-operational gate remain pending; no broad backfill is
   authorised.
+- The initial production sample revealed that sequential external-page fetches could exceed the API Lambda's
+  60-second timeout before the preview could return or audit. The preview now retains the exact same request
+  ceilings while using four bounded concurrent requests, a four-second per-page timeout and one transient
+  retry. The timed-out run persisted no party data, organisation links or audit result; redeployment and a
+  single replacement sample remain pending.

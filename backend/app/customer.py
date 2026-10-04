@@ -1499,9 +1499,23 @@ def official_planning_party_preview(
                 break
         organisations_by_identity = _organisation_identity_index(conn)
 
+    # Four concurrent exact-page requests keep the deliberately small sample within
+    # the backend Lambda's 60-second limit even when several authorities time out.
+    # This is not a crawler: `selected` has already enforced the global and
+    # per-authority request ceilings above.
+    from concurrent.futures import ThreadPoolExecutor
+
+    def fetch(row: tuple[Any, ...]) -> tuple[tuple[Any, ...], Any]:
+        return row, fetch_idox_party_page(str(row[3]), timeout=4, retries=1)
+
+    fetched: dict[str, Any] = {}
+    with ThreadPoolExecutor(max_workers=4, thread_name_prefix="official-party") as executor:
+        for row, result in executor.map(fetch, selected):
+            fetched[str(row[1])] = result
+
     results: list[dict[str, Any]] = []
     for opportunity_id, signal_id, external_id, source_url, authority in selected:
-        result = fetch_idox_party_page(str(source_url))
+        result = fetched[str(signal_id)]
         provenance = official_party_provenance(result, application_reference=str(external_id or ""))
         identity = classify_customer_operator_identity(
             applicants=[result.applicant_name] if result.applicant_name else [],

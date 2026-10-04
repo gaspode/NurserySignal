@@ -98,3 +98,18 @@ def test_idox_adapter_retries_transient_timeouts_with_bounded_backoff() -> None:
     assert result.outcome == "APPLICANT_COMPANY_FOUND"
     assert attempts == 2
     assert waits == [0.2]
+
+
+def test_idox_adapter_bounds_timeout_supplied_by_preview() -> None:
+    timeouts = []
+
+    def opener(_request, *, timeout):
+        timeouts.append(timeout)
+        return Response("<th>Applicant Name</th><td>Example Care Ltd</td>")
+
+    fetch_idox_party_page(
+        "https://planning.example.gov.uk/online-applications/applicationDetails.do?keyVal=A",
+        opener=opener,
+        timeout=4,
+    )
+    assert timeouts == [4]
