@@ -127,6 +127,25 @@ def current_opportunity_basis_reason(
         for signal in signals
         if signal.get("relationship_status", signal.get("status")) == "ACTIVE"
     ]
+    current_planning = [
+        signal
+        for signal in active
+        if str(signal.get("source_type") or "").lower() == "planning"
+    ]
+    if current_planning and all(
+        str((signal.get("extracted_facts") or {}).get("planning_subtype") or "")
+        == "AMBIGUOUS"
+        and str(
+            (signal.get("extracted_facts") or {}).get("opportunity_creation_decision")
+            or ""
+        )
+        == "REVIEW"
+        for signal in current_planning
+    ):
+        return (
+            "Current Planning evidence is under review and does not yet determine a "
+            "customer lifecycle."
+        )
     if EvidenceSupport.FOUNDATIONAL in [classify_evidence_support(signal) for signal in active]:
         return opportunity.get("creation_reason") or opportunity.get("stage_reason") or None
 

@@ -9,6 +9,7 @@ from app.customer_projection import (
     postcode_district,
     safe_evidence_title,
 )
+from app.evidence_support import current_opportunity_basis_reason
 
 
 @pytest.mark.parametrize(
@@ -174,6 +175,30 @@ def test_generated_summary_does_not_imply_opening_without_foundational_evidence(
         }
     )
     assert "does not establish a new children’s-home opening" in summary
+
+
+def test_current_basis_uses_unresolved_semantics_not_immutable_opening_provenance() -> None:
+    basis = current_opportunity_basis_reason(
+        {
+            "vertical": "CHILDRENS_HOME",
+            "change_type": "OPENING",
+            "creation_reason": "Planning evidence indicates a new children's home.",
+        },
+        [
+            {
+                "status": "ACTIVE",
+                "source_type": "planning",
+                "review_status": "APPROVED",
+                "extracted_facts": {
+                    "planning_subtype": "AMBIGUOUS",
+                    "opportunity_creation_decision": "REVIEW",
+                },
+            }
+        ],
+    )
+    assert basis == (
+        "Current Planning evidence is under review and does not yet determine a customer lifecycle."
+    )
 
 
 def test_generated_summary_uses_neutral_wording_for_unresolved_foundational_evidence() -> None:
