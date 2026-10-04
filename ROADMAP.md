@@ -1951,11 +1951,18 @@ Paid-pilot activation check (2026-09-28):
   stored accounting without re-fetching. No wider Idox adapter/backfill is justified. A future decision would
   need an explicitly costed, security-reviewed egress design (or a different existing-network execution path)
   followed by a fresh 10-record exact-URL feasibility sample; it must not be enabled implicitly.
-- A replacement non-VPC egress design is now staged for the same narrow feasibility gate: an exact-URL-only
+- A replacement non-VPC egress design is deployed for the same narrow feasibility gate: an exact-URL-only
   `official-planning-fetcher` Lambda with a logs-only role, no VPC, database, secrets, S3, queues or business
   permissions. The VPC backend may invoke only this function through its existing Lambda endpoint; the fetcher
   returns at most 180 KB of HTML/text and the backend retains parsing, party-role provenance, audit and all
   business logic. It uses a reviewed official Idox hostname allowlist, HTTPS/exact-path/key validation,
   public-DNS preflight, same-host-only redirects, tight timeout/response limits and explicit error categories.
-  Deployment and one ten-record, max-three-per-authority preview are pending; no schedule or broad backfill is
-  authorised.
+  The fetcher is confirmed non-VPC with only the AWS managed basic CloudWatch Logs policy attached. The first
+  completed ten-record, max-three-per-authority sample made exactly ten exact-URL requests: seven were rejected
+  as `HOST_NOT_ALLOWED` because Barnet, Basildon, Bedford and Bexley are not yet on the reviewed allowlist; the
+  three allowed Blaby pages fetched but yielded `PARSE_FAILED` because no current parser-recognised labelled
+  applicant/agent field was present. It recovered zero explicit party facts and zero safe operator links, with no
+  organisation, review, lifecycle, publication, customer, watcher or provider-policy mutation. No schedule or
+  broader historical pass is authorised. The next gate is a separate, evidence-led decision on whether reviewing
+  further authority host/layout adapters has enough expected commercial value; this path must be abandoned rather
+  than broadened automatically if that remains unproven.
