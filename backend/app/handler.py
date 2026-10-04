@@ -37,9 +37,11 @@ from app.care_planning_review import (
 )
 from app.config import Settings
 from app.customer import (
+    apply_customer_operator_enrichment,
     apply_pilot_publications,
     create_saved_search,
     customer_context,
+    customer_operator_enrichment_preview,
     customer_opportunity_detail,
     customer_publication_quality,
     customer_readiness,
@@ -293,6 +295,8 @@ def _admin_path(path: str) -> tuple[str, str | None]:
         return "customer-readiness", None
     if path == "/admin/customer-publication-quality":
         return "customer-publication-quality", None
+    if path == "/admin/customer-operator-enrichment":
+        return "customer-operator-enrichment", None
     if path.startswith("/admin/customer-accounts/"):
         return "customer-account-detail", path[len("/admin/customer-accounts/") :]
     if path == "/admin/backtesting":
@@ -514,6 +518,18 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             settings,
             limit=int(event.get("limit") or 100),
             publication_status=event.get("publication_status"),
+        )
+    if event.get("operation") == "customer_operator_enrichment" and not event.get(
+        "requestContext"
+    ):
+        if bool(event.get("apply")):
+            return apply_customer_operator_enrichment(
+                settings,
+                actor=str(event.get("actor") or "SYSTEM_CUSTOMER_OPERATOR_ENRICHMENT"),
+                max_batch_size=int(event.get("max_batch_size") or 25),
+            )
+        return customer_operator_enrichment_preview(
+            settings, sample_limit=int(event.get("limit") or 10)
         )
     if event.get("operation") == "care_foundational_evidence_diagnostic" and not event.get(
         "requestContext"
@@ -826,6 +842,32 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                     200,
                     customer_publication_quality(
                         settings, sample_limit=min(max(int(_query(event, "limit") or "5"), 1), 10)
+                    ),
+                )
+            if action == "customer-operator-enrichment" and method == "GET":
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                return _response(
+                    200,
+                    customer_operator_enrichment_preview(
+                        settings, sample_limit=min(max(int(_query(event, "limit") or "10"), 1), 25)
+                    ),
+                )
+            if action == "customer-operator-enrichment" and method == "POST":
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                payload = parse_json_payload(_raw_body(event))
+                if payload.get("confirm") is not True:
+                    return _response(400, {"error": "confirm=true is required"})
+                actor = str(claims.get("sub") or claims.get("username") or "unknown")
+                return _response(
+                    200,
+                    apply_customer_operator_enrichment(
+                        settings,
+                        actor=actor,
+                        max_batch_size=min(max(int(payload.get("max_batch_size") or 25), 1), 25),
                     ),
                 )
             if action == "opportunity-publication" and method == "POST" and signal_id:

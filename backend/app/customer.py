@@ -10,6 +10,7 @@ import boto3
 from psycopg.types.json import Jsonb
 
 from app.config import Settings
+from app.correlation import normalize_identity
 from app.customer_projection import (
     customer_safe_place,
     customer_summary,
@@ -19,6 +20,7 @@ from app.customer_projection import (
     safe_evidence_title,
 )
 from app.db import connection
+from app.organisation_types import is_public_authority_name
 
 PLAN_ENTITLEMENTS = {
     "STARTER": {
@@ -953,6 +955,295 @@ def customer_readiness(settings: Settings) -> dict[str, Any]:
 
 
 CUSTOMER_PUBLICATION_QUALITY_SCHEMA_VERSION = "signalhub-customer-publication-quality-v1"
+CUSTOMER_OPERATOR_ENRICHMENT_POLICY_VERSION = "care-customer-operator-enrichment-v1"
+
+
+def _company_like_applicant(value: Any) -> bool:
+    """Return whether a Planning applicant is safe to treat as an organisation candidate.
+
+    This deliberately does *not* try to infer an eventual operator from a person's
+    name, an agent, or a council.  Exact matching is only useful after this role
+    guard has established that the value looks like a legal/organisational applicant.
+    """
+    name = " ".join(str(value or "").split()).strip(" .,")
+    if not name or is_public_authority_name(name):
+        return False
+    normalized = normalize_identity(name)
+    if normalized in {"unknown", "not provided", "redacted", "applicant", "n a"}:
+        return False
+    return bool(
+        re.search(
+            r"\b(?:ltd|limited|plc|llp|cic|inc|company|co|group|holdings|trust|"
+            r"foundation|association|partnership)\b",
+            name,
+            re.IGNORECASE,
+        )
+    )
+
+
+def classify_customer_operator_identity(
+    *,
+    applicants: list[str],
+    agents: list[str],
+    organisations_by_identity: dict[str, list[dict[str, str]]],
+) -> dict[str, Any]:
+    """Classify local Planning applicant evidence without creating organisations.
+
+    The function is intentionally pure so preview, apply and regression tests share
+    the exact same conservative rule.  Only an exact applicant-to-existing-local
+    organisation identity can be ``SAFE_AUTO_LINK``; agents are never link inputs.
+    """
+    clean_applicants = list(dict.fromkeys(v.strip() for v in applicants if str(v).strip()))
+    clean_agents = list(dict.fromkeys(v.strip() for v in agents if str(v).strip()))
+    company_applicants = [value for value in clean_applicants if _company_like_applicant(value)]
+    unsafe_applicants = [
+        value for value in clean_applicants if is_public_authority_name(value)
+    ]
+    if unsafe_applicants:
+        return {
+            "outcome": "UNSAFE_TO_USE",
+            "reason": "planning applicant is a public authority, not operator evidence",
+            "applicant_evidence": clean_applicants,
+            "agent_evidence": clean_agents,
+            "proposed_organisation": None,
+            "automation_allowed": False,
+            "blocking_factor": "public_authority_applicant",
+        }
+    if not company_applicants:
+        return {
+            "outcome": "PERSON_OR_AGENT_ONLY" if clean_applicants or clean_agents else "NO_MATCH",
+            "reason": (
+                "only person/agent Planning evidence is available"
+                if clean_applicants or clean_agents
+                else "no Planning applicant organisation is stored locally"
+            ),
+            "applicant_evidence": clean_applicants,
+            "agent_evidence": clean_agents,
+            "proposed_organisation": None,
+            "automation_allowed": False,
+            "blocking_factor": "no_company_like_applicant",
+        }
+
+    matches: dict[str, dict[str, str]] = {}
+    unmatched: list[str] = []
+    ambiguous: list[str] = []
+    for applicant in company_applicants:
+        candidates = organisations_by_identity.get(normalize_identity(applicant), [])
+        unique = {candidate["id"]: candidate for candidate in candidates}
+        if len(unique) == 1:
+            candidate = next(iter(unique.values()))
+            matches[candidate["id"]] = candidate
+        elif len(unique) > 1:
+            ambiguous.append(applicant)
+        else:
+            unmatched.append(applicant)
+    if ambiguous or len(matches) > 1:
+        return {
+            "outcome": "AMBIGUOUS",
+            "reason": "multiple existing organisations match the Planning applicant evidence",
+            "applicant_evidence": clean_applicants,
+            "agent_evidence": clean_agents,
+            "proposed_organisation": None,
+            "automation_allowed": False,
+            "blocking_factor": "multiple_exact_organisation_matches",
+        }
+    if len(matches) == 1 and not unmatched:
+        organisation = next(iter(matches.values()))
+        return {
+            "outcome": "EXACT / SAFE_AUTO_LINK",
+            "reason": (
+                "exact local organisation name or alias match for company-like Planning applicant"
+            ),
+            "applicant_evidence": clean_applicants,
+            "agent_evidence": clean_agents,
+            "proposed_organisation": organisation,
+            "automation_allowed": True,
+            "blocking_factor": None,
+        }
+    if len(matches) == 1:
+        organisation = next(iter(matches.values()))
+        return {
+            "outcome": "STRONG / REVIEW_RECOMMENDED",
+            "reason": "one exact local match but additional unmatched Planning applicant evidence",
+            "applicant_evidence": clean_applicants,
+            "agent_evidence": clean_agents,
+            "proposed_organisation": organisation,
+            "automation_allowed": False,
+            "blocking_factor": "conflicting_applicant_evidence",
+        }
+    return {
+        "outcome": "NO_MATCH",
+        "reason": "company-like Planning applicant has no exact existing local organisation match",
+        "applicant_evidence": clean_applicants,
+        "agent_evidence": clean_agents,
+        "proposed_organisation": None,
+        "automation_allowed": False,
+        "blocking_factor": "no_exact_local_organisation_match",
+    }
+
+
+def _customer_operator_enrichment_rows(conn: Any) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        """SELECT o.id, COALESCE(o.customer_title, o.name), o.postcode, o.town,
+                  COALESCE(applicants.values, ARRAY[]::text[]),
+                  COALESCE(agents.values, ARRAY[]::text[])
+           FROM opportunities o
+           LEFT JOIN LATERAL (
+             SELECT array_agg(DISTINCT NULLIF(trim(rs.metadata->>'applicant'), ''))
+                      FILTER (WHERE NULLIF(trim(rs.metadata->>'applicant'), '') IS NOT NULL)
+                      AS values
+             FROM opportunity_signals os
+             JOIN raw_signals rs ON rs.id = os.raw_signal_id
+             LEFT JOIN signal_enrichments se ON se.raw_signal_id = rs.id
+             WHERE os.opportunity_id = o.id AND os.status = 'ACTIVE'
+               AND rs.source_type = 'planning' AND se.review_status = 'APPROVED'
+           ) applicants ON TRUE
+           LEFT JOIN LATERAL (
+             SELECT array_agg(DISTINCT NULLIF(trim(rs.metadata->>'agent'), ''))
+                      FILTER (WHERE NULLIF(trim(rs.metadata->>'agent'), '') IS NOT NULL)
+                      AS values
+             FROM opportunity_signals os
+             JOIN raw_signals rs ON rs.id = os.raw_signal_id
+             LEFT JOIN signal_enrichments se ON se.raw_signal_id = rs.id
+             WHERE os.opportunity_id = o.id AND os.status = 'ACTIVE'
+               AND rs.source_type = 'planning' AND se.review_status = 'APPROVED'
+           ) agents ON TRUE
+           WHERE o.vertical = 'CHILDRENS_HOME'
+             AND o.publication_status = 'PUBLISHED'
+             AND o.merged_into_opportunity_id IS NULL
+             AND o.operator_id IS NULL
+             AND NULLIF(trim(o.operator_name), '') IS NULL
+           ORDER BY o.latest_update_at DESC, o.id"""
+    ).fetchall()
+    operator_rows = conn.execute(
+        """SELECT op.id, op.name, op.legal_name, oa.alias
+           FROM operators op
+           LEFT JOIN organisation_aliases oa ON oa.operator_id = op.id
+           WHERE COALESCE(op.organisation_type, 'UNKNOWN') <> 'PUBLIC_AUTHORITY'"""
+    ).fetchall()
+    by_identity: dict[str, list[dict[str, str]]] = {}
+    for operator_id, name, legal_name, alias in operator_rows:
+        candidate = {"id": str(operator_id), "name": str(name)}
+        for value in (name, legal_name, alias):
+            identity = normalize_identity(value)
+            if identity:
+                by_identity.setdefault(identity, []).append(candidate)
+    items: list[dict[str, Any]] = []
+    for opportunity_id, title, postcode, town, applicants, agents in rows:
+        classification = classify_customer_operator_identity(
+            applicants=list(applicants or []),
+            agents=list(agents or []),
+            organisations_by_identity=by_identity,
+        )
+        items.append(
+            {
+                "opportunity_id": str(opportunity_id),
+                "customer_title": str(title),
+                "postcode_district": postcode_district(postcode),
+                "town": customer_safe_place(town),
+                **classification,
+            }
+        )
+    return items
+
+
+def customer_operator_enrichment_preview(
+    settings: Settings, *, sample_limit: int = 10
+) -> dict[str, Any]:
+    """Read-only local-only preview for safe customer operator identity links."""
+    from collections import Counter
+
+    bounded_sample_limit = min(max(int(sample_limit), 1), 25)
+    with connection(settings) as conn:
+        items = _customer_operator_enrichment_rows(conn)
+    outcomes = Counter(item["outcome"] for item in items)
+    safe = [item for item in items if item["automation_allowed"]]
+    return {
+        "schema_version": "signalhub-customer-operator-enrichment-preview-v1",
+        "policy_version": CUSTOMER_OPERATOR_ENRICHMENT_POLICY_VERSION,
+        "generated_at": datetime.now(UTC).isoformat(),
+        "read_only": True,
+        "provider_calls": 0,
+        "candidates": len(items),
+        "outcome_counts": dict(sorted(outcomes.items())),
+        "safe_auto_link_count": len(safe),
+        "historical_manual_validation": {
+            "status": "UNAVAILABLE",
+            "reason": (
+                "legacy opportunity-to-organisation links do not record applicant-role provenance"
+            ),
+        },
+        "samples": {
+            outcome: [item for item in items if item["outcome"] == outcome][:bounded_sample_limit]
+            for outcome in sorted(outcomes)
+        },
+    }
+
+
+def apply_customer_operator_enrichment(
+    settings: Settings, *, actor: str, max_batch_size: int = 25
+) -> dict[str, Any]:
+    """Apply only the recomputed exact local links, in a bounded audited batch."""
+    limit = min(max(int(max_batch_size), 1), 25)
+    changed: list[dict[str, Any]] = []
+    skipped = 0
+    with connection(settings) as conn:
+        candidates = [
+            item for item in _customer_operator_enrichment_rows(conn) if item["automation_allowed"]
+        ][:limit]
+        for item in candidates:
+            organisation = item["proposed_organisation"]
+            row = conn.execute(
+                """UPDATE opportunities SET operator_id = %s, operator_name = %s, updated_at = now()
+                   WHERE id = %s AND vertical = 'CHILDRENS_HOME'
+                     AND publication_status = 'PUBLISHED'
+                     AND operator_id IS NULL AND NULLIF(trim(operator_name), '') IS NULL
+                   RETURNING id""",
+                (organisation["id"], organisation["name"], item["opportunity_id"]),
+            ).fetchone()
+            if not row:
+                skipped += 1
+                continue
+            audit = conn.execute(
+                """INSERT INTO admin_audit_events
+                   (action, actor, target_type, target_count, details, vertical)
+                   VALUES ('customer_operator_identity_auto_linked', %s, 'opportunity', 1, %s,
+                           'CHILDRENS_HOME') RETURNING id""",
+                (
+                    actor,
+                    Jsonb(
+                        {
+                            "opportunity_id": item["opportunity_id"],
+                            "operator_id": organisation["id"],
+                            "operator_name": organisation["name"],
+                            "policy_version": CUSTOMER_OPERATOR_ENRICHMENT_POLICY_VERSION,
+                            "reason": item["reason"],
+                            "applicant_evidence": item["applicant_evidence"],
+                            "provider_calls": 0,
+                        }
+                    ),
+                ),
+            ).fetchone()
+            changed.append(
+                {
+                    "opportunity_id": item["opportunity_id"],
+                    "operator_id": organisation["id"],
+                    "operator_name": organisation["name"],
+                    "audit_event_id": str(audit[0]),
+                }
+            )
+        conn.commit()
+        remaining = len(_customer_operator_enrichment_rows(conn))
+    return {
+        "policy_version": CUSTOMER_OPERATOR_ENRICHMENT_POLICY_VERSION,
+        "max_batch_size": limit,
+        "examined": len(candidates),
+        "linked": len(changed),
+        "skipped": skipped,
+        "remaining_unlinked": remaining,
+        "provider_calls": 0,
+        "items": changed,
+    }
 
 
 def _published_quality_assessment(row: dict[str, Any], *, now: datetime) -> tuple[str, list[str]]:

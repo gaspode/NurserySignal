@@ -12,6 +12,7 @@ from app.customer import (
     _project_opportunity,
     _published_quality_assessment,
     apply_pilot_publications,
+    classify_customer_operator_identity,
     list_customer_opportunities,
     pilot_curation_inventory,
     queue_customer_account_provision,
@@ -129,6 +130,68 @@ def test_customer_publication_quality_is_admin_only_and_read_only(monkeypatch) -
     )
     assert response["statusCode"] == 200
     assert json.loads(response["body"])["read_only"] is True
+
+
+def test_customer_operator_identity_exact_company_alias_is_safe() -> None:
+    result = classify_customer_operator_identity(
+        applicants=["Example Care Ltd"],
+        agents=["Planning Agent LLP"],
+        organisations_by_identity={
+            "example care ltd": [{"id": "operator-1", "name": "Example Care Limited"}]
+        },
+    )
+    assert result["outcome"] == "EXACT / SAFE_AUTO_LINK"
+    assert result["automation_allowed"] is True
+    assert result["proposed_organisation"]["id"] == "operator-1"
+
+
+def test_customer_operator_identity_never_uses_agent_or_person_only_evidence() -> None:
+    result = classify_customer_operator_identity(
+        applicants=["Jane Smith"],
+        agents=["Example Planning Ltd"],
+        organisations_by_identity={
+            "example planning ltd": [{"id": "agent", "name": "Example Planning Ltd"}]
+        },
+    )
+    assert result["outcome"] == "PERSON_OR_AGENT_ONLY"
+    assert result["automation_allowed"] is False
+
+
+def test_customer_operator_identity_rejects_ambiguous_or_postcode_only_matches() -> None:
+    ambiguous = classify_customer_operator_identity(
+        applicants=["Example Care Ltd"],
+        agents=[],
+        organisations_by_identity={
+            "example care ltd": [
+                {"id": "operator-1", "name": "Example Care Ltd"},
+                {"id": "operator-2", "name": "Example Care (North) Ltd"},
+            ]
+        },
+    )
+    no_match = classify_customer_operator_identity(
+        applicants=["Example Care Ltd"], agents=[], organisations_by_identity={}
+    )
+    assert ambiguous["outcome"] == "AMBIGUOUS"
+    assert no_match["outcome"] == "NO_MATCH"
+    assert not ambiguous["automation_allowed"] and not no_match["automation_allowed"]
+
+
+def test_customer_operator_enrichment_endpoint_is_admin_only_and_requires_confirmation(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "app.handler.customer_operator_enrichment_preview",
+        lambda *_args, **_kwargs: {"read_only": True, "provider_calls": 0},
+    )
+    denied = handler(event("/admin/customer-operator-enrichment"), None)
+    assert denied["statusCode"] == 403
+    allowed = handler(event("/admin/customer-operator-enrichment", claims=ADMIN), None)
+    assert allowed["statusCode"] == 200
+    assert json.loads(allowed["body"])["provider_calls"] == 0
+    unconfirmed = handler(
+        event("/admin/customer-operator-enrichment", "POST", claims=ADMIN, body="{}"), None
+    )
+    assert unconfirmed["statusCode"] == 400
 
 
 def test_customer_feed_forwards_only_bounded_safe_filters(monkeypatch) -> None:

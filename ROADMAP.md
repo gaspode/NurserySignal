@@ -1886,3 +1886,11 @@ Paid-pilot activation check (2026-09-28):
   DRAFT shell through the existing audited orphan policy; no publication, withdrawal, relationship, watcher,
   provider or customer-state mutation occurred. Generated customer-summary previews now also state explicitly
   when current evidence does not establish an opening. Final projection deployment/verification is pending.
+- Customer-readiness operator enrichment is now bounded to a local-only, exact-identity workflow for published
+  CareProspect opportunities. `care-customer-operator-enrichment-v1` previews Planning applicant evidence
+  against existing operators and aliases, then may link only a unique exact match for a company-like applicant.
+  Agents, individuals, public authorities, generic values, fuzzy matches, postcode-only matches and conflicting
+  applicants remain non-automated. The admin endpoint has a read-only preview and an explicit confirmed batch
+  action capped at 25 links, with one audit event per link and no organisation creation or provider calls.
+  Production preview, validation and a safe bounded apply are pending; the seven published `NEEDS_REVIEW`
+  wording records remain analysis-only and are not altered by this tranche.
