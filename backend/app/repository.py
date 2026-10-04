@@ -11565,6 +11565,7 @@ def opportunity_detail(settings: Settings, opportunity_id: str) -> dict[str, Any
     customer_projection = {
         "customer_title": opportunity[19],
         "customer_summary": opportunity[20],
+        "customer_lifecycle_stage": opportunity[23],
         "town": opportunity[5],
         "postcode": opportunity[4],
         "local_authority": authorities[0] if len(authorities) == 1 else None,

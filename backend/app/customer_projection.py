@@ -76,12 +76,20 @@ def generated_customer_title(row: dict[str, Any]) -> str:
         region=row.get("region"),
         postcode=row.get("postcode"),
     )
+    lifecycle = str(
+        row.get("customer_lifecycle_stage")
+        or row.get("derived_customer_lifecycle")
+        or row.get("lifecycle_stage")
+        or ""
+    )
     subject = {
         "OPENING": "New children’s home",
         "EXPANSION": "Children’s home expansion",
         "RELOCATION": "Children’s home relocation",
         "OTHER_CHANGE": "Children’s home development",
     }.get(str(row.get("change_type") or ""), "Children’s home development")
+    if lifecycle == "NEEDS_REVIEW":
+        subject = "Children’s home"
     return f"{subject} — {location}" if location else subject
 
 

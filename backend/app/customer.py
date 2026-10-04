@@ -1678,7 +1678,11 @@ def _published_quality_assessment(row: dict[str, Any], *, now: datetime) -> tupl
         reasons.append("no_current_approved_evidence")
     if str(row.get("customer_lifecycle_stage") or "") == "STOPPED":
         reasons.append("stopped_lifecycle")
-    if str(row.get("customer_lifecycle_stage") or "") in {"NEEDS_REVIEW", "APPEAL_PENDING"}:
+    if str(row.get("customer_lifecycle_stage") or "") == "APPEAL_PENDING":
+        reasons.append("lifecycle_requires_human_review")
+    if str(row.get("customer_lifecycle_stage") or "") == "NEEDS_REVIEW" and any(
+        str(row.get(field) or "").strip() for field in ("customer_title", "customer_summary")
+    ):
         reasons.append("lifecycle_requires_human_review")
     if not location_present:
         reasons.append("missing_site_or_location_identity")
@@ -1863,7 +1867,11 @@ def _needs_review_wording_preview_item(opportunity: dict[str, Any]) -> dict[str,
     )
     basis = current_opportunity_basis_reason(opportunity, active)
 
-    if protected:
+    if not current_title and not current_summary and lifecycle.lifecycle.value == "NEEDS_REVIEW":
+        action = "SAFE_DERIVED_WORDING_FIX"
+        reason = "current customer projection can safely use neutral unresolved-status wording"
+        automation_allowed = True
+    elif protected:
         action = "MANUAL_INVESTIGATION"
         reason = "manual/protected publication content must not be overwritten automatically"
         automation_allowed = False

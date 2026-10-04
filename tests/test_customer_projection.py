@@ -103,6 +103,17 @@ def test_title_uses_change_type_wording(change_type, expected) -> None:
     )
 
 
+def test_unresolved_lifecycle_uses_neutral_title_even_when_change_type_is_opening() -> None:
+    assert generated_customer_title(
+        {
+            "town": "Nottingham",
+            "postcode": "NG8 1LD",
+            "change_type": "OPENING",
+            "customer_lifecycle_stage": "NEEDS_REVIEW",
+        }
+    ) == "Children’s home — Nottingham, NG8"
+
+
 def test_manual_customer_title_override_is_preserved_exactly() -> None:
     assert (
         customer_title(

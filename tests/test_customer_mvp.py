@@ -85,6 +85,8 @@ def test_published_quality_identifies_identity_and_review_gaps() -> None:
             "approved_signal_count": 1,
             "official_source_link_count": 1,
             "customer_lifecycle_stage": "NEEDS_REVIEW",
+            "customer_title": "New children's home — Nottingham, NG8",
+            "customer_summary": "A planning application explicitly proposes material provision.",
             "generated_title": "Children's home development",
             "generated_summary": "Summary",
         },
@@ -96,43 +98,30 @@ def test_published_quality_identifies_identity_and_review_gaps() -> None:
     assert "missing_organisation_identity" in reasons
 
 
-def test_needs_review_preview_preserves_manual_publication_and_proposes_neutral_copy() -> None:
+def test_needs_review_preview_uses_safe_derived_copy_for_manual_publication() -> None:
     item = _needs_review_wording_preview_item(
         {
             "id": "00000000-0000-0000-0000-000000000007",
             "name": "New children's home — Example",
             "publication_status": "PUBLISHED",
             "customer_lifecycle_stage": "NEEDS_REVIEW",
-            "customer_title": "New children's home — Nottingham, NG8",
-            "customer_summary": "A planning application explicitly proposes material provision.",
+            "customer_title": None,
+            "customer_summary": None,
             "town": "Nottingham",
             "postcode": "NG8 1LD",
             "publication_automation_blocked": False,
             "publication_automation_provenance": {},
-            "relationships": [
-                {
-                    "id": "signal-1",
-                    "status": "ACTIVE",
-                    "relationship_status": "ACTIVE",
-                    "source_type": "planning",
-                    "review_status": "APPROVED",
-                    "metadata": {"decision": "Unknown"},
-                    "extracted_facts": {
-                        "planning_subtype": "NEW_HOME_CHANGE_OF_USE",
-                        "opportunity_creation_decision": "CREATE_OPPORTUNITY",
-                    },
-                }
-            ],
+            "relationships": [],
             "vertical": "CHILDRENS_HOME",
             "change_type": "OPENING",
             "creation_reason": "Planning evidence indicates a new children's home.",
             "stage_reason": None,
         }
     )
-    assert item["recommended_action"] == "MANUAL_INVESTIGATION"
-    assert item["automation_allowed"] is False
+    assert item["recommended_action"] == "SAFE_DERIVED_WORDING_FIX"
+    assert item["automation_allowed"] is True
     assert item["proposed_customer_title"] == "Children’s home — Nottingham, NG8"
-    assert "under review" in item["proposed_customer_summary"]
+    assert "does not establish a new children’s-home opening" in item["proposed_customer_summary"]
 
 
 def test_customer_role_cannot_access_admin_or_ingestion(monkeypatch) -> None:
