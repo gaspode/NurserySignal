@@ -1993,3 +1993,11 @@ Paid-pilot activation check (2026-09-28):
   eligible and exactly 20 `not_draft` exclusions. Care publication/withdrawal, watcher cadence, providers and
   review policy remain unchanged. The next gate is customer account provisioning with an explicit Nursery or
   dual-product vertical grant, then controlled customer-feed validation before any further batch.
+- Recruitment-to-opportunity correlation is being corrected through the bounded, explainable
+  `recruitment-correlation-v1` path. Approved `SUPPORT_EXISTING_ONLY` Recruitment signals are reconsidered
+  after review (the previous enrichment-time-only path missed this), but only attach as supporting evidence
+  with corroborated organisation and site identity. Exact site plus corroboration and exact organisation plus
+  postcode can link automatically; postcode-only, conflicting operator, ambiguous site and generic identity
+  cannot. The admin preview/apply endpoints are bounded (100 preview / 25 apply), audit each created
+  relationship and never create a standalone opportunity from routine Recruitment. Production preview is the
+  next gate: validate the exact/strong cohort and historical Match Review outcomes before applying any links.

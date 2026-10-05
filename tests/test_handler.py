@@ -41,6 +41,30 @@ def test_operations_summary_is_admin_only(monkeypatch) -> None:
     assert json.loads(response["body"])["read_only"] is True
 
 
+def test_recruitment_correlation_preview_is_admin_only_and_read_only(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "app.handler.recruitment_correlation_preview",
+        lambda settings, vertical, limit: {
+            "preview_only": True,
+            "vertical": vertical,
+            "examined": limit,
+            "proposed_automatic_links": 0,
+        },
+    )
+    base = {
+        "rawPath": "/admin/recruitment/correlation-preview",
+        "requestContext": {"http": {"method": "GET"}, "authorizer": {"jwt": {"claims": {}}}},
+    }
+    assert handler(base, None)["statusCode"] == 401
+    base["requestContext"]["authorizer"]["jwt"]["claims"] = {
+        "sub": "admin",
+        "cognito:groups": ["NurserySignalAdmins"],
+    }
+    response = handler(base, None)
+    assert response["statusCode"] == 200
+    assert json.loads(response["body"])["preview_only"] is True
+
+
 def test_withdrawal_preview_is_admin_only_and_read_only(monkeypatch) -> None:
     monkeypatch.setattr(
         "app.handler.care_withdrawal_preview",

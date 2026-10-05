@@ -75,6 +75,7 @@ from app.operations import operations_summary
 from app.organisation_lookup import ManualCompanyLookupError, lookup_manual_company_candidate
 from app.planning_backfill import PlanningBackfillBounds, chunk_payload
 from app.repository import (
+    apply_recruitment_correlation,
     backfill_historical_planning_family_metadata,
     bootstrap_care_opportunity_lifecycles,
     care_opportunity_hygiene_audit,
@@ -119,6 +120,7 @@ from app.repository import (
     reclassify_pending_care_planning,
     reconcile_stored_planning_families,
     record_admin_audit,
+    recruitment_correlation_preview,
     recruitment_planning_diagnostic,
     release_organisation_review_ofsted_enrichment_request,
     reprocess_planning_signals,
@@ -373,6 +375,10 @@ def _admin_path(path: str) -> tuple[str, str | None]:
         return "recruitment-reprocess", None
     if path == "/admin/recruitment/planning-diagnostic":
         return "recruitment-planning-diagnostic", None
+    if path == "/admin/recruitment/correlation-preview":
+        return "recruitment-correlation-preview", None
+    if path == "/admin/recruitment/correlation-apply":
+        return "recruitment-correlation-apply", None
     if path == "/admin/planning/families":
         return "planning-families", None
     if path == "/admin/planning/families/backfill":
@@ -1711,6 +1717,32 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                     return admin_error
                 limit = min(max(int(_query(event, "limit") or "40"), 1), 50)
                 return _response(200, recruitment_planning_diagnostic(settings, limit=limit))
+            if action == "recruitment-correlation-preview" and method == "GET":
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                return _response(
+                    200,
+                    recruitment_correlation_preview(
+                        settings,
+                        vertical=validate_vertical_filter(_query(event, "vertical") or "ALL"),
+                        limit=min(max(int(_query(event, "limit") or "100"), 1), 100),
+                    ),
+                )
+            if action == "recruitment-correlation-apply" and method == "POST":
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                payload = parse_json_payload(_raw_body(event))
+                return _response(
+                    200,
+                    apply_recruitment_correlation(
+                        settings,
+                        actor=str(claims.get("sub") or claims.get("username") or "unknown"),
+                        vertical=validate_vertical_filter(str(payload.get("vertical") or "ALL")),
+                        limit=min(max(int(payload.get("limit", 25)), 1), 25),
+                    ),
+                )
             if action == "review-triage" and method == "GET":
                 admin_error = _require_admin(claims, settings)
                 if admin_error:

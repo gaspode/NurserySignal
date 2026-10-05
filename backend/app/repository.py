@@ -137,6 +137,8 @@ from app.planning_outcomes import (
 )
 from app.queueing import EnrichmentMessage, send_enrichment_message
 from app.recruitment import recruitment_record_from_signal
+from app.recruitment_correlation import POLICY_VERSION as RECRUITMENT_CORRELATION_POLICY_VERSION
+from app.recruitment_correlation import classify_recruitment_match
 from app.review_triage import (
     NURSERY_PLANNING_ARBORICULTURE_POLICY_VERSION,
     NURSERY_PLANNING_ARBORICULTURE_QA_MODULUS,
@@ -1564,7 +1566,13 @@ def review_signal(
             (status, reviewer, signal_id),
         ).fetchone()
         conn.commit()
-    return row is not None
+    reviewed = row is not None
+    # Recruitment enrichment happens before a human review.  Once approved,
+    # a routine supporting signal needs one bounded, deterministic attempt to
+    # attach to an already-existing opportunity.
+    if reviewed and status == "APPROVED":
+        correlate_approved_recruitment_signal(settings, signal_id)
+    return reviewed
 
 
 def apply_safe_approval_policy(
@@ -1712,12 +1720,23 @@ def review_signals_bulk(
             ),
         )
         conn.commit()
+    recruitment_correlation = {"attempted": 0, "linked": 0, "errors": 0}
+    if status == "APPROVED":
+        for approved_id in updated_ids[:100]:
+            try:
+                result = correlate_approved_recruitment_signal(settings, approved_id)
+                if result.get("outcome") != "NOT_RECRUITMENT":
+                    recruitment_correlation["attempted"] += 1
+                recruitment_correlation["linked"] += int(bool(result.get("linked")))
+            except Exception:
+                recruitment_correlation["errors"] += 1
     return {
         "status": status,
         "requested": len(signal_ids),
         "updated": len(updated_ids),
         "skipped": len(signal_ids) - len(updated_ids),
         "signal_ids": updated_ids,
+        "recruitment_correlation": recruitment_correlation,
     }
 
 
@@ -6156,8 +6175,11 @@ def correlate_signal(
             }
         existing = conn.execute(
             """SELECT o.id, o.name, o.operator_id, o.lifecycle_stage, o.confidence,
-                      o.confidence_breakdown, COALESCE(n.postcode, linked.postcode),
-                      COALESCE(op.legal_name, op.name, linked.operator_name), o.town
+                      o.confidence_breakdown,
+                      COALESCE(n.postcode, linked.postcode, o.postcode),
+                      COALESCE(op.legal_name, op.name, linked.operator_name, o.operator_name),
+                      o.town,
+                      o.address, o.operator_id
                FROM opportunities o
                LEFT JOIN nurseries n ON n.id = o.nursery_id
                LEFT JOIN operators op ON op.id = o.operator_id
@@ -6294,6 +6316,41 @@ def correlate_signal(
                 )
         elif match is None:
             for row in existing:
+                if source_type == "recruitment":
+                    recruitment_match = classify_recruitment_match(
+                        {
+                            **candidate,
+                            "organisation_hint": metadata.get("organisation_hint"),
+                            "location_hint": candidate.get("address") or metadata.get("address"),
+                            "postcode": postcode,
+                        },
+                        {
+                            "id": str(row[0]),
+                            "name": row[1],
+                            "postcode": row[6],
+                            "operator_name": row[7],
+                            "town": row[8],
+                            "address": row[9],
+                            "operator_id": row[10],
+                        },
+                    )
+                    if recruitment_match.outcome in {"PROBABLE", "UNCERTAIN"}:
+                        uncertain_matches.append(
+                            (row[0], recruitment_match.confidence, recruitment_match.reason)
+                        )
+                    if recruitment_match.outcome in {"EXACT", "STRONG"}:
+                        blocked = conn.execute(
+                            """SELECT 1 FROM opportunity_signals
+                               WHERE opportunity_id = %s AND raw_signal_id = %s
+                                 AND status = 'REJECTED'""",
+                            (row[0], signal_id),
+                        ).fetchone()
+                        if blocked:
+                            continue
+                        match = row
+                        match_reason = recruitment_match.reason
+                        break
+                    continue
                 comparison = classify_match(postcode, name, row[6], row[7] or row[1])
                 operator_comparison = classify_match(postcode, operator, row[6], row[7])
                 if comparison.outcome == "UNCERTAIN" or operator_comparison.outcome == "UNCERTAIN":
@@ -6440,7 +6497,11 @@ def correlate_signal(
                 signal_id,
                 signal_vertical,
                 Jsonb(candidate.get("extracted_facts") or {}),
-                Jsonb({"method": "deterministic-v1", "reason": match_reason or "initial signal"}),
+                Jsonb({
+                    "method": RECRUITMENT_CORRELATION_POLICY_VERSION
+                    if source_type == "recruitment" else "deterministic-v1",
+                    "reason": match_reason or "initial signal",
+                }),
                 "STRONG" if match else "NO_MATCH",
                 base_confidence,
                 match_reason or "initial signal",
@@ -6471,6 +6532,222 @@ def correlate_signal(
         "created": not bool(match),
         "creation_decision": creation.decision,
         "reason": match_reason or "initial signal",
+    }
+
+
+def correlate_approved_recruitment_signal(
+    settings: Settings, signal_id: str, *, actor: str = "SYSTEM_APPROVED_RECRUITMENT"
+) -> dict[str, Any]:
+    """Reconsider an approved routine-recruitment signal for supporting linkage.
+
+    Enrichment runs before a human review, so this explicit post-review hook is
+    required for evidence that only becomes actionable on approval.  It never
+    creates an opportunity: only SUPPORT_EXISTING_ONLY is admitted here.
+    """
+    raw = get_raw_signal(settings, signal_id)
+    if not raw or raw.get("source_type") != "recruitment":
+        return {"signal_id": signal_id, "outcome": "NOT_RECRUITMENT"}
+    with connection(settings) as conn:
+        row = conn.execute(
+            "SELECT review_status, extracted_facts FROM signal_enrichments "
+            "WHERE raw_signal_id = %s",
+            (signal_id,),
+        ).fetchone()
+    if not row or row[0] != "APPROVED":
+        return {"signal_id": signal_id, "outcome": "NOT_APPROVED"}
+    candidate = policy_for(str(raw.get("vertical") or NURSERY)).classify_signal(raw)
+    candidate["metadata"] = {
+        **(raw.get("metadata") or {}),
+        "source_type": "recruitment",
+        "vertical": raw.get("vertical"),
+    }
+    candidate.setdefault("organisation_hint", raw.get("organisation_hint"))
+    candidate.setdefault("location_hint", raw.get("location_hint"))
+    candidate.setdefault("operator_name", raw.get("organisation_hint"))
+    candidate.setdefault("address", raw.get("location_hint"))
+    # Use persisted facts for current approved evidence where available; it
+    # includes reviewed taxonomy without altering it.
+    candidate["extracted_facts"] = row[1] or candidate.get("extracted_facts") or {}
+    decision = policy_for(str(raw.get("vertical") or NURSERY)).determine_opportunity_action(
+        candidate
+    )
+    if decision.decision != "SUPPORT_EXISTING_ONLY":
+        return {"signal_id": signal_id, "outcome": "NOT_SUPPORTING_RECRUITMENT"}
+    result = correlate_signal(settings, signal_id, candidate)
+    if result.get("relationship_created"):
+        record_admin_audit(
+            settings,
+            action="recruitment_supporting_signal_correlated",
+            actor=actor,
+            target_type="signal",
+            details={
+                "signal_id": signal_id,
+                "opportunity_id": result.get("opportunity_id"),
+                "policy_version": RECRUITMENT_CORRELATION_POLICY_VERSION,
+                "match_reason": result.get("reason"),
+            },
+        )
+    return {
+        "signal_id": signal_id,
+        "outcome": "LINKED" if result.get("linked") else "UNLINKED",
+        "policy_version": RECRUITMENT_CORRELATION_POLICY_VERSION,
+        **result,
+    }
+
+
+def recruitment_correlation_preview(
+    settings: Settings, *, vertical: str = "ALL", limit: int = 100
+) -> dict[str, Any]:
+    """Bounded, read-only preview for approved unlinked supporting recruitment."""
+    vertical = validate_vertical_filter(vertical)
+    limit = min(max(int(limit), 1), 100)
+    with connection(settings) as conn:
+        parameters: list[Any] = []
+        vertical_clause = ""
+        if vertical != "ALL":
+            vertical_clause = " AND rs.vertical = %s"
+            parameters.append(vertical)
+        signal_rows = conn.execute(
+            f"""SELECT rs.id, rs.vertical, rs.title, rs.location_hint, rs.organisation_hint,
+                       rs.metadata, se.extracted_facts, rs.discovered_at
+                FROM raw_signals rs
+                JOIN signal_enrichments se ON se.raw_signal_id = rs.id
+                WHERE rs.source_type = 'recruitment' AND se.review_status = 'APPROVED'
+                  {vertical_clause}
+                  AND NOT EXISTS (
+                    SELECT 1 FROM opportunity_signals os
+                    WHERE os.raw_signal_id = rs.id AND os.status = 'ACTIVE'
+                  )
+                  AND COALESCE(se.extracted_facts->>'opportunity_creation_decision', '')
+                      = 'SUPPORT_EXISTING_ONLY'
+                ORDER BY rs.discovered_at DESC, rs.id DESC LIMIT %s""",
+            [*parameters, limit],
+        ).fetchall()
+        opportunity_rows = conn.execute(
+            f"""SELECT o.id, o.vertical, o.name, o.operator_name, o.address, o.postcode, o.town
+                FROM opportunities o
+                WHERE o.review_status NOT IN ('MERGED', 'REJECTED')
+                  {"AND o.vertical = %s" if vertical != "ALL" else ""}
+                ORDER BY o.updated_at DESC""",
+            parameters,
+        ).fetchall()
+    opportunities = [
+        dict(zip(("id", "vertical", "name", "operator_name", "address", "postcode", "town"), row))
+        for row in opportunity_rows
+    ]
+    outcome_counts: Counter[str] = Counter()
+    vertical_counts: Counter[str] = Counter()
+    samples: list[dict[str, Any]] = []
+    candidates: list[dict[str, Any]] = []
+    for row in signal_rows:
+        signal = dict(
+            zip(
+                (
+                    "id", "vertical", "title", "location_hint", "organisation_hint",
+                    "metadata", "extracted_facts", "discovered_at",
+                ),
+                row,
+            )
+        )
+        signal["operator_name"] = (signal.get("extracted_facts") or {}).get("operator_name")
+        signal["address"] = (signal.get("extracted_facts") or {}).get("address")
+        matches = [
+            (opportunity, classify_recruitment_match(signal, opportunity))
+            for opportunity in opportunities
+            if opportunity["vertical"] == signal["vertical"]
+        ]
+        rank = {"EXACT": 4, "STRONG": 3, "PROBABLE": 2, "UNCERTAIN": 1, "NO_MATCH": 0}
+        ranked = sorted(
+            matches,
+            key=lambda item: (rank[item[1].outcome], item[1].confidence),
+            reverse=True,
+        )
+        viable = [item for item in ranked if item[1].outcome != "NO_MATCH"]
+        if not viable:
+            outcome, selected = "NO_MATCH", None
+        elif (
+            len(viable) > 1
+            and viable[0][1].outcome in {"EXACT", "STRONG"}
+            and viable[1][1].outcome in {"EXACT", "STRONG"}
+        ):
+            outcome, selected = "UNCERTAIN", None
+        else:
+            selected = viable[0]
+            outcome = selected[1].outcome
+        outcome_counts[outcome] += 1
+        vertical_counts[str(signal["vertical"])] += 1
+        item = {
+            "signal_id": str(signal["id"]),
+            "vertical": signal["vertical"],
+            "title": signal["title"],
+            "outcome": outcome,
+            "candidate_opportunity_id": str(selected[0]["id"]) if selected else None,
+            "confidence": selected[1].confidence if selected else 0.0,
+            "reason_components": (
+                list(selected[1].reason_codes) if selected else ["insufficient_identity"]
+            ),
+            "auto_link_allowed": outcome in {"EXACT", "STRONG"},
+        }
+        candidates.append(item)
+        if len(samples) < 20:
+            samples.append(item)
+    return {
+        "policy_version": RECRUITMENT_CORRELATION_POLICY_VERSION,
+        "preview_only": True,
+        "examined": len(signal_rows),
+        "counts_by_outcome": dict(outcome_counts),
+        "counts_by_vertical": dict(vertical_counts),
+        "proposed_automatic_links": sum(item["auto_link_allowed"] for item in candidates),
+        "proposed_match_review": sum(
+            item["outcome"] in {"PROBABLE", "UNCERTAIN"} for item in candidates
+        ),
+        "candidates": candidates,
+        "samples": samples,
+    }
+
+
+def apply_recruitment_correlation(
+    settings: Settings, *, actor: str, vertical: str = "ALL", limit: int = 25
+) -> dict[str, Any]:
+    """Apply only exact/strong results from a freshly recomputed bounded preview."""
+    limit = min(max(int(limit), 1), 25)
+    preview = recruitment_correlation_preview(settings, vertical=vertical, limit=100)
+    selected = [item for item in preview["candidates"] if item["auto_link_allowed"]][:limit]
+    linked = 0
+    skipped = 0
+    errors = 0
+    for item in selected:
+        try:
+            result = correlate_approved_recruitment_signal(
+                settings, item["signal_id"], actor=actor
+            )
+            if result.get("linked"):
+                linked += 1
+            else:
+                skipped += 1
+        except Exception:
+            errors += 1
+    operation_id = record_admin_audit(
+        settings,
+        action="recruitment_correlation_apply",
+        actor=actor,
+        target_type="signal",
+        details={
+            "policy_version": RECRUITMENT_CORRELATION_POLICY_VERSION,
+            "selected": len(selected),
+            "linked": linked,
+            "skipped": skipped,
+            "errors": errors,
+            "vertical": vertical,
+        },
+    )
+    return {
+        "operation_id": operation_id,
+        "selected": len(selected),
+        "linked": linked,
+        "skipped": skipped,
+        "errors": errors,
+        "policy_version": RECRUITMENT_CORRELATION_POLICY_VERSION,
     }
 
 
@@ -11576,6 +11853,16 @@ def opportunity_detail(settings: Settings, opportunity_id: str) -> dict[str, Any
             {str(signal["source_type"]) for signal in approved_customer_signals}
         ),
     }
+    source_diversity = {
+        source_type: sum(
+            1
+            for signal in approved_customer_signals
+            if str(signal.get("source_type")) == source_type
+        )
+        for source_type in sorted(
+            {str(signal.get("source_type")) for signal in approved_customer_signals}
+        )
+    }
     lifecycle_preview = derive_care_lifecycle(active_signals)
     basis_reason = current_opportunity_basis_reason(
         {
@@ -11625,6 +11912,7 @@ def opportunity_detail(settings: Settings, opportunity_id: str) -> dict[str, Any
         "default_customer_title": generated_customer_title(customer_projection),
         "default_customer_summary": generated_customer_summary(customer_projection),
         "signals": signals,
+        "source_diversity": source_diversity,
         "evidence_support": {
             "foundational": foundational_count,
             "supporting_followups": supporting_followup_count,
