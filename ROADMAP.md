@@ -2034,3 +2034,12 @@ Paid-pilot activation check (2026-09-28):
   fills only absent canonical address/postcode/town fields and provenance, preserves manual values and is the
   required gate before rerunning strict Recruitment correlation. No external request or identity-link mutation
   is part of this backfill.
+- Production Planning site-identity audit completed over 1,422 active Planning-backed opportunities: 1,296 had
+  `FULL_SITE_IDENTITY`, 23 had material multi-signal address/postcode conflicts and were held unchanged, and 103
+  were incomplete (mostly Nursery). One capped 100-record batch safely wrote only missing site provenance/
+  canonical blanks (96 Care, four Nursery); the repeat preview correctly classifies those as `ALREADY_COMPLETE`.
+  The strict Recruitment correlation preview remains unchanged at 190 `NO_MATCH`, two postcode-only
+  `UNCERTAIN`, and zero `EXACT`/`STRONG`, so no relationship was created. This establishes that current
+  cross-source failure is compatible-project identity, not lost Planning structured site data; do not relax the
+  matching rule. No provider calls, operator promotion, organisation creation, lifecycle, publication,
+  withdrawal or watcher change occurred.
