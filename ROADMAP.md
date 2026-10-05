@@ -2019,3 +2019,11 @@ Paid-pilot activation check (2026-09-28):
   cannot become employers, and postcode-only matching remains excluded. Production preview/backfill and any
   resulting exact/strong-link inspection are the next gate; no provider request, organisation creation or
   link mutation is authorised until that preview is reviewed.
+- Production Recruitment identity backfill completed safely in two capped audited batches: all 194 approved
+  signals (190 Nursery and four Care) had explicit GOV.UK Apprenticeships `EMPLOYER_AND_SITE` data retained in
+  their raw provider records, and all now carry the role-labelled `recruitment-identity-v1` projection. The
+  enriched strict correlation preview still returns 190 `NO_MATCH` and two postcode-only `UNCERTAIN`, with zero
+  `EXACT`/`STRONG` candidates. Therefore no opportunity relationships or Match Review rows were created. This
+  confirms the remaining blocker is not field loss but the absence of corroborating compatible Planning
+  opportunity identity; thresholds must not be relaxed. No provider requests, organisations, lifecycle,
+  publication, withdrawal or watch state changed.
