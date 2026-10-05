@@ -22,6 +22,13 @@ NURSERY_CUSTOMER_CONTACT_POLICY_VERSION = "nursery-customer-contact-context-v1"
 # UK GDPR/PECR compliance for personal data.  Customer APIs must continue to
 # omit every field until the policy/legal gate has been explicitly approved.
 CONTACT_FIELD_DISPLAY_POLICY = {
+    # These fields are already covered by the existing customer Planning
+    # projection and retain the official-register source link.
+    "site_address": "ALLOWED_TO_DISPLAY",
+    "planning_reference": "ALLOWED_TO_DISPLAY",
+    "planning_stage": "ALLOWED_TO_DISPLAY",
+    "proposal_summary": "ALLOWED_TO_DISPLAY",
+    "operator_status_not_confirmed": "ALLOWED_TO_DISPLAY",
     "applicant_name_person": "REQUIRES_POLICY_LEGAL_REVIEW",
     "applicant_name_company": "REQUIRES_POLICY_LEGAL_REVIEW",
     "agent_name": "REQUIRES_POLICY_LEGAL_REVIEW",
