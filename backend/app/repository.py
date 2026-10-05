@@ -6620,8 +6620,25 @@ def recruitment_correlation_preview(
                   )
                   AND COALESCE(se.extracted_facts->>'opportunity_creation_decision', '')
                       = 'SUPPORT_EXISTING_ONLY'
-                ORDER BY rs.discovered_at DESC, rs.id DESC LIMIT %s""",
-            [*parameters, limit],
+                ORDER BY rs.discovered_at DESC, rs.id DESC LIMIT 1000""",
+            parameters,
+        ).fetchall()
+        inventory_rows = conn.execute(
+            f"""SELECT rs.vertical,
+                       count(*) FILTER (WHERE se.review_status = 'APPROVED') AS approved_total,
+                       count(*) FILTER (WHERE se.review_status = 'APPROVED' AND EXISTS (
+                           SELECT 1 FROM opportunity_signals active
+                           WHERE active.raw_signal_id = rs.id AND active.status = 'ACTIVE'
+                       )) AS linked_total,
+                       count(*) FILTER (WHERE se.review_status = 'APPROVED' AND NOT EXISTS (
+                           SELECT 1 FROM opportunity_signals active
+                           WHERE active.raw_signal_id = rs.id AND active.status = 'ACTIVE'
+                       )) AS unlinked_total
+                FROM raw_signals rs
+                JOIN signal_enrichments se ON se.raw_signal_id = rs.id
+                WHERE rs.source_type = 'recruitment' {vertical_clause}
+                GROUP BY rs.vertical ORDER BY rs.vertical""",
+            parameters,
         ).fetchall()
         opportunity_rows = conn.execute(
             f"""SELECT o.id, o.vertical, o.name, o.operator_name, o.address, o.postcode, o.town
@@ -6691,18 +6708,23 @@ def recruitment_correlation_preview(
         candidates.append(item)
         if len(samples) < 20:
             samples.append(item)
+    inventory = {
+        str(row[0]): {"approved": row[1], "linked": row[2], "unlinked": row[3]}
+        for row in inventory_rows
+    }
     return {
         "policy_version": RECRUITMENT_CORRELATION_POLICY_VERSION,
         "preview_only": True,
         "examined": len(signal_rows),
+        "inventory_by_vertical": inventory,
         "counts_by_outcome": dict(outcome_counts),
         "counts_by_vertical": dict(vertical_counts),
         "proposed_automatic_links": sum(item["auto_link_allowed"] for item in candidates),
         "proposed_match_review": sum(
             item["outcome"] in {"PROBABLE", "UNCERTAIN"} for item in candidates
         ),
-        "candidates": candidates,
-        "samples": samples,
+        "candidates": candidates[:limit],
+        "samples": samples[: min(limit, 20)],
     }
 
 
