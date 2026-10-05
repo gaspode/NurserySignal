@@ -424,7 +424,15 @@ def collect_planning(
         )
         seen_records: set[tuple[str, str]] = set()
         for provider_query in queries:
-            for record in provider.applications(provider_query):
+            # Paid Contact Data is collected only for new scheduled/manual
+            # ingestion when deliberately enabled.  Watcher and exact-status
+            # routes keep their explicit include_contact=false default.
+            records = (
+                provider.applications(provider_query, include_contact=True)
+                if settings.planning_contact_data_enabled
+                else provider.applications(provider_query)
+            )
+            for record in records:
                 record_key = (record.application_id, record.description)
                 if record_key in seen_records:
                     if historical_backfill:

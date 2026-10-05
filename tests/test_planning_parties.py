@@ -66,3 +66,12 @@ def test_exact_structured_applicant_can_become_safe_operator_link_but_agent_cann
     )
     assert safe["automation_allowed"] is True
     assert agent_only["automation_allowed"] is False
+
+
+def test_case_officer_is_preserved_without_becoming_identity_evidence() -> None:
+    provenance, _ = extract_planning_party_provenance(
+        {"provider_record": {"case_officer": "Council Officer", "agent_email": "a@example.test"}}
+    )
+    assert provenance["case_officer"]["role"] == "CASE_OFFICER"
+    assert provenance["applicant"] is None
+    assert provenance["contact_data"]["agent_email_available"] is True

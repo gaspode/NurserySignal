@@ -74,12 +74,16 @@ resource "aws_lambda_function" "planning_collector" {
 
   environment {
     variables = {
-      APP_ENV                       = var.environment
-      SERVICE_NAME                  = "${local.name_prefix}-planning-collector"
-      INGESTION_QUEUE_URL           = aws_sqs_queue.ingestion.url
-      ENRICHMENT_QUEUE_URL          = aws_sqs_queue.enrichment.url
-      PLANNING_PROVIDER_SECRET_ARN  = aws_secretsmanager_secret.planning_provider.arn
-      PLANNING_PROVIDER_BASE_URL    = "https://api.plota.co.uk/v1"
+      APP_ENV                      = var.environment
+      SERVICE_NAME                 = "${local.name_prefix}-planning-collector"
+      INGESTION_QUEUE_URL          = aws_sqs_queue.ingestion.url
+      ENRICHMENT_QUEUE_URL         = aws_sqs_queue.enrichment.url
+      PLANNING_PROVIDER_SECRET_ARN = aws_secretsmanager_secret.planning_provider.arn
+      PLANNING_PROVIDER_BASE_URL   = "https://api.plota.co.uk/v1"
+      # Contact add-on is enabled after the bounded viability sample showed
+      # useful applicant recovery.  It is restricted to normal ingestion;
+      # lifecycle watches continue to request no contact data.
+      PLANNING_CONTACT_DATA_ENABLED = "true"
       SOURCE_RUNS_TABLE_NAME        = aws_dynamodb_table.source_runs.name
       PLANNING_MANUAL_RUN_QUEUE_URL = aws_sqs_queue.planning_manual_runs.url
     }

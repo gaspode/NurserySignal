@@ -1018,3 +1018,17 @@ def test_provider_rate_limit_retries_then_reports_rate_limit() -> None:
     provider = PlotaProvider("secret", opener=opener, sleep=lambda seconds: None)
     with pytest.raises(PlanningRateLimitError):
         list(provider.applications(PlanningQuery(date(2026, 9, 1), date(2026, 9, 2))))
+
+
+def test_plota_contact_data_is_explicit_and_not_the_default() -> None:
+    requests = []
+
+    def opener(request, timeout):
+        requests.append(request.full_url)
+        return FakeResponse({"data": {"id": "contact-1", "description": "nursery"}})
+
+    provider = PlotaProvider("secret", opener=opener)
+    provider.application_by_id("contact-1")
+    provider.application_by_id("contact-1", include_contact=True)
+    assert "include_contact=false" in requests[0]
+    assert "include_contact=true" in requests[1]

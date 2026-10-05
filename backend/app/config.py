@@ -15,6 +15,10 @@ class Settings:
     enrichment_queue_url: str | None = None
     planning_provider_secret_arn: str | None = None
     planning_provider_base_url: str = "https://api.plota.co.uk/v1"
+    # Contact Data is a paid, personal-data-bearing add-on.  It is deliberately
+    # opt-in for normal collection; watchers and targeted status refreshes do
+    # not request it.
+    planning_contact_data_enabled: bool = False
     recruitment_provider_secret_arn: str | None = None
     recruitment_provider_base_url: str = "https://api.apprenticeships.education.gov.uk/vacancies"
     ofsted_data_url: str = (
@@ -72,6 +76,10 @@ class Settings:
             planning_provider_base_url=os.getenv(
                 "PLANNING_PROVIDER_BASE_URL", "https://api.plota.co.uk/v1"
             ),
+            planning_contact_data_enabled=os.getenv(
+                "PLANNING_CONTACT_DATA_ENABLED", "false"
+            ).lower()
+            in {"1", "true", "yes"},
             recruitment_provider_secret_arn=os.getenv("RECRUITMENT_PROVIDER_SECRET_ARN") or None,
             recruitment_provider_base_url=os.getenv(
                 "RECRUITMENT_PROVIDER_BASE_URL",

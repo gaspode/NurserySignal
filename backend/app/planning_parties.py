@@ -11,7 +11,7 @@ import re
 from datetime import UTC, datetime
 from typing import Any
 
-PLANNING_PARTY_PROVENANCE_VERSION = "planning-party-provenance-v1"
+PLANNING_PARTY_PROVENANCE_VERSION = "planning-party-provenance-v2"
 
 
 def _text(value: Any) -> str | None:
@@ -78,6 +78,9 @@ def _party(
         or metadata.get(f"{prefix}_type")
         or provider.get(f"{prefix}_type")
     )
+    # Email and phone are retained in the private raw provider record where
+    # Plota supplies them.  Do not duplicate personal contact coordinates into
+    # the broadly-consumed extracted-facts projection.
     return {
         "role": role,
         "name": name,
@@ -106,10 +109,20 @@ def extract_planning_party_provenance(
     provider = provider_value if isinstance(provider_value, dict) else {}
     applicant_value, applicant_path = _role_value(metadata, provider, role="APPLICANT")
     agent_value, agent_path = _role_value(metadata, provider, role="AGENT")
+    case_officer_value, case_officer_path = _role_value(
+        metadata, provider, role="CASE_OFFICER"
+    )
     applicant = _party(
         applicant_value, applicant_path, metadata, provider, role="APPLICANT"
     )
     agent = _party(agent_value, agent_path, metadata, provider, role="AGENT")
+    case_officer = _party(
+        case_officer_value,
+        case_officer_path,
+        metadata,
+        provider,
+        role="CASE_OFFICER",
+    )
     if applicant and agent:
         reason = "APPLICANT_AND_AGENT"
     elif applicant:
@@ -129,4 +142,13 @@ def extract_planning_party_provenance(
         "extracted_at": extracted_at.isoformat(),
         "applicant": applicant,
         "agent": agent,
+        "case_officer": case_officer,
+        "contact_data": {
+            "applicant_path": applicant_path,
+            "agent_path": agent_path,
+            "agent_email_available": bool(provider.get("agent_email")),
+            "agent_phone_available": bool(provider.get("agent_phone")),
+            "case_officer_email_available": bool(provider.get("case_officer_email")),
+            "case_officer_phone_available": bool(provider.get("case_officer_phone")),
+        },
     }, reason

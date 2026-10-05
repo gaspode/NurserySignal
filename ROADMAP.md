@@ -2093,3 +2093,15 @@ Paid-pilot activation check (2026-09-28):
   retain source-derived evidence and show derived customer intelligence. Do not buy an annual commitment or
   build an integration until that gate passes; next step is targeted commercial enquiries to TheirStack,
   Lightcast and one of Textkernel or Adzuna Intelligence using the documented licence/field questionnaire.
+- Plota Contact Data has passed its first, deliberately bounded schema-and-coverage gate. A two-request,
+  100-record Jan–Oct 2026 read-only sample (50 Nursery term matches and 50 children’s-home term matches)
+  returned explicit applicants on 84 records, agents on 72 and case officers on 75 across 83 authorities;
+  Plota charged 92 contact-record deliveries against the 10,000 monthly allowance. The exact application fields
+  are `applicant`, `agent`, `agent_email`, `agent_phone`, `case_officer`, `case_officer_email` and
+  `case_officer_phone`; allowance telemetry is `meta.contact`. New Planning ingestion now has an explicit
+  Contact Data switch and role-labelled APPLICANT/AGENT/CASE_OFFICER provenance. Watches and targeted status
+  refreshes remain contact-free, and email/phone values remain only in private raw provider evidence rather
+  than the customer/MCP projection. This is promising for applicant identity, but it has not yet established
+  company-like applicant rates, existing-organisation matches or improved Recruitment correlation; the next
+  separate gate is an approved-signal, exact-application bounded preview that measures those outcomes before
+  any Jan-2026 historical backfill or operator link is considered.

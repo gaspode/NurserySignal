@@ -364,12 +364,17 @@ class PlotaProvider:
             raise PlanningMalformedResponseError("Plota response has an invalid shape")
         return payload
 
-    def application_by_id(self, application_id: str) -> PlanningRecord:
+    def application_by_id(
+        self, application_id: str, *, include_contact: bool = False
+    ) -> PlanningRecord:
         """Retrieve a known Plota application by its stable provider identifier."""
         provider_id = str(application_id or "").strip()
         if not provider_id or not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", provider_id):
             raise ValueError("invalid Plota application id")
-        payload = self._get(f"applications/{provider_id}", {"include_contact": "false"})
+        payload = self._get(
+            f"applications/{provider_id}",
+            {"include_contact": "true" if include_contact else "false"},
+        )
         data = payload.get("data")
         if not isinstance(data, dict):
             raise PlanningMalformedResponseError(
@@ -382,7 +387,9 @@ class PlotaProvider:
                 "Plota application response has an invalid record"
             ) from exc
 
-    def applications(self, query: PlanningQuery) -> Iterator[PlanningRecord]:
+    def applications(
+        self, query: PlanningQuery, *, include_contact: bool = False
+    ) -> Iterator[PlanningRecord]:
         cursor: str | None = None
         yielded = 0
         while yielded < query.max_records:
@@ -392,7 +399,7 @@ class PlotaProvider:
                 "date_to": query.to_date.isoformat(),
                 "q": query.search_term,
                 "limit": min(query.page_size, query.max_records - yielded),
-                "include_contact": "false",
+                "include_contact": "true" if include_contact else "false",
             }
             if query.council:
                 params["council"] = query.council
