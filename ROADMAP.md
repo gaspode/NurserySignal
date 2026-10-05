@@ -2115,3 +2115,13 @@ Paid-pilot activation check (2026-09-28):
   applicant rate below the 25–30% threshold; zero credible organisation matches/correlation gain). Do not run a
   Jan-2026 historical Contact Data backfill or auto-link organisations. Contact Data remains useful local
   provenance for future manual investigation, but does not currently solve the early operator-identity gap.
+- Planning-document identity has failed its pre-retrieval feasibility gate. A bounded exact Plota application
+  and document-index inspection confirmed that `/applications/{id}/documents` returns useful metadata only:
+  document title, type, group, publication date and `names_person`, plus the official register document-list
+  page. It deliberately does not return direct file URLs; its response states that most council registers require
+  a visitor session to open a file. This makes a reliable, authority-neutral 50-opportunity document-pack test
+  unavailable without building session-specific council-portal automation. That would be brittle, broad and
+  outside the agreed exact-URL/no-crawl safety boundary. No document fetcher, scraper, schedule, raw-document
+  persistence or business mutation was added. Treat this as a hard negative operational viability result for
+  the "planning documents reveal early operator identity" hypothesis unless Plota or councils provide a
+  licensed/direct document-content API or an explicitly authorised stable download mechanism.
