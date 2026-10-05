@@ -51,7 +51,8 @@ resource "aws_iam_role_policy" "lambda_application" {
         Action = ["lambda:InvokeFunction"]
         Resource = [
           aws_lambda_function.companies_house_collector.arn,
-          aws_lambda_function.official_planning_fetcher.arn
+          aws_lambda_function.official_planning_fetcher.arn,
+          aws_lambda_function.planning_collector.arn
         ]
       },
       {

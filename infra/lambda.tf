@@ -56,6 +56,7 @@ resource "aws_lambda_function" "backend" {
       AI_CARE_RECRUITMENT_PROMPT_VERSION      = var.ai_care_recruitment_prompt_version
       SOURCE_RUNS_TABLE_NAME                  = aws_dynamodb_table.source_runs.name
       PLANNING_MANUAL_RUN_QUEUE_URL           = aws_sqs_queue.planning_manual_runs.url
+      PLANNING_COLLECTOR_FUNCTION_NAME        = aws_lambda_function.planning_collector.function_name
       RECRUITMENT_MANUAL_RUN_QUEUE_URL        = aws_sqs_queue.recruitment_manual_runs.url
       OFSTED_MANUAL_RUN_QUEUE_URL             = aws_sqs_queue.ofsted_manual_runs.url
       COMPANIES_HOUSE_MANUAL_RUN_QUEUE_URL    = aws_sqs_queue.companies_house_manual_runs.url

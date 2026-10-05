@@ -45,9 +45,7 @@ from app.verticals import CHILDRENS_HOME, NURSERY, VERTICAL_REGISTRY, validate_v
 logger = configure_logging()
 
 
-def refresh_planning_lifecycle_watch(
-    settings: Settings, payload: dict[str, Any]
-) -> dict[str, int]:
+def refresh_planning_lifecycle_watch(settings: Settings, payload: dict[str, Any]) -> dict[str, int]:
     """Poll one exact Planning application and return its result asynchronously."""
     run_id = str(payload["run_id"])
     watch_id = str(payload["watch_id"])
@@ -524,9 +522,51 @@ def collect_planning(
     return counts
 
 
-def handler(event: dict[str, Any], context: Any) -> dict[str, int]:
+def contact_data_preview(settings: Settings, payload: dict[str, Any]) -> dict[str, Any]:
+    """Fetch only caller-supplied exact application IDs, without persistence."""
+    requests = payload.get("applications")
+    if not isinstance(requests, list) or not requests or len(requests) > 100:
+        raise ValueError("contact preview requires 1-100 exact applications")
+    api_key = provider_api_key_from_secret(settings.planning_provider_secret_arn)
+    provider = PlotaProvider(api_key, base_url=settings.planning_provider_base_url)
+    results = []
+    for item in requests:
+        if not isinstance(item, dict) or not str(item.get("provider_application_id") or "").strip():
+            continue
+        try:
+            record = provider.application_by_id(
+                str(item["provider_application_id"]), include_contact=True
+            )
+            raw = record.raw
+            # Deliberately exclude email/phone from the cross-Lambda result.
+            results.append(
+                {
+                    "signal_id": str(item.get("signal_id") or ""),
+                    "provider_application_id": record.application_id,
+                    "applicant": raw.get("applicant"),
+                    "agent": raw.get("agent"),
+                    "case_officer": raw.get("case_officer"),
+                    "contact_delivered": bool(
+                        raw.get("applicant") or raw.get("agent") or raw.get("case_officer")
+                    ),
+                }
+            )
+        except Exception as exc:
+            results.append(
+                {
+                    "signal_id": str(item.get("signal_id") or ""),
+                    "provider_application_id": str(item.get("provider_application_id") or ""),
+                    "error_category": type(exc).__name__,
+                }
+            )
+    return {"preview_only": True, "provider_requests": provider.requests_made, "results": results}
+
+
+def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     settings = Settings.from_env()
     payload = collector_payload(event)
+    if payload.get("operation") == "planning_contact_data_preview":
+        return contact_data_preview(settings, payload)
     if payload.get("invocation_source") == "planning_origin_recovery":
         return recover_planning_origin(settings, payload)
     if payload.get("invocation_source") == "planning_lifecycle_watch":

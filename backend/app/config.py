@@ -19,6 +19,7 @@ class Settings:
     # opt-in for normal collection; watchers and targeted status refreshes do
     # not request it.
     planning_contact_data_enabled: bool = False
+    planning_collector_function_name: str | None = None
     recruitment_provider_secret_arn: str | None = None
     recruitment_provider_base_url: str = "https://api.apprenticeships.education.gov.uk/vacancies"
     ofsted_data_url: str = (
@@ -80,6 +81,7 @@ class Settings:
                 "PLANNING_CONTACT_DATA_ENABLED", "false"
             ).lower()
             in {"1", "true", "yes"},
+            planning_collector_function_name=os.getenv("PLANNING_COLLECTOR_FUNCTION_NAME") or None,
             recruitment_provider_secret_arn=os.getenv("RECRUITMENT_PROVIDER_SECRET_ARN") or None,
             recruitment_provider_base_url=os.getenv(
                 "RECRUITMENT_PROVIDER_BASE_URL",

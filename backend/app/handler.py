@@ -74,6 +74,7 @@ from app.logging import configure_logging
 from app.operations import operations_summary
 from app.organisation_lookup import ManualCompanyLookupError, lookup_manual_company_candidate
 from app.planning_backfill import PlanningBackfillBounds, chunk_payload
+from app.planning_contact_preview import planning_contact_data_preview
 from app.repository import (
     apply_planning_site_identity_backfill,
     apply_recruitment_correlation,
@@ -602,6 +603,14 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         "requestContext"
     ):
         return official_planning_party_latest_report(settings)
+    if event.get("operation") == "planning_contact_data_preview" and not event.get(
+        "requestContext"
+    ):
+        return planning_contact_data_preview(
+            settings,
+            actor=str(event.get("actor") or "SYSTEM"),
+            limit=int(event.get("limit") or 100),
+        )
     if event.get("operation") == "care_foundational_evidence_diagnostic" and not event.get(
         "requestContext"
     ):
