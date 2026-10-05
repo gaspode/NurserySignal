@@ -2105,3 +2105,13 @@ Paid-pilot activation check (2026-09-28):
   company-like applicant rates, existing-organisation matches or improved Recruitment correlation; the next
   separate gate is an approved-signal, exact-application bounded preview that measures those outcomes before
   any Jan-2026 historical backfill or operator link is considered.
+- The second Plota Contact Data gate completed as one exact-ID, read-only production preview over 100 approved
+  SignalHub Planning signals dated from January 2026 (50 Nursery and 50 children’s-home signals). It made exactly
+  100 provider requests, returned no fetch failures and changed no business state. Applicant recovery was 91%,
+  but only 15% of applicants were conservatively company-like; 76% were people and nine records had no contact
+  data. No company-like applicant produced an exact existing organisation or alias match, only one normalized
+  applicant identity repeated, and strict Recruitment correlation was deliberately not advanced because an
+  applicant is not automatically operator evidence. This fails the commercial identity gate (company-like
+  applicant rate below the 25–30% threshold; zero credible organisation matches/correlation gain). Do not run a
+  Jan-2026 historical Contact Data backfill or auto-link organisations. Contact Data remains useful local
+  provenance for future manual investigation, but does not currently solve the early operator-identity gap.
