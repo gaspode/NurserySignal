@@ -2076,3 +2076,20 @@ Paid-pilot activation check (2026-09-28):
   specifically covers bounded read-only collection and commercial signal use; only then may a one-board,
   100-vacancy, manual POC be built. Do not treat Pinpoint’s public browser feed as consent to automated
   commercial reuse.
+- Licensed UK recruitment-data viability has been researched as the next gate, with no integration, trial,
+  account creation, collection or production mutation. The preliminary shortlist is TheirStack, Lightcast,
+  Textkernel/Jobfeed (Market IQ) and Adzuna Intelligence; Coresignal is a lower-cost technical comparator.
+  TheirStack is the only examined standard licence that expressly permits partial resale and derived/aggregated
+  output when the data is an integrated, non-primary-value component and downstream restrictions are flowed
+  through. Its published job schema still reports postal-code coverage of only 23.55%, so it must pass a
+  target-sector field-fill and Planning-correlation sample before use. Lightcast has strong UK postings and
+  formal commercial-contract routes but its published UK documentation locates vacancies at city/approximate
+  coordinates rather than a verified site address. Textkernel and Adzuna Intelligence can be considered only
+  with bespoke written rights for SignalHub’s customer-facing derived intelligence: their default terms restrict
+  external/derivative reuse. Vacancysoft is excluded unless its service contract grants external rights; its
+  published standard terms are internal-use only. The decision gate is a vendor-provided, licensed sample that
+  demonstrates explicit employer plus usable workplace/site identity on at least 80% of relevant UK care and
+  nursery vacancies, at least one safe Planning correlation, clusterable roles/dates, and explicit rights to
+  retain source-derived evidence and show derived customer intelligence. Do not buy an annual commitment or
+  build an integration until that gate passes; next step is targeted commercial enquiries to TheirStack,
+  Lightcast and one of Textkernel or Adzuna Intelligence using the documented licence/field questionnaire.
