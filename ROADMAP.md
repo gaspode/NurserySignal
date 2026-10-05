@@ -2135,3 +2135,17 @@ Paid-pilot activation check (2026-09-28):
   and mark every named-party field `REQUIRES_POLICY_LEGAL_REVIEW` until a documented display policy and licence
   confirmation are approved. This gate must be evaluated from a single production sample before any customer API,
   feed, digest or publication projection is changed.
+- The first deployed Nursery Contact Data preview (`nursery-customer-contact-context-v1`) examined the entire
+  currently eligible published high-quality Jan-2026+ Nursery cohort: 20 Planning-backed openings/expansions
+  (rather than widening the cohort merely to reach the suggested 25–50 target). It made exactly 20 exact-ID
+  Contact Data requests, had no provider errors, and made zero business-state or customer-facing mutations.
+  All 20 had exact address/postcode; 19 had an applicant (14 person, five conservatively company-like), 15 had an
+  agent, 15 had both parties, and no record exposed a distinct agent-company field. This produces five internal
+  `ACTIONABLE_CONTACT_CONTEXT`, 14 `PARTIAL_CONTACT_CONTEXT`, and one `SITE_ONLY` examples—but **zero confirmed
+  operators**. Plota’s published terms explicitly allow customer-facing tools/display but make SignalHub an
+  independent controller responsible for lawful basis, transparency, UK GDPR/PECR and objections. Therefore the
+  product decision is **STOP customer exposure of applicant/agent names for now**, pending documented policy/legal
+  review (including an LIA, privacy notice/retention/objection process, and confirmation of the purchased plan’s
+  multi-tenant use). Emails, phones and case-officer details remain internal-only and are never returned by the
+  preview. A projection-only correction now maps this preview’s stage from canonical Planning outcome rather than
+  legacy `PLANNING`; it does not justify another Contact Data retrieval.
