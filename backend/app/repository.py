@@ -6640,6 +6640,14 @@ def recruitment_correlation_preview(
                 GROUP BY rs.vertical ORDER BY rs.vertical""",
             parameters,
         ).fetchall()
+        historical_review_rows = conn.execute(
+            f"""SELECT mr.status, mr.outcome, count(*)
+                FROM opportunity_match_reviews mr
+                JOIN raw_signals rs ON rs.id = mr.raw_signal_id
+                WHERE rs.source_type = 'recruitment' {vertical_clause}
+                GROUP BY mr.status, mr.outcome ORDER BY mr.status, mr.outcome""",
+            parameters,
+        ).fetchall()
         opportunity_rows = conn.execute(
             f"""SELECT o.id, o.vertical, o.name, o.operator_name, o.address, o.postcode, o.town
                 FROM opportunities o
@@ -6652,6 +6660,21 @@ def recruitment_correlation_preview(
         dict(zip(("id", "vertical", "name", "operator_name", "address", "postcode", "town"), row))
         for row in opportunity_rows
     ]
+    opportunity_index: dict[str, dict[str, dict[str, list[dict[str, Any]]]]] = {}
+    for opportunity in opportunities:
+        vertical_index = opportunity_index.setdefault(
+            str(opportunity["vertical"]),
+            {"postcode": {}, "operator": {}, "address": {}, "town": {}},
+        )
+        for field in ("postcode", "operator", "address", "town"):
+            value = (
+                opportunity.get("operator_name")
+                if field == "operator"
+                else opportunity.get(field)
+            )
+            normalized = normalize_identity(value)
+            if normalized:
+                vertical_index[field].setdefault(normalized, []).append(opportunity)
     outcome_counts: Counter[str] = Counter()
     vertical_counts: Counter[str] = Counter()
     samples: list[dict[str, Any]] = []
@@ -6668,10 +6691,21 @@ def recruitment_correlation_preview(
         )
         signal["operator_name"] = (signal.get("extracted_facts") or {}).get("operator_name")
         signal["address"] = (signal.get("extracted_facts") or {}).get("address")
+        metadata = signal.get("metadata") or {}
+        vertical_index = opportunity_index.get(str(signal["vertical"]), {})
+        candidate_opportunities: dict[str, dict[str, Any]] = {}
+        keys = {
+            "postcode": metadata.get("postcode"),
+            "operator": signal.get("operator_name") or signal.get("organisation_hint"),
+            "address": signal.get("address") or signal.get("location_hint"),
+            "town": metadata.get("town") or metadata.get("locality"),
+        }
+        for field, value in keys.items():
+            for opportunity in vertical_index.get(field, {}).get(normalize_identity(value), []):
+                candidate_opportunities[str(opportunity["id"])] = opportunity
         matches = [
             (opportunity, classify_recruitment_match(signal, opportunity))
-            for opportunity in opportunities
-            if opportunity["vertical"] == signal["vertical"]
+            for opportunity in candidate_opportunities.values()
         ]
         rank = {"EXACT": 4, "STRONG": 3, "PROBABLE": 2, "UNCERTAIN": 1, "NO_MATCH": 0}
         ranked = sorted(
@@ -6712,11 +6746,15 @@ def recruitment_correlation_preview(
         str(row[0]): {"approved": row[1], "linked": row[2], "unlinked": row[3]}
         for row in inventory_rows
     }
+    historical_match_reviews = {
+        f"{row[0]}:{row[1]}": row[2] for row in historical_review_rows
+    }
     return {
         "policy_version": RECRUITMENT_CORRELATION_POLICY_VERSION,
         "preview_only": True,
         "examined": len(signal_rows),
         "inventory_by_vertical": inventory,
+        "historical_match_reviews": historical_match_reviews,
         "counts_by_outcome": dict(outcome_counts),
         "counts_by_vertical": dict(vertical_counts),
         "proposed_automatic_links": sum(item["auto_link_allowed"] for item in candidates),
