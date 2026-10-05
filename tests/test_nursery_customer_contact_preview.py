@@ -87,6 +87,7 @@ def test_nursery_contact_preview_is_bounded_role_labelled_and_not_customer_expos
     assert item["contact_provenance"]["agent_role"] == "AGENT"
     assert item["contact_provenance"]["operator_status"] == "NOT_CONFIRMED"
     assert item["customer_safe_preview"]["operator"] == "Not confirmed"
+    assert item["site_project"]["planning_stage"] == "PLANNING_PENDING"
     rendered_sample = json.dumps(item)
     assert "email" not in rendered_sample.casefold()
     assert "phone" not in rendered_sample.casefold()

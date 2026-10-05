@@ -12,6 +12,7 @@ from app.config import Settings
 from app.correlation import normalize_identity
 from app.customer import _company_like_applicant
 from app.db import connection
+from app.planning_outcomes import canonical_planning_outcome
 
 POLICY_VERSION = "plota-contact-data-viability-v1"
 NURSERY_CUSTOMER_CONTACT_POLICY_VERSION = "nursery-customer-contact-context-v1"
@@ -196,6 +197,18 @@ def _contact_context(value: str | None, *, kind: str) -> str:
     return "PARTIAL_CONTACT_CONTEXT"
 
 
+def _customer_planning_stage(metadata: dict[str, Any], lifecycle: Any) -> tuple[str, str]:
+    """Prefer current canonical Planning outcome over legacy opportunity stage."""
+    outcome = canonical_planning_outcome(metadata).outcome.value
+    if outcome == "APPROVED":
+        return outcome, "PLANNING_APPROVED"
+    if outcome in {"PENDING", "UNKNOWN"}:
+        return outcome, "PLANNING_PENDING"
+    # Terminal cases are excluded by the publication predicate, but retain a
+    # neutral stage if a legacy row nevertheless reaches this internal preview.
+    return outcome, str(lifecycle or "UNDER_REVIEW")
+
+
 def nursery_customer_contact_preview(
     settings: Settings, *, actor: str, limit: int = 50
 ) -> dict[str, Any]:
@@ -288,6 +301,8 @@ def nursery_customer_contact_preview(
         counts["exact_site_address" if exact_site else "missing_exact_site_address"] += 1
         counts[context] += 1
         metadata = metadata or {}
+        planning_outcome, planning_stage = _customer_planning_stage(metadata, lifecycle)
+        counts[f"planning_outcome_{planning_outcome.lower()}"] += 1
         samples.append(
             {
                 "opportunity_id": str(opportunity_id),
@@ -299,7 +314,8 @@ def nursery_customer_contact_preview(
                     "town": str(town) if town else None,
                     "planning_authority": metadata.get("council") or metadata.get("authority"),
                     "planning_reference": metadata.get("planning_reference"),
-                    "planning_stage": str(lifecycle or "UNDER_REVIEW"),
+                    "planning_outcome": planning_outcome,
+                    "planning_stage": planning_stage,
                     "proposal_change_type": str(change_type or "OTHER_CHANGE"),
                     "customer_safe_summary": str(summary or signal_title or "")[:500],
                 },
@@ -325,7 +341,7 @@ def nursery_customer_contact_preview(
                     "site_address": str(address) if address else None,
                     "postcode": str(postcode) if postcode else None,
                     "planning_reference": metadata.get("planning_reference"),
-                    "planning_stage": str(lifecycle or "UNDER_REVIEW"),
+                    "planning_stage": planning_stage,
                     "proposal_summary": str(summary or signal_title or "")[:500],
                     "applicant": applicant,
                     "planning_agent": agent_company or agent,
