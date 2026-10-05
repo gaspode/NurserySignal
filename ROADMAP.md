@@ -2063,3 +2063,16 @@ Paid-pilot activation check (2026-09-28):
   decision is explicit product approval to evaluate one identified alternative ATS (for example N Family Club’s
   Pinpoint board) under its terms and a separately documented bounded adapter; do not substitute that source
   silently.
+- Pinpoint feasibility was assessed next using N Family Club’s named public board
+  (`nfamilyclub.pinpointhq.com`). Pinpoint documents `https://{subdomain}.pinpointhq.com/postings.json` as the
+  public, client-fetchable replacement for `jobs.json`; N Family Club’s documented feed is technically strong,
+  exposing 288 active postings with stable posting IDs and URLs plus explicit site/city/postcode location for all
+  observed records. However, the feed does not supply publication/update timestamps in this tenant, and—more
+  importantly—Pinpoint’s Acceptable Use Policy prohibits commercially exploiting the service while neither
+  Pinpoint’s documentation nor N Family Club’s careers material grants SignalHub a collection or redistribution
+  licence for that customer board. The source is therefore `REQUIRES_PERMISSION`, not a permissible public-feed
+  integration. No adapter, fetch Lambda, scheduled collector, raw evidence persistence, correlation run, or
+  business-state mutation was created. The next gate is written permission from Pinpoint and N Family Club that
+  specifically covers bounded read-only collection and commercial signal use; only then may a one-board,
+  100-vacancy, manual POC be built. Do not treat Pinpoint’s public browser feed as consent to automated
+  commercial reuse.
