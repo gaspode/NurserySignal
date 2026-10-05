@@ -6995,11 +6995,11 @@ def apply_recruitment_identity_backfill(
 
 
 def planning_site_identity_preview(
-    settings: Settings, *, vertical: str = "ALL", limit: int = 250
+    settings: Settings, *, vertical: str = "ALL", limit: int = 1500
 ) -> dict[str, Any]:
     """Preview canonical site identity from existing active Planning evidence only."""
     vertical = validate_vertical_filter(vertical)
-    limit = min(max(int(limit), 1), 250)
+    limit = min(max(int(limit), 1), 1500)
     with connection(settings) as conn:
         params: list[Any] = []
         clause = ""
@@ -7109,7 +7109,7 @@ def apply_planning_site_identity_backfill(
 ) -> dict[str, Any]:
     """Persist only missing site fields and provenance; preserve manual/operator data."""
     limit = min(max(int(limit), 1), 100)
-    preview = planning_site_identity_preview(settings, vertical=vertical, limit=250)
+    preview = planning_site_identity_preview(settings, vertical=vertical, limit=1500)
     selected = [item for item in preview["candidates"] if item["automation_allowed"]][:limit]
     persisted = skipped = failed = 0
     for item in selected:

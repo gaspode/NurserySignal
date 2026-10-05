@@ -1750,7 +1750,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                     recruitment_identity_backfill_preview(
                         settings,
                         vertical=validate_vertical_filter(_query(event, "vertical") or "ALL"),
-                        limit=min(max(int(_query(event, "limit") or "250"), 1), 250),
+                        limit=min(max(int(_query(event, "limit") or "1500"), 1), 1500),
                     ),
                 )
             if action == "recruitment-identity-backfill" and method == "POST":
