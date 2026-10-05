@@ -2001,3 +2001,13 @@ Paid-pilot activation check (2026-09-28):
   cannot. The admin preview/apply endpoints are bounded (100 preview / 25 apply), audit each created
   relationship and never create a standalone opportunity from routine Recruitment. Production preview is the
   next gate: validate the exact/strong cohort and historical Match Review outcomes before applying any links.
+- Production validation of `recruitment-correlation-v1` completed with no safe historical mutation: of 194
+  approved Recruitment signals, Nursery has 190 (two already linked, 188 unlinked) and Care has four (all
+  unlinked). The complete 192-signal unlinked supporting cohort produced 190 `NO_MATCH` results and two
+  `UNCERTAIN` postcode-only results; it produced zero `EXACT`/`STRONG` candidates, so no links or Match Review
+  rows were created. The only historical Recruitment match-review labels are two rejected `UNCERTAIN` cases,
+  consistent with the new postcode-only rejection boundary. The aggregate preview is now locally indexed by
+  exact postcode, organisation, address and town and completed in six seconds. Future approved Recruitment
+  signals now automatically take this same post-review supporting-link path. The next potential gain is not
+  relaxing match thresholds: it is determining whether a source-specific, explicit site/operator identity
+  extraction can be validated without turning routine job adverts into unsafe opportunity evidence.
