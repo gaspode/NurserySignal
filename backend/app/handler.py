@@ -74,7 +74,10 @@ from app.logging import configure_logging
 from app.operations import operations_summary
 from app.organisation_lookup import ManualCompanyLookupError, lookup_manual_company_candidate
 from app.planning_backfill import PlanningBackfillBounds, chunk_payload
-from app.planning_contact_preview import planning_contact_data_preview
+from app.planning_contact_preview import (
+    nursery_customer_contact_preview,
+    planning_contact_data_preview,
+)
 from app.repository import (
     apply_planning_site_identity_backfill,
     apply_recruitment_correlation,
@@ -315,6 +318,8 @@ def _admin_path(path: str) -> tuple[str, str | None]:
         return "customer-planning-party-backfill", None
     if path == "/admin/customer-official-planning-party-preview":
         return "customer-official-planning-party-preview", None
+    if path == "/admin/nursery-customer-contact-preview":
+        return "nursery-customer-contact-preview", None
     if path.startswith("/admin/customer-accounts/"):
         return "customer-account-detail", path[len("/admin/customer-accounts/") :]
     if path == "/admin/backtesting":
@@ -610,6 +615,15 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             settings,
             actor=str(event.get("actor") or "SYSTEM"),
             limit=int(event.get("limit") or 100),
+            vertical=str(event.get("vertical") or "ALL"),
+        )
+    if event.get("operation") == "nursery_customer_contact_preview" and not event.get(
+        "requestContext"
+    ):
+        return nursery_customer_contact_preview(
+            settings,
+            actor=str(event.get("actor") or "SYSTEM_NURSERY_CUSTOMER_CONTACT_PREVIEW"),
+            limit=int(event.get("limit") or 50),
         )
     if event.get("operation") == "care_foundational_evidence_diagnostic" and not event.get(
         "requestContext"
@@ -1036,6 +1050,20 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 if admin_error:
                     return admin_error
                 return _response(200, official_planning_party_latest_report(settings))
+            if action == "nursery-customer-contact-preview" and method == "POST":
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                payload = parse_json_payload(_raw_body(event))
+                actor = str(claims.get("sub") or claims.get("username") or "unknown")
+                return _response(
+                    200,
+                    nursery_customer_contact_preview(
+                        settings,
+                        actor=actor,
+                        limit=min(max(int(payload.get("limit") or 50), 1), 50),
+                    ),
+                )
             if action == "opportunity-publication" and method == "POST" and signal_id:
                 admin_error = _require_admin(claims, settings)
                 if admin_error:

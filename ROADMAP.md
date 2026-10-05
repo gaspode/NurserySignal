@@ -2125,3 +2125,13 @@ Paid-pilot activation check (2026-09-28):
   persistence or business mutation was added. Treat this as a hard negative operational viability result for
   the "planning documents reveal early operator identity" hypothesis unless Plota or councils provide a
   licensed/direct document-content API or an explicitly authorised stable download mechanism.
+- Nursery customer contact-context is now at an explicit **privacy/licensing gate**, not an operator-resolution
+  route. Plota's current API terms permit commercial customer-facing tools and displaying retrieved records, but
+  require SignalHub to establish and document its own lawful basis, transparency, UK GDPR/PECR compliance and
+  objection handling for Contact Data. The next bounded implementation is therefore an authenticated internal
+  preview only: at most 50 published, high-quality Nursery Planning opportunities from January 2026 onward, using
+  exact application IDs and no persistence or customer exposure. It must retain Applicant and Planning agent as
+  separate role-labelled context, always project `Operator: Not confirmed`, omit all email/phone/case-officer data,
+  and mark every named-party field `REQUIRES_POLICY_LEGAL_REVIEW` until a documented display policy and licence
+  confirmation are approved. This gate must be evaluated from a single production sample before any customer API,
+  feed, digest or publication projection is changed.

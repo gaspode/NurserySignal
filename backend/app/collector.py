@@ -545,6 +545,10 @@ def contact_data_preview(settings: Settings, payload: dict[str, Any]) -> dict[st
                     "provider_application_id": record.application_id,
                     "applicant": raw.get("applicant"),
                     "agent": raw.get("agent"),
+                    # Not all authorities publish a distinct agent-company field.
+                    # Preserve it when Plota supplies it, but do not derive one from
+                    # an agent's name here.
+                    "agent_company": raw.get("agent_company"),
                     "case_officer": raw.get("case_officer"),
                     "contact_delivered": bool(
                         raw.get("applicant") or raw.get("agent") or raw.get("case_officer")
