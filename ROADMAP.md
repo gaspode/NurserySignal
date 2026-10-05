@@ -2043,3 +2043,11 @@ Paid-pilot activation check (2026-09-28):
   cross-source failure is compatible-project identity, not lost Planning structured site data; do not relax the
   matching rule. No provider calls, operator promotion, organisation creation, lifecycle, publication,
   withdrawal or watcher change occurred.
+- Recruitment-source research confirms that the current GOV.UK Apprenticeships cohort is a poor Planning
+  correlation source despite complete structured employer/workplace extraction: it is primarily routine,
+  apprenticeship-led staffing and produced no exact/strong match. The next evidence-led gate is not broad job-board
+  scraping. It is a small, read-only POC against 3–5 named operator career boards using documented public
+  ATS surfaces where available (Greenhouse Job Board API, Lever Postings API, and explicitly authorised public
+  Teamtailor/SmartRecruiters boards). The POC must cap requests per board, retain raw provenance, measure
+  employer/site precision and test the strict matcher without opportunity mutation. LinkedIn is excluded absent
+  written authorisation; Indeed/aggregator APIs require partner approval and must not be used as a generic feed.
