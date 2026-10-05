@@ -15,6 +15,7 @@ from urllib.request import Request, urlopen
 logger = logging.getLogger("nurserysignal.recruitment")
 PROVIDER_USER_AGENT = "NurserySignal/1.0"
 MAX_PROVIDER_ERROR_BODY = 512
+RECRUITMENT_IDENTITY_EXTRACTION_VERSION = "recruitment-identity-v1"
 
 ROLE_PATTERNS = (
     ("nursery_manager", r"\bnursery\s+(?:deputy\s+)?manager\b"),
@@ -175,6 +176,106 @@ def _address_text(location: dict[str, Any], record: dict[str, Any]) -> str | Non
         parts = [location.get("address") or record.get("address")]
     values = [_text(value) for value in parts]
     return ", ".join(value for value in values if value) or None
+
+
+def _field(value: Any, path: str) -> dict[str, Any] | None:
+    text = _text(value)
+    return {"value": text, "source_path": path} if text else None
+
+
+def extract_recruitment_identity(raw: dict[str, Any]) -> tuple[dict[str, Any] | None, str]:
+    """Extract role-labelled identity only from explicit source fields.
+
+    In particular, a training provider is never used as an employer and the
+    legacy generic organisation hint is not promoted to an employer here.
+    """
+    metadata = raw.get("metadata") if isinstance(raw.get("metadata"), dict) else {}
+    provider = metadata.get("provider_record")
+    if not isinstance(provider, dict):
+        return None, "MALFORMED_RAW" if provider is not None else "NO_USABLE_IDENTITY"
+    employer = provider.get("employer") if isinstance(provider.get("employer"), dict) else {}
+    location = _first_location(provider)
+    employer_name = _field(
+        employer.get("name") or provider.get("employerName"),
+        "metadata.provider_record.employer.name"
+        if employer.get("name")
+        else "metadata.provider_record.employerName",
+    )
+    employer_identifier = _field(
+        employer.get("id")
+        or employer.get("identifier")
+        or provider.get("employerId")
+        or provider.get("employerReference"),
+        "metadata.provider_record.employer.id"
+        if employer.get("id")
+        else "metadata.provider_record.employerId",
+    )
+    workplace_name = _field(
+        location.get("name") or location.get("workplaceName"),
+        "metadata.provider_record.addresses[0].name",
+    )
+    workplace_address = _field(
+        _address_text(location, provider), "metadata.provider_record.addresses[0].addressLine1"
+    )
+    workplace_postcode = _field(
+        location.get("postcode") or provider.get("postcode"),
+        "metadata.provider_record.addresses[0].postcode",
+    )
+    workplace_town = _field(
+        location.get("town")
+        or location.get("city")
+        or location.get("locality")
+        or provider.get("town"),
+        "metadata.provider_record.addresses[0].town",
+    )
+    latitude = _number(location.get("latitude") or provider.get("latitude"))
+    longitude = _number(location.get("longitude") or provider.get("longitude"))
+    training_provider = _field(
+        provider.get("providerName") or provider.get("trainingProviderName"),
+        "metadata.provider_record.providerName",
+    )
+    training_provider_identifier = _field(
+        provider.get("ukprn") or provider.get("providerUkprn"), "metadata.provider_record.ukprn"
+    )
+    vacancy_reference = _field(
+        provider.get("vacancyReference") or provider.get("id"),
+        "metadata.provider_record.vacancyReference",
+    )
+    vacancy_location = _field(raw.get("location_hint"), "raw_signals.location_hint")
+    identity = {
+        "extraction_version": RECRUITMENT_IDENTITY_EXTRACTION_VERSION,
+        "employer": {"role": "EMPLOYER", "name": employer_name, "identifier": employer_identifier},
+        "workplace": {
+            "role": "WORKPLACE_SITE",
+            "name": workplace_name,
+            "address": workplace_address,
+            "postcode": workplace_postcode,
+            "town": workplace_town,
+            "coordinates": {"latitude": latitude, "longitude": longitude}
+            if latitude is not None and longitude is not None
+            else None,
+        },
+        "training_provider": {
+            "role": "TRAINING_PROVIDER",
+            "name": training_provider,
+            "identifier": training_provider_identifier,
+        },
+        "vacancy": {"reference": vacancy_reference, "location_text": vacancy_location},
+    }
+    has_employer = bool(employer_name)
+    has_site = bool(workplace_name or workplace_address or workplace_postcode)
+    if has_employer and has_site:
+        outcome = "EMPLOYER_AND_SITE"
+    elif has_employer:
+        outcome = "EMPLOYER_ONLY"
+    elif has_site:
+        outcome = "SITE_ONLY" if (workplace_name or workplace_address) else "LOCATION_ONLY"
+    elif training_provider:
+        outcome = "TRAINING_PROVIDER_ONLY"
+    else:
+        outcome = "NO_USABLE_IDENTITY"
+    identity["outcome"] = outcome
+    return identity, outcome
 
 
 def normalize_gov_vacancy(

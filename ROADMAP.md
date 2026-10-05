@@ -2011,3 +2011,11 @@ Paid-pilot activation check (2026-09-28):
   signals now automatically take this same post-review supporting-link path. The next potential gain is not
   relaxing match thresholds: it is determining whether a source-specific, explicit site/operator identity
   extraction can be validated without turning routine job adverts into unsafe opportunity evidence.
+- Recruitment identity enrichment is now prepared as a deliberately local-only, role-labelled gate:
+  `recruitment-identity-v1` keeps explicit GOV.UK Apprenticeships employer, workplace and training-provider
+  fields separate (including field-level source paths, vacancy reference and coordinates). A bounded,
+  audited historical backfill can write only missing extracted identity from retained raw evidence, then rerun
+  the existing strict `recruitment-correlation-v1` preview. Training providers and generic organisation hints
+  cannot become employers, and postcode-only matching remains excluded. Production preview/backfill and any
+  resulting exact/strong-link inspection are the next gate; no provider request, organisation creation or
+  link mutation is authorised until that preview is reviewed.

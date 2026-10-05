@@ -7,7 +7,11 @@ from app.classification import CLASSIFICATION_RULE_VERSION, classify_signal_text
 from app.opportunity_policy import opportunity_creation_decision
 from app.planning import candidate_decision, planning_record_from_signal
 from app.planning_parties import extract_planning_party_provenance
-from app.recruitment import classify_recruitment, recruitment_record_from_signal
+from app.recruitment import (
+    classify_recruitment,
+    extract_recruitment_identity,
+    recruitment_record_from_signal,
+)
 
 
 def fixture_enrichment(
@@ -25,8 +29,10 @@ def fixture_enrichment(
     text = classification_result.text
     source_type = str(raw["source_type"]).lower()
     recruitment_candidate = None
+    recruitment_identity = None
     if source_type == "recruitment":
         recruitment_candidate = classify_recruitment(recruitment_record_from_signal(raw))
+        recruitment_identity, _ = extract_recruitment_identity(raw)
     if planning_candidate is None and source_type == "planning":
         try:
             planning_candidate = candidate_decision(planning_record_from_signal(raw))
@@ -144,6 +150,7 @@ def fixture_enrichment(
         "recruitment_is_apprenticeship": recruitment_candidate["is_apprenticeship"]
         if recruitment_candidate
         else False,
+        "recruitment_identity": recruitment_identity,
     }
     policy_candidate = {
         "source_type": raw["source_type"],

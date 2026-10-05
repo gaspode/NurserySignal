@@ -136,7 +136,11 @@ from app.planning_outcomes import (
     structured_planning_values,
 )
 from app.queueing import EnrichmentMessage, send_enrichment_message
-from app.recruitment import recruitment_record_from_signal
+from app.recruitment import (
+    RECRUITMENT_IDENTITY_EXTRACTION_VERSION,
+    extract_recruitment_identity,
+    recruitment_record_from_signal,
+)
 from app.recruitment_correlation import POLICY_VERSION as RECRUITMENT_CORRELATION_POLICY_VERSION
 from app.recruitment_correlation import classify_recruitment_match
 from app.review_triage import (
@@ -173,6 +177,7 @@ from app.verticals import (
 
 PLANNING_FAMILY_HISTORICAL_BACKFILL_VERSION = "planning-family-historical-backfill-v1"
 EVALUATION_ONLY_SOURCE_TYPES = ("procurement",)
+RECRUITMENT_IDENTITY_BACKFILL_VERSION = "recruitment-identity-backfill-v1"
 
 
 def actionable_review_source_clause(alias: str = "rs") -> str:
@@ -6497,11 +6502,14 @@ def correlate_signal(
                 signal_id,
                 signal_vertical,
                 Jsonb(candidate.get("extracted_facts") or {}),
-                Jsonb({
-                    "method": RECRUITMENT_CORRELATION_POLICY_VERSION
-                    if source_type == "recruitment" else "deterministic-v1",
-                    "reason": match_reason or "initial signal",
-                }),
+                Jsonb(
+                    {
+                        "method": RECRUITMENT_CORRELATION_POLICY_VERSION
+                        if source_type == "recruitment"
+                        else "deterministic-v1",
+                        "reason": match_reason or "initial signal",
+                    }
+                ),
                 "STRONG" if match else "NO_MATCH",
                 base_confidence,
                 match_reason or "initial signal",
@@ -6668,9 +6676,7 @@ def recruitment_correlation_preview(
         )
         for field in ("postcode", "operator", "address", "town"):
             value = (
-                opportunity.get("operator_name")
-                if field == "operator"
-                else opportunity.get(field)
+                opportunity.get("operator_name") if field == "operator" else opportunity.get(field)
             )
             normalized = normalize_identity(value)
             if normalized:
@@ -6683,8 +6689,14 @@ def recruitment_correlation_preview(
         signal = dict(
             zip(
                 (
-                    "id", "vertical", "title", "location_hint", "organisation_hint",
-                    "metadata", "extracted_facts", "discovered_at",
+                    "id",
+                    "vertical",
+                    "title",
+                    "location_hint",
+                    "organisation_hint",
+                    "metadata",
+                    "extracted_facts",
+                    "discovered_at",
                 ),
                 row,
             )
@@ -6738,6 +6750,14 @@ def recruitment_correlation_preview(
                 list(selected[1].reason_codes) if selected else ["insufficient_identity"]
             ),
             "auto_link_allowed": outcome in {"EXACT", "STRONG"},
+            "recruitment_identity": (signal.get("extracted_facts") or {}).get(
+                "recruitment_identity"
+            ),
+            "opportunity_identity": {
+                "operator_name": selected[0].get("operator_name") if selected else None,
+                "address": selected[0].get("address") if selected else None,
+                "postcode": selected[0].get("postcode") if selected else None,
+            },
         }
         candidates.append(item)
         if len(samples) < 20:
@@ -6746,9 +6766,7 @@ def recruitment_correlation_preview(
         str(row[0]): {"approved": row[1], "linked": row[2], "unlinked": row[3]}
         for row in inventory_rows
     }
-    historical_match_reviews = {
-        f"{row[0]}:{row[1]}": row[2] for row in historical_review_rows
-    }
+    historical_match_reviews = {f"{row[0]}:{row[1]}": row[2] for row in historical_review_rows}
     return {
         "policy_version": RECRUITMENT_CORRELATION_POLICY_VERSION,
         "preview_only": True,
@@ -6778,9 +6796,7 @@ def apply_recruitment_correlation(
     errors = 0
     for item in selected:
         try:
-            result = correlate_approved_recruitment_signal(
-                settings, item["signal_id"], actor=actor
-            )
+            result = correlate_approved_recruitment_signal(settings, item["signal_id"], actor=actor)
             if result.get("linked"):
                 linked += 1
             else:
@@ -6808,6 +6824,161 @@ def apply_recruitment_correlation(
         "skipped": skipped,
         "errors": errors,
         "policy_version": RECRUITMENT_CORRELATION_POLICY_VERSION,
+    }
+
+
+def recruitment_identity_backfill_preview(
+    settings: Settings, *, vertical: str = "ALL", limit: int = 250
+) -> dict[str, Any]:
+    """Read locally retained Recruitment raw evidence and classify recoverability."""
+    vertical = validate_vertical_filter(vertical)
+    limit = min(max(int(limit), 1), 250)
+    with connection(settings) as conn:
+        params: list[Any] = []
+        clause = ""
+        if vertical != "ALL":
+            clause = " AND rs.vertical = %s"
+            params.append(vertical)
+        rows = conn.execute(
+            f"""SELECT rs.id, rs.vertical, rs.title, rs.location_hint, rs.organisation_hint,
+                       rs.metadata, rs.source_url, se.extracted_facts
+                FROM raw_signals rs JOIN signal_enrichments se ON se.raw_signal_id = rs.id
+                WHERE rs.source_type = 'recruitment' AND se.review_status = 'APPROVED'
+                {clause} ORDER BY rs.discovered_at DESC, rs.id DESC LIMIT %s""",
+            [*params, limit],
+        ).fetchall()
+    counts: Counter[str] = Counter()
+    by_vertical: dict[str, Counter[str]] = {}
+    items: list[dict[str, Any]] = []
+    for row in rows:
+        raw = dict(
+            zip(
+                (
+                    "id",
+                    "vertical",
+                    "title",
+                    "location_hint",
+                    "organisation_hint",
+                    "metadata",
+                    "source_url",
+                    "extracted_facts",
+                ),
+                row,
+            )
+        )
+        facts = raw.get("extracted_facts") or {}
+        existing = facts.get("recruitment_identity") if isinstance(facts, dict) else None
+        if (
+            isinstance(existing, dict)
+            and existing.get("extraction_version") == RECRUITMENT_IDENTITY_EXTRACTION_VERSION
+        ):
+            outcome, identity = "ALREADY_POPULATED", existing
+        else:
+            identity, outcome = extract_recruitment_identity(raw)
+        counts[outcome] += 1
+        by_vertical.setdefault(str(raw["vertical"]), Counter())[outcome] += 1
+        employer = (identity or {}).get("employer") or {}
+        workplace = (identity or {}).get("workplace") or {}
+        items.append(
+            {
+                "signal_id": str(raw["id"]),
+                "vertical": raw["vertical"],
+                "title": raw["title"],
+                "outcome": outcome,
+                "employer_name": (employer.get("name") or {}).get("value")
+                if isinstance(employer.get("name"), dict)
+                else None,
+                "workplace_postcode": (workplace.get("postcode") or {}).get("value")
+                if isinstance(workplace.get("postcode"), dict)
+                else None,
+                "automation_allowed": outcome
+                not in {"ALREADY_POPULATED", "MALFORMED_RAW", "NO_USABLE_IDENTITY"},
+            }
+        )
+    return {
+        "policy_version": RECRUITMENT_IDENTITY_BACKFILL_VERSION,
+        "extraction_version": RECRUITMENT_IDENTITY_EXTRACTION_VERSION,
+        "preview_only": True,
+        "examined": len(rows),
+        "counts_by_outcome": dict(counts),
+        "counts_by_vertical": {key: dict(value) for key, value in by_vertical.items()},
+        "candidates": items,
+    }
+
+
+def apply_recruitment_identity_backfill(
+    settings: Settings, *, actor: str, vertical: str = "ALL", limit: int = 100
+) -> dict[str, Any]:
+    """Persist only missing role-labelled identity from existing raw evidence."""
+    limit = min(max(int(limit), 1), 100)
+    preview = recruitment_identity_backfill_preview(settings, vertical=vertical, limit=250)
+    selected = [item for item in preview["candidates"] if item["automation_allowed"]][:limit]
+    persisted = skipped = failed = 0
+    audit_ids: list[str] = []
+    for item in selected:
+        try:
+            raw = get_raw_signal(settings, item["signal_id"])
+            if not raw:
+                skipped += 1
+                continue
+            identity, outcome = extract_recruitment_identity(raw)
+            if not identity or outcome in {"MALFORMED_RAW", "NO_USABLE_IDENTITY"}:
+                skipped += 1
+                continue
+            with connection(settings) as conn:
+                row = conn.execute(
+                    "SELECT extracted_facts FROM signal_enrichments "
+                    "WHERE raw_signal_id = %s FOR UPDATE",
+                    (item["signal_id"],),
+                ).fetchone()
+                facts = dict(row[0] or {}) if row else {}
+                if isinstance(facts.get("recruitment_identity"), dict):
+                    skipped += 1
+                    continue
+                facts["recruitment_identity"] = identity
+                conn.execute(
+                    "UPDATE signal_enrichments SET extracted_facts = %s WHERE raw_signal_id = %s",
+                    (Jsonb(facts), item["signal_id"]),
+                )
+            persisted += 1
+            audit_ids.append(
+                record_admin_audit(
+                    settings,
+                    action="recruitment_identity_backfilled",
+                    actor=actor,
+                    target_type="signal",
+                    details={
+                        "signal_id": item["signal_id"],
+                        "outcome": outcome,
+                        "policy_version": RECRUITMENT_IDENTITY_BACKFILL_VERSION,
+                        "extraction_version": RECRUITMENT_IDENTITY_EXTRACTION_VERSION,
+                    },
+                )
+            )
+        except Exception:
+            failed += 1
+    operation_id = record_admin_audit(
+        settings,
+        action="recruitment_identity_backfill_apply",
+        actor=actor,
+        target_type="signal",
+        details={
+            "selected": len(selected),
+            "persisted": persisted,
+            "skipped": skipped,
+            "failed": failed,
+            "vertical": vertical,
+            "policy_version": RECRUITMENT_IDENTITY_BACKFILL_VERSION,
+        },
+    )
+    return {
+        "operation_id": operation_id,
+        "selected": len(selected),
+        "persisted": persisted,
+        "skipped": skipped,
+        "failed": failed,
+        "audit_event_ids": audit_ids,
+        "policy_version": RECRUITMENT_IDENTITY_BACKFILL_VERSION,
     }
 
 

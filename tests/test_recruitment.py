@@ -15,6 +15,7 @@ from app.recruitment import (
     RecruitmentQuery,
     RecruitmentRecord,
     classify_recruitment,
+    extract_recruitment_identity,
     normalize_gov_vacancy,
     recruitment_signal,
 )
@@ -82,6 +83,40 @@ def test_normalization_preserves_reference_and_location() -> None:
         recruitment_signal(record, classify_recruitment(record))["external_id"]
         == "govuk-apprenticeships:VAC-99"
     )
+
+
+def test_identity_extraction_keeps_employer_workplace_and_provider_separate() -> None:
+    identity, outcome = extract_recruitment_identity(
+        {
+            "location_hint": "1 High Street, Oxford, OX1 1AA",
+            "metadata": {
+                "provider_record": {
+                    "vacancyReference": "VAC-1",
+                    "employerName": "Little Acorns Ltd",
+                    "providerName": "Training Provider Ltd",
+                    "ukprn": "12345678",
+                    "addresses": [
+                        {"addressLine1": "1 High Street", "town": "Oxford", "postcode": "ox1 1aa"}
+                    ],
+                }
+            },
+        }
+    )
+    assert outcome == "EMPLOYER_AND_SITE"
+    assert identity["employer"]["name"]["value"] == "Little Acorns Ltd"
+    assert identity["training_provider"]["name"]["value"] == "Training Provider Ltd"
+    assert identity["workplace"]["postcode"]["value"] == "ox1 1aa"
+
+
+def test_identity_extraction_does_not_promote_generic_hint_or_provider() -> None:
+    identity, outcome = extract_recruitment_identity(
+        {
+            "organisation_hint": "Unlabelled Ltd",
+            "metadata": {"provider_record": {"providerName": "Trainer"}},
+        }
+    )
+    assert outcome == "TRAINING_PROVIDER_ONLY"
+    assert identity["employer"]["name"] is None
 
 
 def test_normalization_falls_back_when_provider_application_url_is_relative() -> None:

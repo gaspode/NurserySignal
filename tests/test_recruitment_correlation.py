@@ -27,8 +27,8 @@ def opportunity(**overrides):
 def test_exact_operator_and_site_is_exact() -> None:
     result = classify_recruitment_match(signal(), opportunity())
     assert result.outcome == "EXACT"
-    assert "organisation_exact" in result.reason_codes
-    assert "address_exact" in result.reason_codes
+    assert "employer_exact" in result.reason_codes
+    assert "workplace_address_exact" in result.reason_codes
 
 
 def test_exact_operator_and_postcode_is_strong() -> None:
@@ -49,7 +49,7 @@ def test_postcode_only_is_not_an_automatic_match() -> None:
 def test_same_postcode_conflicting_operator_is_rejected() -> None:
     result = classify_recruitment_match(signal(), opportunity(operator_name="Different Care Ltd"))
     assert result.outcome == "NO_MATCH"
-    assert result.reason_codes == ("conflicting_operator",)
+    assert result.reason_codes == ("employer_conflict",)
 
 
 def test_same_operator_different_site_is_not_auto_linked() -> None:
@@ -71,3 +71,21 @@ def test_ambiguous_site_is_retained_for_review() -> None:
     )
     assert result.outcome == "UNCERTAIN"
     assert "site_not_identified" in result.reason_codes
+
+
+def test_training_provider_only_never_becomes_employer_match() -> None:
+    result = classify_recruitment_match(
+        signal(
+            organisation_hint="",
+            location_hint="",
+            extracted_facts={
+                "recruitment_identity": {
+                    "employer": {"name": None},
+                    "workplace": {},
+                    "training_provider": {"name": {"value": "Acorn Training"}},
+                }
+            },
+        ),
+        opportunity(),
+    )
+    assert result.outcome == "NO_MATCH"
