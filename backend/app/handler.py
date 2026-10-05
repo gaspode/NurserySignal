@@ -75,6 +75,7 @@ from app.operations import operations_summary
 from app.organisation_lookup import ManualCompanyLookupError, lookup_manual_company_candidate
 from app.planning_backfill import PlanningBackfillBounds, chunk_payload
 from app.repository import (
+    apply_planning_site_identity_backfill,
     apply_recruitment_correlation,
     apply_recruitment_identity_backfill,
     backfill_historical_planning_family_metadata,
@@ -114,6 +115,7 @@ from app.repository import (
     organisation_detail,
     planning_family_historical_preview,
     planning_outcome_dry_run,
+    planning_site_identity_preview,
     public_authority_backfill,
     queue_due_care_planning_watches,
     queue_planning_origin_recovery,
@@ -385,6 +387,10 @@ def _admin_path(path: str) -> tuple[str, str | None]:
         return "recruitment-identity-backfill-preview", None
     if path == "/admin/recruitment/identity-backfill":
         return "recruitment-identity-backfill", None
+    if path == "/admin/planning/site-identity-preview":
+        return "planning-site-identity-preview", None
+    if path == "/admin/planning/site-identity-backfill":
+        return "planning-site-identity-backfill", None
     if path == "/admin/planning/families":
         return "planning-families", None
     if path == "/admin/planning/families/backfill":
@@ -1755,6 +1761,32 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 return _response(
                     200,
                     apply_recruitment_identity_backfill(
+                        settings,
+                        actor=str(claims.get("sub") or claims.get("username") or "unknown"),
+                        vertical=validate_vertical_filter(str(payload.get("vertical") or "ALL")),
+                        limit=min(max(int(payload.get("limit", 100)), 1), 100),
+                    ),
+                )
+            if action == "planning-site-identity-preview" and method == "GET":
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                return _response(
+                    200,
+                    planning_site_identity_preview(
+                        settings,
+                        vertical=validate_vertical_filter(_query(event, "vertical") or "ALL"),
+                        limit=min(max(int(_query(event, "limit") or "250"), 1), 250),
+                    ),
+                )
+            if action == "planning-site-identity-backfill" and method == "POST":
+                admin_error = _require_admin(claims, settings)
+                if admin_error:
+                    return admin_error
+                payload = parse_json_payload(_raw_body(event))
+                return _response(
+                    200,
+                    apply_planning_site_identity_backfill(
                         settings,
                         actor=str(claims.get("sub") or claims.get("username") or "unknown"),
                         vertical=validate_vertical_filter(str(payload.get("vertical") or "ALL")),

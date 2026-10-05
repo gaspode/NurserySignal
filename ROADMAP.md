@@ -2027,3 +2027,10 @@ Paid-pilot activation check (2026-09-28):
   confirms the remaining blocker is not field loss but the absence of corroborating compatible Planning
   opportunity identity; thresholds must not be relaxed. No provider requests, organisations, lifecycle,
   publication, withdrawal or watch state changed.
+- Planning opportunity site identity now has a separate additive, provenance-backed projection
+  (`planning-site-identity-v1`): it uses only structured Planning address, postcode, labelled site/location,
+  coordinates, authority and reference fields, never treats an applicant or agent as an operator, and records
+  multi-signal address/postcode conflicts rather than merging them. The bounded historical preview/apply path
+  fills only absent canonical address/postcode/town fields and provenance, preserves manual values and is the
+  required gate before rerunning strict Recruitment correlation. No external request or identity-link mutation
+  is part of this backfill.

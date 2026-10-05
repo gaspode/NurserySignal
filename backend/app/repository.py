@@ -135,6 +135,10 @@ from app.planning_outcomes import (
     structured_planning_fields,
     structured_planning_values,
 )
+from app.planning_site_identity import (
+    PLANNING_SITE_IDENTITY_VERSION,
+    extract_planning_site_identity,
+)
 from app.queueing import EnrichmentMessage, send_enrichment_message
 from app.recruitment import (
     RECRUITMENT_IDENTITY_EXTRACTION_VERSION,
@@ -178,6 +182,7 @@ from app.verticals import (
 PLANNING_FAMILY_HISTORICAL_BACKFILL_VERSION = "planning-family-historical-backfill-v1"
 EVALUATION_ONLY_SOURCE_TYPES = ("procurement",)
 RECRUITMENT_IDENTITY_BACKFILL_VERSION = "recruitment-identity-backfill-v1"
+PLANNING_SITE_IDENTITY_BACKFILL_VERSION = "planning-site-identity-backfill-v1"
 
 
 def actionable_review_source_clause(alias: str = "rs") -> str:
@@ -6115,6 +6120,7 @@ def correlate_signal(
     settings: Settings, signal_id: str, candidate: dict[str, Any]
 ) -> dict[str, Any]:
     """Create/link an opportunity only when the source supports that decision."""
+    raw_signal = get_raw_signal(settings, signal_id)
     metadata = candidate.get("metadata") or {}
     postcode = metadata.get("postcode")
     name = (
@@ -6426,12 +6432,17 @@ def correlate_signal(
             vertical_policy = policy_for(signal_vertical)
             display_name = vertical_policy.build_opportunity_title(candidate, creation)
             operator_id = _resolve_operator_id(conn, operator, metadata)
+            planning_site_identity = {}
+            if source_type == "planning" and raw_signal:
+                planning_site_identity, _ = extract_planning_site_identity(raw_signal)
+                planning_site_identity = planning_site_identity or {}
             opportunity_id = conn.execute(
                 """INSERT INTO opportunities
                    (name, operator_id, event_type, lifecycle_stage, confidence,
                     confidence_breakdown, stage_reason, creation_reason, vertical,
-                    operator_name, address, postcode, town, change_type, location_sensitivity)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    operator_name, address, postcode, town, change_type, location_sensitivity,
+                    site_identity_provenance)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                    RETURNING id""",
                 (
                     display_name,
@@ -6461,6 +6472,7 @@ def correlate_signal(
                     metadata.get("town") or metadata.get("locality"),
                     creation.change_type,
                     "INTERNAL_EXACT" if signal_vertical == "CHILDRENS_HOME" else "STANDARD",
+                    Jsonb(planning_site_identity),
                 ),
             ).fetchone()[0]
         else:
@@ -6979,6 +6991,180 @@ def apply_recruitment_identity_backfill(
         "failed": failed,
         "audit_event_ids": audit_ids,
         "policy_version": RECRUITMENT_IDENTITY_BACKFILL_VERSION,
+    }
+
+
+def planning_site_identity_preview(
+    settings: Settings, *, vertical: str = "ALL", limit: int = 250
+) -> dict[str, Any]:
+    """Preview canonical site identity from existing active Planning evidence only."""
+    vertical = validate_vertical_filter(vertical)
+    limit = min(max(int(limit), 1), 250)
+    with connection(settings) as conn:
+        params: list[Any] = []
+        clause = ""
+        if vertical != "ALL":
+            clause = " AND o.vertical = %s"
+            params.append(vertical)
+        rows = conn.execute(
+            f"""SELECT o.id, o.vertical, o.name, o.address, o.postcode, o.town,
+                       o.operator_name, o.site_identity_provenance,
+                       rs.id, rs.external_id, rs.location_hint, rs.organisation_hint,
+                       rs.metadata, rs.source_url
+                FROM opportunities o
+                JOIN opportunity_signals os ON os.opportunity_id = o.id AND os.status = 'ACTIVE'
+                JOIN raw_signals rs ON rs.id = os.raw_signal_id AND rs.source_type = 'planning'
+                WHERE o.review_status NOT IN ('MERGED', 'REJECTED') {clause}
+                ORDER BY o.updated_at DESC, o.id, rs.discovered_at DESC LIMIT %s""",
+            [*params, limit * 5],
+        ).fetchall()
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        item = dict(
+            zip(
+                (
+                    "opportunity_id",
+                    "vertical",
+                    "name",
+                    "address",
+                    "postcode",
+                    "town",
+                    "operator_name",
+                    "site_identity_provenance",
+                    "id",
+                    "external_id",
+                    "location_hint",
+                    "organisation_hint",
+                    "metadata",
+                    "source_url",
+                ),
+                row,
+            )
+        )
+        grouped.setdefault(str(item["opportunity_id"]), []).append(item)
+    counts: Counter[str] = Counter()
+    by_vertical: dict[str, Counter[str]] = {}
+    items: list[dict[str, Any]] = []
+    for opportunity_id, evidence in list(grouped.items())[:limit]:
+        extracted: list[dict[str, Any]] = []
+        for raw in evidence:
+            raw["id"] = raw["id"]
+            identity, _ = extract_planning_site_identity(raw)
+            if identity:
+                extracted.append(identity)
+        first = extracted[0] if extracted else None
+        addresses = {
+            identity.get("normalized_site_address")
+            for identity in extracted
+            if identity.get("normalized_site_address")
+        }
+        postcodes = {
+            ((identity.get("site_postcode") or {}).get("value"))
+            for identity in extracted
+            if (identity.get("site_postcode") or {}).get("value")
+        }
+        stored = evidence[0].get("site_identity_provenance") or {}
+        if len(addresses) > 1 or len(postcodes) > 1:
+            outcome = "CONFLICTING"
+        elif isinstance(stored, dict) and stored.get("version") == PLANNING_SITE_IDENTITY_VERSION:
+            outcome = "ALREADY_COMPLETE"
+        elif first:
+            outcome = str(first.get("outcome") or "INCOMPLETE")
+        else:
+            outcome = "INCOMPLETE"
+        counts[outcome] += 1
+        vertical_name = str(evidence[0]["vertical"])
+        by_vertical.setdefault(vertical_name, Counter())[outcome] += 1
+        items.append(
+            {
+                "opportunity_id": opportunity_id,
+                "vertical": vertical_name,
+                "name": evidence[0]["name"],
+                "outcome": outcome,
+                "stored_site": {
+                    "address": evidence[0]["address"],
+                    "postcode": evidence[0]["postcode"],
+                    "town": evidence[0]["town"],
+                    "operator": evidence[0]["operator_name"],
+                },
+                "proposed_site_identity": first,
+                "planning_signal_ids": [str(item["id"]) for item in evidence],
+                "automation_allowed": outcome
+                not in {"CONFLICTING", "ALREADY_COMPLETE", "INCOMPLETE"},
+            }
+        )
+    return {
+        "policy_version": PLANNING_SITE_IDENTITY_BACKFILL_VERSION,
+        "extraction_version": PLANNING_SITE_IDENTITY_VERSION,
+        "preview_only": True,
+        "examined": len(items),
+        "counts_by_outcome": dict(counts),
+        "counts_by_vertical": {key: dict(value) for key, value in by_vertical.items()},
+        "candidates": items,
+    }
+
+
+def apply_planning_site_identity_backfill(
+    settings: Settings, *, actor: str, vertical: str = "ALL", limit: int = 100
+) -> dict[str, Any]:
+    """Persist only missing site fields and provenance; preserve manual/operator data."""
+    limit = min(max(int(limit), 1), 100)
+    preview = planning_site_identity_preview(settings, vertical=vertical, limit=250)
+    selected = [item for item in preview["candidates"] if item["automation_allowed"]][:limit]
+    persisted = skipped = failed = 0
+    for item in selected:
+        try:
+            identity = item["proposed_site_identity"] or {}
+            with connection(settings) as conn:
+                row = conn.execute(
+                    "SELECT address, postcode, town, site_identity_provenance "
+                    "FROM opportunities WHERE id = %s FOR UPDATE",
+                    (item["opportunity_id"],),
+                ).fetchone()
+                if not row or (isinstance(row[3], dict) and row[3].get("version")):
+                    skipped += 1
+                    continue
+                address = row[0] or ((identity.get("site_address") or {}).get("value"))
+                postcode = row[1] or ((identity.get("site_postcode") or {}).get("value"))
+                town = row[2] or ((identity.get("site_town") or {}).get("value"))
+                conn.execute(
+                    "UPDATE opportunities SET address=%s, postcode=%s, town=%s, "
+                    "site_identity_provenance=%s, updated_at=now() WHERE id=%s",
+                    (address, postcode, town, Jsonb(identity), item["opportunity_id"]),
+                )
+            persisted += 1
+            record_admin_audit(
+                settings,
+                action="planning_site_identity_backfilled",
+                actor=actor,
+                target_type="opportunity",
+                details={
+                    "opportunity_id": item["opportunity_id"],
+                    "policy_version": PLANNING_SITE_IDENTITY_BACKFILL_VERSION,
+                },
+            )
+        except Exception:
+            failed += 1
+    operation_id = record_admin_audit(
+        settings,
+        action="planning_site_identity_backfill_apply",
+        actor=actor,
+        target_type="opportunity",
+        details={
+            "selected": len(selected),
+            "persisted": persisted,
+            "skipped": skipped,
+            "failed": failed,
+            "policy_version": PLANNING_SITE_IDENTITY_BACKFILL_VERSION,
+        },
+    )
+    return {
+        "operation_id": operation_id,
+        "selected": len(selected),
+        "persisted": persisted,
+        "skipped": skipped,
+        "failed": failed,
+        "policy_version": PLANNING_SITE_IDENTITY_BACKFILL_VERSION,
     }
 
 
