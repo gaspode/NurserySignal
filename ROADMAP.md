@@ -2051,3 +2051,15 @@ Paid-pilot activation check (2026-09-28):
   Teamtailor/SmartRecruiters boards). The POC must cap requests per board, retain raw provenance, measure
   employer/site precision and test the strict matcher without opportunity mutation. LinkedIn is excluded absent
   written authorisation; Indeed/aggregator APIs require partner approval and must not be used as a generic feed.
+- Greenhouse/Lever operator-board feasibility has now been checked before building a collector. The representative
+  UK Nursery and children’s-home operators reviewed (including N Family Club, Storal, Kids Planet, Fennies,
+  Kido, CareTech, Keys Group, Witherslack, Polaris Community and Outcomes First Group) do not expose a named
+  public Greenhouse Job Board API or Lever Postings API account: the candidate board/account identifiers returned
+  `404`, while their live careers surfaces are Pinpoint, Access, bespoke ATSs or third-party job boards. No
+  Teamtailor board meeting the same public documented-API condition was identified. Therefore the requested
+  Greenhouse/Lever POC has no compliant 3–5-operator cohort to collect, and is stopped before creating a
+  no-value fetcher, performing any source request, or weakening the "documented public API only" boundary. No
+  SignalHub data, opportunity, review, matching, publication, lifecycle or schedule state changed. The next
+  decision is explicit product approval to evaluate one identified alternative ATS (for example N Family Club’s
+  Pinpoint board) under its terms and a separately documented bounded adapter; do not substitute that source
+  silently.
