@@ -1776,7 +1776,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                     planning_site_identity_preview(
                         settings,
                         vertical=validate_vertical_filter(_query(event, "vertical") or "ALL"),
-                        limit=min(max(int(_query(event, "limit") or "250"), 1), 250),
+                        limit=min(max(int(_query(event, "limit") or "1500"), 1), 1500),
                     ),
                 )
             if action == "planning-site-identity-backfill" and method == "POST":
